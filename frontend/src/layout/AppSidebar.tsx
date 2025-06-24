@@ -8,6 +8,7 @@ import {
   ChevronDownIcon,
   GridIcon,
   HorizontaLDots,
+  ArrowRightIcon,
   ListIcon,
   PageIcon,
   PieChartIcon,
@@ -16,7 +17,6 @@ import {
   UserCircleIcon,
 } from "../icons";
 import { useSidebar } from "../context/SidebarContext";
-import SidebarWidget from "./SidebarWidget";
 
 type NavItem = {
   name: string;
@@ -30,6 +30,16 @@ const navItems: NavItem[] = [
     icon: <GridIcon />,
     name: "Dashboard",
     subItems: [{ name: "Ecommerce", path: "/", pro: false }],
+  },
+  {
+    icon: <ArrowRightIcon />,
+    name: "Attendance",
+    subItems: [{ name: "My Attendance", path: "/my_attendance", pro: false }],
+  },
+  {
+    icon: <UserCircleIcon />,
+    name: "Submit Leave",
+    path: "/submit_leave",
   },
   {
     icon: <CalenderIcon />,
@@ -300,7 +310,7 @@ const AppSidebar: React.FC = () => {
     >
       <div
         className={`py-8 flex ${
-          !isExpanded && !isHovered ? "lg:justify-center" : "justify-start"
+          !isExpanded && !isHovered ? "lg:justify-center" : "justify-center"
         }`}
       >
         <Link to="/">
@@ -308,14 +318,14 @@ const AppSidebar: React.FC = () => {
             <>
               <img
                 className="dark:hidden"
-                src="/images/logo/logo.svg"
+                src="/images/logo/ismo_logo.png"
                 alt="Logo"
                 width={150}
                 height={40}
               />
               <img
                 className="hidden dark:block"
-                src="/images/logo/logo-dark.svg"
+                src="/images/logo/ismo_logo.png"
                 alt="Logo"
                 width={150}
                 height={40}
@@ -323,7 +333,7 @@ const AppSidebar: React.FC = () => {
             </>
           ) : (
             <img
-              src="/images/logo/logo-icon.svg"
+              src="/images/logo/ismo_logo.png"
               alt="Logo"
               width={32}
               height={32}
