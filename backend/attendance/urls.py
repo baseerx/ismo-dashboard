@@ -3,4 +3,5 @@ from .views import AttendanceView
 
 urlpatterns = [
     path('get/', AttendanceView.get),
+    path('today/', AttendanceView.todays_attendance),
 ]

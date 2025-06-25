@@ -33,8 +33,11 @@ const navItems: NavItem[] = [
   },
   {
     icon: <ArrowRightIcon />,
-    name: "Attendance",
-    subItems: [{ name: "My Attendance", path: "/my_attendance", pro: false }],
+    name: "Biometric Attendance",
+    subItems: [
+      { name: "Today's Attendance", path: "/attendance/today", pro: false },
+      { name: "Attendance History", path: "/attendance/history", pro: false },
+    ],
   },
   {
     icon: <UserCircleIcon />,
