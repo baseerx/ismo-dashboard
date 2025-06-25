@@ -1,9 +1,11 @@
 from django.shortcuts import render
 from .models import Attendance  # Assuming you have an Attendance model defined
 from django.http import JsonResponse
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
 from datetime import datetime
 from sqlalchemy import text
+from django.views.decorators.csrf import csrf_exempt
+import json
 from db import SessionLocal  # Assuming you have a SessionLocal defined for database access
 # Create your views here.
 
@@ -52,9 +54,58 @@ class AttendanceView:
                     'name': row.name,
                     'timestamp': '-' if row.timestamp is None else row.timestamp,
                     'status': attendance_status,
-                    'checkinout': timing,
+                    'check_in_out': timing,
                     'punch': row.punch
                 })
             return JsonResponse(records, safe=False)
         finally:
             session.close()
+            
+
+    @csrf_exempt
+    @require_POST
+    def attendance_history(request):
+        data= json.loads(request.body)
+        
+        date=data.get('date')
+     
+        session = SessionLocal()
+        records = []
+        try:
+            query = text("""
+                SELECT 
+                    a.id AS id,
+                    u.id AS user_id,
+                    u.name AS name,
+                    a.uid AS uid,
+                    a.timestamp AS timestamp,
+                    COALESCE(a.status, -1) AS status,
+                    a.punch AS punch
+                FROM users u
+                LEFT JOIN attendance a 
+                    ON u.id = a.user_id AND DATE(a.timestamp) = :date
+            """)
+            result = session.execute(query, {"date": date})
+            for row in result:
+                if row.uid is None:
+                    attendance_status = 'Absent'
+                    timing = 'Not Checked In'
+                else:
+                    attendance_status = 'Present'
+                    timing = 'Checked In' if row.punch == 0 else 'Checked Out'
+
+                records.append({
+                    'id': row.id,
+                    'uid': row.uid,
+                    'user_id': row.user_id,
+                    'name': row.name,
+                    'timestamp': '-' if row.timestamp is None else row.timestamp,
+                    'status': attendance_status,
+                    'check_in_out': timing,
+                    'punch': row.punch
+                })
+            return JsonResponse(records, safe=False)
+        finally:
+            session.close()
+            
+       

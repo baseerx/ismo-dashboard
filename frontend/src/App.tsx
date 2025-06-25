@@ -13,7 +13,8 @@ import LineChart from "./pages/Charts/LineChart";
 import BarChart from "./pages/Charts/BarChart";
 import Calendar from "./pages/Calendar";
 import BasicTables from "./pages/Tables/BasicTables";
-import DataTableOne from "./pages/Tables/DataTable";
+import DataTableOne from "./pages/Tables/TodaysAttendance";
+import AttendanceHistory from "./pages/Tables/AttendanceHistory";
 import FormElements from "./pages/Forms/FormElements";
 import Blank from "./pages/Blank";
 import AppLayout from "./layout/AppLayout";
@@ -41,7 +42,7 @@ export default function App() {
             {/* Tables */}
             <Route path="/basic-tables" element={<BasicTables />} />
             <Route path="/attendance/today" element={<DataTableOne />} />
-            <Route path="/attendance/history" element={<BasicTables />} />
+            <Route path="/attendance/history" element={<AttendanceHistory />} />
 
             {/* Ui Elements */}
             <Route path="/alerts" element={<Alerts />} />

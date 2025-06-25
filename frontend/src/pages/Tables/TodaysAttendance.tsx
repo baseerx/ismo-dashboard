@@ -16,7 +16,7 @@ import { ColumnDef } from "@tanstack/react-table";
   checkinout: string;
     };
 
-export default function DataTable() {
+export default function TodaysAttendance() {
 const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
   
     
@@ -32,10 +32,14 @@ const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
     try {
       const response = await axios.get("/attendance/today");
 
-      // Ensure response.data is an array
-      const cleanedData: AttendanceRow[] = response.data.map((item: any) =>
-        _.pick(item, ["name", "status", "timestamp", "checkinout"])
-      );
+    // Ensure response.data is an array and format timestamp
+    const cleanedData: AttendanceRow[] = response.data.map((item: any) => {
+      const picked = _.pick(item, ["name", "status", "timestamp", "checkinout"]);
+      if (picked.timestamp && typeof picked.timestamp === "string") {
+        picked.timestamp = picked.timestamp.replace("T", " ");
+      }
+      return picked;
+    });
       setAttendanceData(cleanedData);
     } catch (error) {
       console.error("Error fetching attendance data:", error);
