@@ -27,7 +27,8 @@ const EnhancedDataTable = <T extends object>({
   onEdit,
   onDelete,
   getExportHeaders,
-  getExportRows,
+    getExportRows,
+  
   idKey = "id",
 }: EnhancedDataTableProps<T>) => {
     const [globalFilter, setGlobalFilter] = useState("");
@@ -46,6 +47,12 @@ const EnhancedDataTable = <T extends object>({
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+    initialState: {
+      pagination: {
+        pageIndex: 0,
+        pageSize: 15, // 👈 Show 20 records by default
+      },
+    },
   });
 
   const exportToExcel = () => {
@@ -125,7 +132,14 @@ const EnhancedDataTable = <T extends object>({
             {table.getRowModel().rows.map((row) => (
               <tr key={row.id} className="hover:bg-gray-50">
                 {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="border px-4 py-2">
+                  <td
+                    key={cell.id}
+                    className={`border px-4 py-2 ${
+                      (cell.column.columnDef.meta as any)?.getTdClassName?.(
+                        cell.getValue()
+                      ) ?? ""
+                    }`}
+                  >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}

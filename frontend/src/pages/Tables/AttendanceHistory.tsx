@@ -14,7 +14,9 @@ import DatePicker from "../../components/form/date-picker";
   name: string;
   status: string;
   timestamp: string;
-  checkinout: string;
+    
+        flag: string;
+        late: string;
     };
 
 export default function DataTable() {
@@ -31,10 +33,11 @@ const [selectedDate, setSelectedDate] = useState<String>(moment().format("YYYY-M
     try {
         const response = await axios.post("/attendance/history/", {
         date: selectedDate});
-     console.log("Response from API:", response.data);
+  
     // Ensure response.data is an array and format timestamp
-    const cleanedData: AttendanceRow[] = response.data.map((item: any) => {
-      const picked = _.pick(item, ["name", "status", "timestamp", "checkinout"]);
+        const cleanedData: AttendanceRow[] = response.data.map((item: any) => {
+       
+      const picked = _.pick(item, ["name", "status", "timestamp", "flag","late"]);
       if (picked.timestamp && typeof picked.timestamp === "string") {
         picked.timestamp = picked.timestamp.replace("T", " ");
       }
@@ -46,21 +49,55 @@ const [selectedDate, setSelectedDate] = useState<String>(moment().format("YYYY-M
     }
   };
     
-  const columns: ColumnDef<AttendanceRow>[] = [
-    { accessorKey: "name", header: "Name" },
-    { accessorKey: "status", header: "Status" },
-    { accessorKey: "timestamp", header: "Timestamp" },
-    { accessorKey: "checkinout", header: "CheckInOut" },
-  ];
-
+     
+ const columns: ColumnDef<AttendanceRow>[] = [
+     {
+         accessorKey: "name",
+         header: "Name",
+     },
+     {
+         accessorKey: "status",
+         header: "Status",
+     },
+     {
+         accessorKey: "timestamp",
+         header: "Timestamp",
+     },
+     {
+         accessorKey: "flag",
+         header: "Present/Absent",
+     },
+     {
+   accessorKey: "late",
+   header: "Late/On Time",
+   cell: ({ getValue }) => {
+     const value = getValue<string>();
+     const color =
+       value?.toLowerCase() === "late"
+         ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
+         : value?.toLowerCase() === "on time"
+         ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
+         : "";
+     return <span className={color}>{value}</span>;
+   },
+   meta: {
+     getTdClassName: (value: string) =>
+       value?.toLowerCase() === "late"
+         ? "bg-gray-50"
+         : value?.toLowerCase() === "on time"
+         ? "bg-gray-50"
+         : "",
+         },
+     },
+ ];
 
   return (
     <>
       <PageMeta
-        title="ISMO - Today's Attendance"
-        description="ISMO Admin Dashboard - Today's Attendance"
+        title="ISMO - Attendance History"
+        description="ISMO Admin Dashboard - Attendance History"
       />
-      <PageBreadcrumb pageTitle="Today's Attendance" />
+      <PageBreadcrumb pageTitle="Attendance History" />
       <div className="space-y-6">
         <ComponentCard
           title={`Attendance on ${selectedDate}`}

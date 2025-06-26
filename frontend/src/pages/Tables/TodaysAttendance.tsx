@@ -13,7 +13,9 @@ import { ColumnDef } from "@tanstack/react-table";
   name: string;
   status: string;
   timestamp: string;
-  checkinout: string;
+        checkinout: string;
+        flag: string;
+        late: string;
     };
 
 export default function TodaysAttendance() {
@@ -34,7 +36,7 @@ const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
 
     // Ensure response.data is an array and format timestamp
     const cleanedData: AttendanceRow[] = response.data.map((item: any) => {
-      const picked = _.pick(item, ["name", "status", "timestamp", "checkinout"]);
+      const picked = _.pick(item, ["name", "status", "timestamp", "flag","late"]);
       if (picked.timestamp && typeof picked.timestamp === "string") {
         picked.timestamp = picked.timestamp.replace("T", " ");
       }
@@ -46,12 +48,46 @@ const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
     }
   };
     
-  const columns: ColumnDef<AttendanceRow>[] = [
-    { accessorKey: "name", header: "Name" },
-    { accessorKey: "status", header: "Status" },
-    { accessorKey: "timestamp", header: "Timestamp" },
-    { accessorKey: "checkinout", header: "CheckInOut" },
-  ];
+const columns: ColumnDef<AttendanceRow>[] = [
+    {
+        accessorKey: "name",
+        header: "Name",
+    },
+    {
+        accessorKey: "status",
+        header: "Status",
+    },
+    {
+        accessorKey: "timestamp",
+        header: "Timestamp",
+    },
+    {
+        accessorKey: "flag",
+        header: "Present/Absent",
+    },
+    {
+  accessorKey: "late",
+  header: "Late/On Time",
+  cell: ({ getValue }) => {
+    const value = getValue<string>();
+    const color =
+      value?.toLowerCase() === "late"
+        ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
+        : value?.toLowerCase() === "on time"
+        ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
+        : "";
+    return <span className={color}>{value}</span>;
+  },
+  meta: {
+    getTdClassName: (value: string) =>
+      value?.toLowerCase() === "late"
+        ? "bg-gray-50"
+        : value?.toLowerCase() === "on time"
+        ? "bg-gray-50"
+        : "",
+        },
+    },
+];
 
 
   return (

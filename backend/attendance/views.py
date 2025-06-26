@@ -32,29 +32,24 @@ class AttendanceView:
                     u.name AS name,
                     a.uid AS uid,
                     a.timestamp AS timestamp,
-                    COALESCE(a.status, -1) AS status,
+                    a.status AS status,
                     a.punch AS punch
                 FROM users u
                 LEFT JOIN attendance a 
-                    ON u.id = a.user_id AND DATE(a.timestamp) = :today
+                    ON u.user_id = a.user_id AND DATE(a.timestamp) = :today
             """)
             result = session.execute(query, {"today": today})
             for row in result:
-                if row.uid is None:
-                    attendance_status = 'Absent'
-                    timing = 'Not Checked In'
-                else:
-                    attendance_status = 'Present'
-                    timing = 'Checked In' if row.punch == 0 else 'Checked Out'
 
                 records.append({
                     'id': row.id,
                     'uid': row.uid,
                     'user_id': row.user_id,
                     'name': row.name,
-                    'timestamp': '-' if row.timestamp is None else row.timestamp,
-                    'status': attendance_status,
-                    'check_in_out': timing,
+                    'timestamp': row.timestamp,
+                    'late': 'late' if row.timestamp and row.timestamp.hour >= 9 else 'on time',  # Assuming 9 AM is the cutoff for being on time
+                    'status': row.status,
+                    'flag': 'Present' if row.uid is not None else 'Absent',
                     'punch': row.punch
                 })
             return JsonResponse(records, safe=False)
@@ -65,10 +60,9 @@ class AttendanceView:
     @csrf_exempt
     @require_POST
     def attendance_history(request):
-        data= json.loads(request.body)
-        
-        date=data.get('date')
-     
+        data = json.loads(request.body)
+        date = data.get('date')
+
         session = SessionLocal()
         records = []
         try:
@@ -83,29 +77,24 @@ class AttendanceView:
                     a.punch AS punch
                 FROM users u
                 LEFT JOIN attendance a 
-                    ON u.id = a.user_id AND DATE(a.timestamp) = :date
+                    ON u.user_id = a.user_id AND DATE(a.timestamp) = :date
             """)
             result = session.execute(query, {"date": date})
             for row in result:
-                if row.uid is None:
-                    attendance_status = 'Absent'
-                    timing = 'Not Checked In'
-                else:
-                    attendance_status = 'Present'
-                    timing = 'Checked In' if row.punch == 0 else 'Checked Out'
-
+         
                 records.append({
                     'id': row.id,
                     'uid': row.uid,
                     'user_id': row.user_id,
                     'name': row.name,
-                    'timestamp': '-' if row.timestamp is None else row.timestamp,
-                    'status': attendance_status,
-                    'check_in_out': timing,
+                    'timestamp': row.timestamp,
+                    # Assuming 9 AM is the cutoff for being on time
+                    'late': 'late' if row.timestamp and row.timestamp.hour >= 9 else 'on time',
+                    'status': row.status,
+                    'flag': 'Present' if row.uid is not None else 'Absent',
                     'punch': row.punch
                 })
             return JsonResponse(records, safe=False)
         finally:
             session.close()
-            
        
