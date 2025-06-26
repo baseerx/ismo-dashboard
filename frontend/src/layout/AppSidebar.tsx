@@ -15,7 +15,7 @@ import {
   PlugInIcon,
   TableIcon,
   UserCircleIcon,
-  LeaveIcon,
+  BiometricRecognitionIcon,
 } from "../icons";
 import { useSidebar } from "../context/SidebarContext";
 
@@ -33,7 +33,7 @@ const navItems: NavItem[] = [
     subItems: [{ name: "Ecommerce", path: "/", pro: false }],
   },
   {
-    icon: <LeaveIcon />,
+    icon: <BiometricRecognitionIcon />,
     name: "Biometric Attendance",
     subItems: [
       { name: "Today's Attendance", path: "/attendance/today", pro: false },
