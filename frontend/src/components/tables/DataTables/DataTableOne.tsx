@@ -27,8 +27,7 @@ const EnhancedDataTable = <T extends object>({
   onEdit,
   onDelete,
   getExportHeaders,
-    getExportRows,
-  
+  getExportRows,
   idKey = "id",
 }: EnhancedDataTableProps<T>) => {
     const [globalFilter, setGlobalFilter] = useState("");

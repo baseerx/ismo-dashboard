@@ -61,7 +61,8 @@ class AttendanceView:
     @require_POST
     def attendance_history(request):
         data = json.loads(request.body)
-        date = data.get('date')
+        fromdate = data.get('fromdate')
+        todate = data.get('todate')
 
         session = SessionLocal()
         records = []
@@ -73,13 +74,13 @@ class AttendanceView:
                     u.name AS name,
                     a.uid AS uid,
                     a.timestamp AS timestamp,
-                    COALESCE(a.status, -1) AS status,
+                    a.status AS status,
                     a.punch AS punch
                 FROM users u
                 LEFT JOIN attendance a 
-                    ON u.user_id = a.user_id AND DATE(a.timestamp) = :date
+                    ON u.user_id = a.user_id AND DATE(a.timestamp) BETWEEN :fromdate AND :todate
             """)
-            result = session.execute(query, {"date": date})
+            result = session.execute(query, {"fromdate": fromdate, "todate": todate})
             for row in result:
          
                 records.append({
@@ -87,10 +88,10 @@ class AttendanceView:
                     'uid': row.uid,
                     'user_id': row.user_id,
                     'name': row.name,
-                    'timestamp': row.timestamp,
+                    'timestamp': '-' if row.timestamp is None else row.timestamp,
                     # Assuming 9 AM is the cutoff for being on time
-                    'late': 'late' if row.timestamp and row.timestamp.hour >= 9 else 'on time',
-                    'status': row.status,
+                    'late': '-' if row.uid is None else 'late' if row.timestamp and row.timestamp.hour >= 9 else 'on time',
+                    'status': '-' if row.status is None else row.status,
                     'flag': 'Present' if row.uid is not None else 'Absent',
                     'punch': row.punch
                 })
