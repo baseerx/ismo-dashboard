@@ -46,9 +46,9 @@ class AttendanceView:
                     'uid': row.uid,
                     'user_id': row.user_id,
                     'name': row.name,
-                    'timestamp': row.timestamp,
-                    'late': 'late' if row.timestamp and row.timestamp.hour >= 9 else 'on time',  # Assuming 9 AM is the cutoff for being on time
-                    'status': row.status,
+                    'timestamp': '-' if row.timestamp is None else row.timestamp,
+                    'late': '-' if row.uid is None else 'late' if row.timestamp and row.timestamp.hour >= 9 else 'on time',  # Assuming 9 AM is the cutoff for being on time
+                    'status': '-' if row.status is None else row.status,
                     'flag': 'Present' if row.uid is not None else 'Absent',
                     'punch': row.punch
                 })
