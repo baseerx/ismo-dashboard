@@ -6,19 +6,22 @@ from datetime import datetime
 from sqlalchemy import text
 from django.views.decorators.csrf import csrf_exempt
 import json
-from db import SessionLocal  # Assuming you have a SessionLocal defined for database access
+# Assuming you have a SessionLocal defined for database access
+from db import SessionLocal
 # Create your views here.
+
 
 class AttendanceView:
     @require_GET  # Ensure this view only responds to GET requests
     def get(request):
-        attendance_records=Attendance.objects.all()  # Fetch all attendance records
+        attendance_records = Attendance.objects.all()  # Fetch all attendance records
         records = attendance_records.values(
             'uid', 'user_id', 'timestamp', 'status', 'punch'
         )
         attendance_list = list(records)
-        return JsonResponse(attendance_list, safe=False)  # Return as JSON response
-    
+        # Return as JSON response
+        return JsonResponse(attendance_list, safe=False)
+
     @require_GET
     def todays_attendance(request):
         today = datetime.now().date()
@@ -33,6 +36,7 @@ class AttendanceView:
                     a.uid AS uid,
                     a.timestamp AS timestamp,
                     a.status AS status,
+                    a.lateintime AS lateintime,
                     a.punch AS punch
                 FROM users u
                 LEFT JOIN attendance a 
@@ -47,7 +51,8 @@ class AttendanceView:
                     'user_id': row.user_id,
                     'name': row.name,
                     'timestamp': '-' if row.timestamp is None else row.timestamp,
-                    'late': '-' if row.uid is None else 'late' if row.timestamp and row.timestamp.hour >= 9 else 'on time',  # Assuming 9 AM is the cutoff for being on time
+                    # Assuming 9 AM is the cutoff for being on time
+                    'late':  '-' if row.uid is None else row.lateintime,
                     'status': '-' if row.status is None else row.status,
                     'flag': 'Present' if row.uid is not None else 'Absent',
                     'punch': row.punch
@@ -55,7 +60,6 @@ class AttendanceView:
             return JsonResponse(records, safe=False)
         finally:
             session.close()
-            
 
     @csrf_exempt
     @require_POST
@@ -75,14 +79,16 @@ class AttendanceView:
                     a.uid AS uid,
                     a.timestamp AS timestamp,
                     a.status AS status,
+                    a.lateintime AS lateintime,
                     a.punch AS punch
                 FROM users u
-                LEFT JOIN attendance a 
-                    ON u.user_id = a.user_id AND DATE(a.timestamp) BETWEEN :fromdate AND :todate
+                JOIN attendance a 
+                    ON u.user_id = a.user_id AND DATE(a.timestamp) BETWEEN :fromdate AND :todate order by a.timestamp desc
             """)
-            result = session.execute(query, {"fromdate": fromdate, "todate": todate})
+            result = session.execute(
+                query, {"fromdate": fromdate, "todate": todate})
             for row in result:
-         
+
                 records.append({
                     'id': row.id,
                     'uid': row.uid,
@@ -90,7 +96,7 @@ class AttendanceView:
                     'name': row.name,
                     'timestamp': '-' if row.timestamp is None else row.timestamp,
                     # Assuming 9 AM is the cutoff for being on time
-                    'late': '-' if row.uid is None else 'late' if row.timestamp and row.timestamp.hour >= 9 else 'on time',
+                    'late': '-' if row.uid is None else row.lateintime,
                     'status': '-' if row.status is None else row.status,
                     'flag': 'Present' if row.uid is not None else 'Absent',
                     'punch': row.punch
@@ -98,4 +104,47 @@ class AttendanceView:
             return JsonResponse(records, safe=False)
         finally:
             session.close()
-       
+
+    @csrf_exempt
+    @require_POST
+    def attendance_section(request):
+        data = json.loads(request.body.decode('utf-8'))
+        section = data.get('section')
+        date = data.get('date')
+
+        session = SessionLocal()
+        records = []
+        try:
+            query = text("""
+                SELECT
+                    e.id AS id,
+                    e.name AS name,
+                    d.designation_name AS designation,
+                    s.section_name AS section,
+                    a.timestamp AS timestamp,
+                    a.status AS status,
+                    a.lateintime AS lateintime,
+                    a.punch AS punch
+                FROM employees e
+                JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) = :date
+                JOIN sections s ON s.id = e.section_id
+                JOIN designations d ON d.id = e.designation_id
+                WHERE s.id = :section
+            """)
+            result = session.execute(
+                query, {"section": section, "date": date})
+            for row in result:
+
+                records.append({
+                    'id': row.id,
+                    'name': row.name,
+                    'designation': row.designation,
+                    'section': row.section,
+                    'timestamp': '-' if row.timestamp is None else row.timestamp,
+                    'late': '-' if row.timestamp is None else row.lateintime,
+                    'status': '-' if row.status is None else row.status,
+                    'punch': row.punch
+                })
+            return JsonResponse(records, safe=False)
+        finally:
+            session.close()

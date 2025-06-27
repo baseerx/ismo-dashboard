@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'corsheaders',  # If you're using Django Extensions
     'attendance',  # Your attendance app
     'users',  # Your attendance app
+    'sections',  # Your attendance app
     'rest_framework',  # If you're using Django REST Framework
 ]
 

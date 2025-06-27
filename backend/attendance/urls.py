@@ -5,4 +5,5 @@ urlpatterns = [
     path('get/', AttendanceView.get),
     path('today/', AttendanceView.todays_attendance),
     path('history/', AttendanceView.attendance_history),
+    path('sections/', AttendanceView.attendance_section),
 ]
