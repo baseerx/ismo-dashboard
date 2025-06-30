@@ -5,5 +5,5 @@ from django.http import JsonResponse
 class SectionsView:
     def get_sections(request):
         sections = Sections.objects.all()
-        sections_list = list(sections.values('id', 'section_name'))
+        sections_list = list(sections.values('id', 'name'))
         return JsonResponse(sections_list, safe=False)

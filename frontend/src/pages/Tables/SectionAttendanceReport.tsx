@@ -46,7 +46,7 @@ export default function SectionAttendanceReport() {
     setOptions(
       response.data.map((section: any) => ({
         value: section.id,
-        label: section.section_name,
+        label: section.name,
       }))
     );
   };
@@ -63,19 +63,18 @@ const fetchAttendanceData = async () => {
             date: date,
             section: section,
         });
-      console.log("Attendance Data:", response.data);
+      
         // Ensure response.data is an array and format timestamp
         const cleanedData: AttendanceRow[] = response.data.map((item: any) => {
             return {
-           
-                name: item.name,
-                designation: item.designation,
-                section: item.section,
-                timestamp: item.timestamp.split("T")[0] + " " + item.timestamp.split("T")[1].split(".")[0],
-                late: item.late,
-                status: item.status,
-                punch: item.punch,
-                flag: item.flag, // If flag is still needed
+              name: item.name,
+              designation: item.designation,
+              section: item.section,
+              timestamp: item.timestamp!='-'?moment(item.timestamp).format("YYYY-MM-DD HH:mm:ss"): "-",
+              late: item.late,
+              status: item.status,
+              punch: item.punch,
+              flag: item.flag, // If flag is still needed
             };
         });
         setAttendanceData(cleanedData);

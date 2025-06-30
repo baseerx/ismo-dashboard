@@ -2,7 +2,7 @@ from django.shortcuts import render
 from .models import Attendance  # Assuming you have an Attendance model defined
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_POST
-from datetime import datetime
+from datetime import date, datetime
 from sqlalchemy import text
 from django.views.decorators.csrf import csrf_exempt
 import json
@@ -72,18 +72,22 @@ class AttendanceView:
         records = []
         try:
             query = text("""
-                SELECT 
-                    a.id AS id,
-                    u.id AS user_id,
-                    u.name AS name,
-                    a.uid AS uid,
+                SELECT
+                    e.id AS id,
+                    e.name AS name,
+                         a.uid AS uid,
+                    e.hris_id AS user_id,
+                    d.title AS designation,
+                    s.name AS section,
                     a.timestamp AS timestamp,
                     a.status AS status,
                     a.lateintime AS lateintime,
                     a.punch AS punch
-                FROM users u
-                JOIN attendance a 
-                    ON u.user_id = a.user_id AND DATE(a.timestamp) BETWEEN :fromdate AND :todate order by a.timestamp desc
+                FROM employees e
+                LEFT JOIN sections s ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) BETWEEN :fromdate AND :todate
+                ORDER BY a.timestamp DESC
             """)
             result = session.execute(
                 query, {"fromdate": fromdate, "todate": todate})
@@ -119,16 +123,17 @@ class AttendanceView:
                 SELECT
                     e.id AS id,
                     e.name AS name,
-                    d.designation_name AS designation,
-                    s.section_name AS section,
+                    d.title AS designation,
+                    s.name AS section,
                     a.timestamp AS timestamp,
                     a.status AS status,
                     a.lateintime AS lateintime,
                     a.punch AS punch
                 FROM employees e
-                JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) = :date
-                JOIN sections s ON s.id = e.section_id
-                JOIN designations d ON d.id = e.designation_id
+               
+                LEFT JOIN sections s ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) = :date
                 WHERE s.id = :section
             """)
             result = session.execute(
