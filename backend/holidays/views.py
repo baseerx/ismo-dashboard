@@ -41,3 +41,40 @@ def delete_holiday(request, holiday_id):
         return JsonResponse({'message': 'Holiday deleted successfully'}, status=204)
     except Holiday.DoesNotExist:
         return JsonResponse({'error': 'Holiday not found'}, status=404)
+@require_GET
+def get_holiday(request, holiday_id):
+    """
+    View to fetch a specific public holiday by ID.
+    """
+    try:
+        holiday = Holiday.objects.get(id=holiday_id)
+        return JsonResponse({
+            'id': holiday.id,
+            'name': holiday.name,
+            'date': holiday.date,
+            'description': holiday.description
+        })
+    except Holiday.DoesNotExist:
+        return JsonResponse({'error': 'Holiday not found'}, status=404)
+    
+@csrf_exempt
+@require_POST
+def update_holiday(request, holiday_id):
+    """
+    View to update a public holiday by ID.
+    """
+    try:
+        holiday = Holiday.objects.get(id=holiday_id)
+        data = json.loads(request.body)
+        holiday.name = data.get('name', holiday.name)
+        holiday.date = data.get('date', holiday.date)
+        holiday.description = data.get('description', holiday.description)
+        holiday.save()
+        return JsonResponse({
+            'id': holiday.id,
+            'name': holiday.name,
+            'date': holiday.date,
+            'description': holiday.description
+        })
+    except Holiday.DoesNotExist:
+        return JsonResponse({'error': 'Holiday not found'}, status=404)
