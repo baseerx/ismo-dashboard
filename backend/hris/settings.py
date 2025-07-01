@@ -46,6 +46,8 @@ INSTALLED_APPS = [
     'attendance',  # Your attendance app
     'users',  # Your attendance app
     'sections',  # Your attendance app
+    'leaves',  # Your attendance app
+    'holidays',  # Your attendance app
     'rest_framework',  # If you're using Django REST Framework
 ]
 

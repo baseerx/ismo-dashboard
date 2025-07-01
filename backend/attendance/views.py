@@ -29,30 +29,36 @@ class AttendanceView:
         records = []
         try:
             query = text("""
-                SELECT 
-                    a.id AS id,
-                    u.id AS user_id,
-                    u.name AS name,
+                SELECT
+                    e.id AS id,
+                    e.erp_id AS erp_id,
+                    e.name AS name,
+                    d.title AS designation,
+                    s.name AS section,
                     a.uid AS uid,
+                    e.hris_id AS user_id,
                     a.timestamp AS timestamp,
                     a.status AS status,
                     a.lateintime AS lateintime,
                     a.punch AS punch
-                FROM users u
-                LEFT JOIN attendance a 
-                    ON u.user_id = a.user_id AND DATE(a.timestamp) = :today
+                FROM employees e
+                LEFT JOIN sections s ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) = :today
             """)
             result = session.execute(query, {"today": today})
             for row in result:
 
                 records.append({
                     'id': row.id,
+                    'erp_id': row.erp_id,
+                    'name': row.name,
+                    'designation': row.designation,
+                    'section': row.section,
                     'uid': row.uid,
                     'user_id': row.user_id,
-                    'name': row.name,
                     'timestamp': '-' if row.timestamp is None else row.timestamp,
-                    # Assuming 9 AM is the cutoff for being on time
-                    'late':  '-' if row.uid is None else row.lateintime,
+                    'late': '-' if row.uid is None else row.lateintime,
                     'status': '-' if row.status is None else row.status,
                     'flag': 'Present' if row.uid is not None else 'Absent',
                     'punch': row.punch
@@ -74,6 +80,7 @@ class AttendanceView:
             query = text("""
                 SELECT
                     e.id AS id,
+                    e.erp_id AS erp_id,
                     e.name AS name,
                          a.uid AS uid,
                     e.hris_id AS user_id,
@@ -95,6 +102,7 @@ class AttendanceView:
 
                 records.append({
                     'id': row.id,
+                    'erp_id': row.erp_id,
                     'uid': row.uid,
                     'user_id': row.user_id,
                     'name': row.name,
@@ -122,6 +130,7 @@ class AttendanceView:
             query = text("""
                 SELECT
                     e.id AS id,
+                           e.erp_id AS erp_id,
                     e.name AS name,
                     d.title AS designation,
                     s.name AS section,
@@ -142,6 +151,7 @@ class AttendanceView:
 
                 records.append({
                     'id': row.id,
+                    'erp_id': row.erp_id,
                     'name': row.name,
                     'designation': row.designation,
                     'section': row.section,

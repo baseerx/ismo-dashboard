@@ -1,4 +1,4 @@
-import React, { useMemo, useState,useEffect } from "react";
+import  { useState,useEffect } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -24,11 +24,8 @@ interface EnhancedDataTableProps<T extends object> {
 const EnhancedDataTable = <T extends object>({
   data,
   columns,
-  onEdit,
-  onDelete,
   getExportHeaders,
   getExportRows,
-  idKey = "id",
 }: EnhancedDataTableProps<T>) => {
     const [globalFilter, setGlobalFilter] = useState("");
     const [tableData, setTableData] = useState<T[]>([]);
@@ -74,16 +71,7 @@ const EnhancedDataTable = <T extends object>({
     doc.save("data.pdf");
   };
 
-  const handleEdit = (row: T) => {
-    if (onEdit) onEdit(row);
-  };
 
-  const handleDelete = (id: any) => {
-    if (onDelete) onDelete(id);
-    else if (window.confirm("Are you sure to delete this item?")) {
-      setTableData((prev) => prev.filter((item) => item[idKey] !== id));
-    }
-  };
 
   return (
     <div className="p-6 space-y-4 bg-white rounded-xl shadow border border-gray-200">

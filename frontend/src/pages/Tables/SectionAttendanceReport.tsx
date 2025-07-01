@@ -5,8 +5,8 @@ import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
 import axios from "../../api/axios"; // Adjust the import path as necessary
 import { useState, useEffect } from "react";
 import moment from "moment";
-import _, { set } from "lodash";
-import { ToastContainer, toast } from "react-toastify";
+import _ from "lodash";
+import { ToastContainer } from "react-toastify";
 import { ColumnDef } from "@tanstack/react-table";
 import DatePicker from "../../components/form/date-picker";
 import Label from "../../components/form/Label";
@@ -14,6 +14,7 @@ import Label from "../../components/form/Label";
 import Select from "../../components/form/Select";
 
 type AttendanceRow = {
+    erp_id: string;
     name: string;
     designation: string;
     section: string;
@@ -67,6 +68,7 @@ const fetchAttendanceData = async () => {
         // Ensure response.data is an array and format timestamp
         const cleanedData: AttendanceRow[] = response.data.map((item: any) => {
             return {
+              erp_id: item.erp_id,
               name: item.name,
               designation: item.designation,
               section: item.section,
@@ -83,53 +85,57 @@ const fetchAttendanceData = async () => {
     }
 };
 
-const columns: ColumnDef<any>[] = [
-    {
-        accessorKey: "name",
-        header: "Name",
+const columns: ColumnDef<AttendanceRow>[] = [
+  {
+    accessorKey: "erp_id",
+    header: "ERP ID",
+  },
+  {
+    accessorKey: "name",
+    header: "Name",
+  },
+  {
+    accessorKey: "designation",
+    header: "Designation",
+  },
+  {
+    accessorKey: "section",
+    header: "Section",
+  },
+  {
+    accessorKey: "timestamp",
+    header: "Timestamp",
+  },
+  {
+    accessorKey: "late",
+    header: "Late/On Time",
+    cell: ({ getValue }) => {
+      const value = getValue<string>();
+      const color =
+        value?.toLowerCase() === "late"
+          ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
+          : value?.toLowerCase() === "on time"
+          ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
+          : "";
+      return <span className={color}>{value}</span>;
     },
-    {
-        accessorKey: "designation",
-        header: "Designation",
+    meta: {
+      getTdClassName: (value: string) =>
+        value?.toLowerCase() === "late"
+          ? "bg-gray-50"
+          : value?.toLowerCase() === "on time"
+          ? "bg-gray-50"
+          : "",
     },
-    {
-        accessorKey: "section",
-        header: "Section",
-    },
-    {
-        accessorKey: "timestamp",
-        header: "Timestamp",
-    },
-    {
-        accessorKey: "late",
-        header: "Late/On Time",
-        cell: ({ getValue }) => {
-            const value = getValue<string>();
-            const color =
-                value?.toLowerCase() === "late"
-                    ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
-                    : value?.toLowerCase() === "on time"
-                    ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
-                    : "";
-            return <span className={color}>{value}</span>;
-        },
-        meta: {
-            getTdClassName: (value: string) =>
-                value?.toLowerCase() === "late"
-                    ? "bg-gray-50"
-                    : value?.toLowerCase() === "on time"
-                    ? "bg-gray-50"
-                    : "",
-        },
-    },
-    {
-        accessorKey: "status",
-        header: "Status",
-    },
-    {
-        accessorKey: "punch",
-        header: "Punch",
-    },
+  },
+  {
+    accessorKey: "status",
+    header: "Status",
+  },
+  {
+    accessorKey: "punch",
+    header: "Punch",
+  },
 ];
 
   return (
@@ -150,7 +156,8 @@ const columns: ColumnDef<any>[] = [
                 defaultDate={date.toString()}
                 label="Date"
                 placeholder="Select a date"
-                onChange={(dates, currentDateString) => {
+                              onChange={(dates, currentDateString) => {
+                    console.log(dates);
                   // Handle your logic
                   setDate(currentDateString);
                 }}

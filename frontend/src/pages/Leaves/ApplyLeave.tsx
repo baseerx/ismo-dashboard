@@ -6,46 +6,33 @@ import axios from "../../api/axios"; // Adjust the import path as necessary
 import { useState, useEffect } from "react";
 import moment from "moment";
 import _ from "lodash";
-import { ToastContainer, toast } from "react-toastify";
+
 import { ColumnDef } from "@tanstack/react-table";
-import DatePicker from "../../components/form/date-picker";
+import LeaveForm from "../../components/form/leave-form/LeaveForm";
 
 type AttendanceRow = {
-    erp_id: string;
   name: string;
   status: string;
   timestamp: string;
-
+  checkinout: string;
   flag: string;
   late: string;
 };
 
-export default function DataTable() {
+export default function ApplyLeave() {
   const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
-  const [fromdate, setFromdate] = useState<String>(
-    moment().format("YYYY-MM-DD")
-  );
-  const [todate, setTodate] = useState<String>(moment().format("YYYY-MM-DD"));
 
   useEffect(() => {
-    if (fromdate <= todate) {
-      fetchAttendanceData();
-    } else {
-      toast.error("from date cannot be greater than to date");
-    }
-  }, [todate, fromdate]);
+    fetchAttendanceData();
+  }, []);
 
   const fetchAttendanceData = async () => {
     try {
-      const response = await axios.post("/attendance/history/", {
-        fromdate: fromdate,
-        todate: todate,
-      });
+      const response = await axios.get("/attendance/today");
 
       // Ensure response.data is an array and format timestamp
       const cleanedData: AttendanceRow[] = response.data.map((item: any) => {
-          const picked = _.pick(item, [
-            "erp_id",
+        const picked = _.pick(item, [
           "name",
           "status",
           "timestamp",
@@ -63,11 +50,7 @@ export default function DataTable() {
     }
   };
 
-    const columns: ColumnDef<AttendanceRow>[] = [
-    {
-      accessorKey: "erp_id",
-      header: "ERP ID",
-    },
+  const columns: ColumnDef<AttendanceRow>[] = [
     {
       accessorKey: "name",
       header: "Name",
@@ -111,42 +94,15 @@ export default function DataTable() {
   return (
     <>
       <PageMeta
-        title="ISMO - Attendance History"
-        description="ISMO Admin Dashboard - Attendance History"
+        title="ISMO - Leave Application"
+        description="ISMO Admin Dashboard - Leave Application"
       />
-      <PageBreadcrumb pageTitle="Attendance History" />
+      <PageBreadcrumb pageTitle="Apply Leave" />
       <div className="space-y-6">
-        <ComponentCard title={`Attendance on ${fromdate}`}>
-          <ToastContainer position="bottom-right" />
-
-          <div className="flex justify-between items-center mb-4 gap-1">
-            <div className="w-1/2">
-              <DatePicker
-                id="from-date-picker"
-                defaultDate={fromdate.toString()}
-                label="from date"
-                placeholder="Select a date"
-                              onChange={(dates, currentDateString) => {
-                    console.log(dates);
-                  // Handle your logic
-                  setFromdate(currentDateString);
-                }}
-              />
-            </div>
-            <div className="w-1/2">
-              <DatePicker
-                id="to-date-picker"
-                defaultDate={todate.toString()}
-                label="to date"
-                placeholder="Select a date"
-                              onChange={(dates, currentDateString) => {
-                console.log(dates);
-                  // Handle your logic
-                  setTodate(currentDateString);
-                }}
-              />
-            </div>
-          </div>
+        <ComponentCard
+          title={`Leave Application on ${moment().format("DD MMMM YYYY")}`}
+        >
+          <LeaveForm />
 
           <EnhancedDataTable<AttendanceRow>
             data={attendancedata}

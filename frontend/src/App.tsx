@@ -19,8 +19,11 @@ import FormElements from "./pages/Forms/FormElements";
 import Blank from "./pages/Blank";
 import AppLayout from "./layout/AppLayout";
 import { ScrollToTop } from "./components/common/ScrollToTop";
-import Home from "./pages/Dashboard/Home";
+
 import SectionAttendanceReport from "./pages/Tables/SectionAttendanceReport";
+import ApplyLeave from "./pages/Leaves/ApplyLeave";
+import PublicHoliday from "./pages/Leaves/PublicHolidays";
+import TodaysAttendance from "./pages/Tables/TodaysAttendance";
 
 export default function App() {
   return (
@@ -30,7 +33,7 @@ export default function App() {
         <Routes>
           {/* Dashboard Layout */}
           <Route element={<AppLayout />}>
-            <Route index path="/" element={<Home />} />
+            <Route index path="/" element={<TodaysAttendance />} />
 
             {/* Others Page */}
             <Route path="/profile" element={<UserProfiles />} />
@@ -44,8 +47,16 @@ export default function App() {
             <Route path="/basic-tables" element={<BasicTables />} />
             <Route path="/attendance/today" element={<DataTableOne />} />
             <Route path="/attendance/history" element={<AttendanceHistory />} />
-            <Route path="/attendance/section" element={<SectionAttendanceReport />} />
+            <Route
+              path="/attendance/section"
+              element={<SectionAttendanceReport />}
+            />
 
+            {/* Leaves */}
+            <Route path="/leaves/apply" element={<ApplyLeave />} />
+            <Route path="/leaves/public-holidays" element={<PublicHoliday />} />
+
+            {/* Plugins */}
             {/* Ui Elements */}
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/avatars" element={<Avatars />} />
