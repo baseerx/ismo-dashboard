@@ -32,7 +32,12 @@ CORS_ALLOWED_ORIGINS = [
      # production frontend
 ]
 
-
+ALLOWED_HOSTS = [
+    "localhost",
+    "192.168.157.55",
+    "192.168.157.55:9000",  # Adjust this to your production frontend URL
+    
+]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
