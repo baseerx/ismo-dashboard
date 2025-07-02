@@ -13,7 +13,9 @@ import * as XLSX from "xlsx";
 
 interface EnhancedDataTableProps<T extends object> {
   data: T[];
-  columns: ColumnDef<T, any>[];
+    columns: ColumnDef<T, any>[];
+    fromdate?: string;
+  todate?: string;
   onEdit?: (row: T) => void;
   onDelete?: (id: any) => void;
   getExportHeaders?: () => string[];
@@ -23,7 +25,9 @@ interface EnhancedDataTableProps<T extends object> {
 
 const EnhancedDataTable = <T extends object>({
   data,
-  columns,
+    columns,
+    fromdate,
+    todate,
   getExportHeaders,
   getExportRows,
 }: EnhancedDataTableProps<T>) => {
@@ -51,26 +55,43 @@ const EnhancedDataTable = <T extends object>({
     },
   });
 
-  const exportToExcel = () => {
-    const worksheet = XLSX.utils.json_to_sheet(tableData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
-    XLSX.writeFile(workbook, "data.xlsx");
-  };
+const exportToExcel = () => {
+  const wsData = [
+    ["Independent System & Market Operator (ISMO)"],
+    ["Attendance Report" + (fromdate ? " (from: " + fromdate + ", to: " + todate + ")" : "")],
+    [], // empty row for spacing
+    getExportHeaders ? getExportHeaders() : Object.keys(tableData[0] || {}),
+    ...(getExportRows
+      ? getExportRows(tableData)
+      : tableData.map((row) => Object.values(row))),
+  ];
 
-  const exportToPDF = () => {
-    const doc = new jsPDF();
-    autoTable(doc, {
-      head: [
-        getExportHeaders ? getExportHeaders() : Object.keys(tableData[0] || {}),
-      ],
-      body: getExportRows
-        ? getExportRows(tableData)
-        : tableData.map((row) => Object.values(row)),
-    });
-    doc.save("data.pdf");
-  };
+  const worksheet = XLSX.utils.aoa_to_sheet(wsData);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
+  XLSX.writeFile(workbook, "attendance_report.xlsx");
+};
 
+const exportToPDF = () => {
+  const doc = new jsPDF();
+
+  // Add custom multi-line header
+  doc.setFontSize(12);
+  doc.text("Independent System & Market Operator (ISMO)", 14, 15);
+  doc.text("Attendance Report" + (fromdate ? " (from: " + fromdate + ", to: " + todate + ")" : ""), 14, 23);
+
+  autoTable(doc, {
+    startY: 30,
+    head: [
+      getExportHeaders ? getExportHeaders() : Object.keys(tableData[0] || {}),
+    ],
+    body: getExportRows
+      ? getExportRows(tableData)
+      : tableData.map((row) => Object.values(row)),
+  });
+
+  doc.save("attendance_report.pdf");
+};
 
 
   return (
@@ -99,7 +120,8 @@ const EnhancedDataTable = <T extends object>({
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+          <div className="overflow-x-auto">
+        
         <table className="min-w-full table-auto border-collapse">
           <thead className="bg-gray-100 text-sm text-gray-700">
             {table.getHeaderGroups().map((headerGroup) => (

@@ -151,7 +151,9 @@ export default function DataTable() {
 
           <EnhancedDataTable<AttendanceRow>
             data={attendancedata}
-            columns={columns}
+                      columns={columns}
+            fromdate={fromdate.toString()}
+            todate={todate.toString()}
           />
         </ComponentCard>
       </div>

@@ -13,18 +13,18 @@ import SearchableDropdown from "../../components/form/input/SearchableDropDown";
 import Button from "../../components/ui/button/Button";
 
 type AttendanceRow = {
-    id: number;
+    id?: number;
     erp_id: string;
     name: string;
     designation: string;
     section: string;
-    uid: string | null;
+    uid?: string | null;
     user_id: string | null;
     timestamp: string;
     late: string;
     status: string;
-    flag: string;
-    punch: string;
+    flag?: string;
+    punch?: string;
 };
 
 export default function IndividualAttendance() {
@@ -221,7 +221,9 @@ const columns: ColumnDef<AttendanceRow>[] = [
 
           <EnhancedDataTable<AttendanceRow>
             data={attendancedata}
-            columns={columns}
+                      columns={columns}
+                      fromdate={fromdate.toString()}
+                      todate={todate.toString()}
           />
         </ComponentCard>
       </div>

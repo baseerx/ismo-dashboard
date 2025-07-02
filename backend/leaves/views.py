@@ -14,13 +14,14 @@ def get_leave_requests(request):
         "leaves": [
             {
                 "id": leave.id,
-                "employee_id": leave.erp_id,
+                "employee_id": leave.employee_id,
+                "erp_id": leave.erp_id,
                 "leave_type": leave.leave_type,
                 "start_date": leave.start_date,
                 "end_date": leave.end_date,
                 "reason": leave.reason,
                 "status": leave.status,
-                "created_at": leave.created_at
+                "created_at": leave.created_at,
             }
             for leave in leaves
         ]
