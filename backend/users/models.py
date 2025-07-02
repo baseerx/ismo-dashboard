@@ -24,8 +24,8 @@ class Users(models.Model):
     name = models.CharField(max_length=100)
     privilege = models.IntegerField()
     password = models.CharField(max_length=100)
-    group_id = models.IntegerField()
-    card = models.CharField(max_length=100)
+    group_id = models.IntegerField(null=True, blank=True)
+    card = models.CharField(max_length=100, null=True, blank=True)
 
     class Meta:
         db_table = 'users'
