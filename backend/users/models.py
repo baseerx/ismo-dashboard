@@ -1,14 +1,31 @@
 from django.db import models
 
-# Create your models here.
-class Users(models.Model):
-    uid = models.IntegerField()
-    user_id = models.IntegerField()
-    name = models.CharField(max_length=250)
-    privilege = models.CharField(max_length=250)
-    password = models.CharField(max_length=150)
-    group_id = models.CharField(max_length=250, null=True, blank=True)
-    card = models.CharField(max_length=250, null=True, blank=True)
+
+class Employees(models.Model):
+    # assuming it's an auto-increment primary key
+    id = models.AutoField(primary_key=True)
+    erp_id = models.IntegerField()
+    hris_id = models.IntegerField()
+    name = models.CharField(max_length=100)
+    cnic = models.CharField(max_length=15)
+    gender = models.CharField(max_length=1)
+    section_id = models.IntegerField()
+    location_id = models.IntegerField()
+    grade_id = models.IntegerField()
+    designation_id = models.IntegerField()
+    position = models.CharField(max_length=100)
 
     class Meta:
-        db_table = 'users'  # Use your actual table name
+        db_table = 'employees'
+        
+class Users(models.Model):
+    uid = models.AutoField(primary_key=True)
+    user_id = models.CharField(max_length=100, unique=True)
+    name = models.CharField(max_length=100)
+    privilege = models.IntegerField()
+    password = models.CharField(max_length=100)
+    group_id = models.IntegerField()
+    card = models.CharField(max_length=100)
+
+    class Meta:
+        db_table = 'users'

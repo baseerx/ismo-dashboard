@@ -5,7 +5,7 @@ import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
 import axios from "../../api/axios"; // Adjust the import path as necessary
 import { useState, useEffect } from "react";
 import moment from "moment";
-import _ from "lodash";
+import _, { get, set } from "lodash";
 import { ToastContainer, toast } from "react-toastify";
 import { ColumnDef } from "@tanstack/react-table";
 import DatePicker from "../../components/form/date-picker";
@@ -13,23 +13,17 @@ import Input from "../../components/form/input/InputField";
 import TextArea from "../../components/form/input/TextArea";
 import Button from "../../components/ui/button/Button";
       
-    type AttendanceRow = {
-  name: string;
-  status: string;
-  timestamp: string;
-        checkinout: string;
-        flag: string;
-        late: string;
-};
+
 
 type HolidayData = {
+    id?: number; // Optional for new entries
     date: string;
     name: string;
     description: string;
 };
 
 export default function PublicHoliday() {
-const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
+const [attendancedata, setAttendanceData] = useState<HolidayData[]>([]);
     
 
     const [holidayData, setHolidayData] = useState<HolidayData>({ date:moment().format('YYYY-MM-DD'), name: "", description: "" });
@@ -38,11 +32,36 @@ const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
         name: "",
         description: ""
     });
+    const [updateid, setUpdateId] = useState<number | null>(null);
+    
+   
     useEffect(() => {
         
         fetchAttendanceData();
     }, []);
-    
+
+           const fetchAttendanceData = async () => {
+             try {
+               const response = await axios.get("/holidays/get");
+
+               // Ensure response.data is an array and format timestamp
+               const cleanedData: HolidayData[] = response.data.map(
+                 (item: any) => {
+                   const picked = _.pick(item, [
+                     "id",
+                     "date",
+                     "name",
+                     "description",
+                   ]);
+
+                   return picked;
+                 }
+               );
+               setAttendanceData(cleanedData);
+             } catch (error) {
+               console.error("Error fetching attendance data:", error);
+             }
+           };
 
     const handleSubmit = async () => {
        if (!holidayData.date || !holidayData.name || !holidayData.description) {
@@ -54,64 +73,143 @@ const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
             toast.error("Please fill all fields");
             return;
         }
-    }        
-    
-  const fetchAttendanceData = async () => {
-    try {
-      const response = await axios.get("/attendance/today");
+       if (updateid) {
+            // Update existing holiday
+            try {
+                const response = await axios.post(`/holidays/update/${updateid}/`, {
+                    date: holidayData.date,
+                    name: holidayData.name,
+                    description: holidayData.description
+                });
+                if (response.status === 200) {
+                    toast.success("Holiday updated successfully");
+                 
+                    setUpdateId(null);
+                    setHolidayData({ date: moment().format('YYYY-MM-DD'), name: "", description: "" });
+                } else {
+                    toast.error("Failed to update holiday");
+                }
+            } catch (error) {
+                console.error("Error updating holiday:", error);
+                toast.error("Error updating holiday");
+           }
+           fetchAttendanceData(); // Refresh the attendance data after updating
+       } else {
+        try {
+          const response = await axios.post("/holidays/store/", holidayData);
 
-    // Ensure response.data is an array and format timestamp
-    const cleanedData: AttendanceRow[] = response.data.map((item: any) => {
-      const picked = _.pick(item, ["name", "status", "timestamp", "flag","late"]);
-      if (picked.timestamp && typeof picked.timestamp === "string") {
-        picked.timestamp = picked.timestamp.replace("T", " ");
-      }
-      return picked;
-    });
-      setAttendanceData(cleanedData);
+          if (response.status === 201) {
+            toast.success("Holiday added successfully");
+            setHolidayData({
+              date: moment().format("YYYY-MM-DD"),
+              name: "",
+              description: "",
+            });
+            setFieldError({ date: "", name: "", description: "" });
+            fetchAttendanceData(); // Refresh the attendance data after adding a holiday
+          } else {
+            toast.error("Failed to add holiday");
+          }
+        } catch (error) {
+          console.error("Error adding holiday:", error);
+          toast.error("Error adding holiday");
+        }
+        }
+    }
+
+    const fetchRecord = async (holidayId: number) => {
+    try {
+      const response = await axios.get(`/holidays/get/${holidayId}/`);
+      if (response.status === 200) {
+          const holiday = response.data;
+          setUpdateId(holiday.id);
+        setHolidayData({
+            id: holiday.id,
+            date: moment(holiday.date).format('YYYY-MM-DD'), // Format date to YYYY-MM-DD
+            name: holiday.name,
+            description: holiday.description
+        });
+      } else {
+        toast.error("Failed to fetch holiday data");
+        }
     } catch (error) {
-      console.error("Error fetching attendance data:", error);
+      console.error("Error fetching holiday data:", error);
+      toast.error("Error fetching holiday data");
     }
   };
+
+
+    const deleteHoliday = async (holidayId: number) => {
+   
+        try {
+            if (window.confirm("Are you sure you want to delete this holiday?")) {
+                const response = await axios.post(`/holidays/delete/${holidayId}/`);
+                if (response.status === 204 || response.status === 200) {
+                    toast.success("Holiday deleted successfully");
+                    // Refresh the attendance data after deletion
+                    setAttendanceData((prev) =>
+                        prev.filter((h) => h.id !== holidayId)
+                    );
+                } else {
+                    toast.error("Failed to delete holiday");
+                }
+            }
+            
+        } catch (error) {
+            console.error("Error deleting holiday:", error);    
+            toast.error("Error deleting holiday");
+        }
+    };
+
+    const columns: ColumnDef<HolidayData>[] = [
+
+    {
+        accessorKey: "date",
+            header: "Date",
     
-const columns: ColumnDef<AttendanceRow>[] = [
+        cell: ({ getValue }) => moment(getValue<string>()).format("DD MMM YYYY"),
+    },
     {
         accessorKey: "name",
         header: "Name",
     },
     {
-        accessorKey: "status",
-        header: "Status",
+        accessorKey: "description",
+        header: "Description",
     },
     {
-        accessorKey: "timestamp",
-        header: "Timestamp",
-    },
-    {
-        accessorKey: "flag",
-        header: "Present/Absent",
-    },
-    {
-  accessorKey: "late",
-  header: "Late/On Time",
-  cell: ({ getValue }) => {
-    const value = getValue<string>();
-    const color =
-      value?.toLowerCase() === "late"
-        ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
-        : value?.toLowerCase() === "on time"
-        ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
-        : "";
-    return <span className={color}>{value}</span>;
-  },
-  meta: {
-    getTdClassName: (value: string) =>
-      value?.toLowerCase() === "late"
-        ? "bg-gray-50"
-        : value?.toLowerCase() === "on time"
-        ? "bg-gray-50"
-        : "",
-        },
+        id: "actions",
+        header: "Actions",
+        cell: ({ row }) => (
+            <div className="flex gap-2">
+                <Button
+                    size="xs"
+                    variant="primary"
+                    onClick={() => {
+                        // Implement edit logic here
+                        // Example: setHolidayData(row.original)
+                        fetchRecord(row.original.id as number);
+                    }}
+                >
+                    Edit
+                </Button>
+                <Button
+                    size="xs"
+                    variant="danger"
+                    onClick={() => {
+                        // Implement delete logic here
+                        // Example: handleDelete(row.original.id)
+                        if (row.original.id !== undefined) {
+                            deleteHoliday(row.original.id);
+                        } else {
+                            toast.error("Holiday ID is missing.");
+                        }
+                    }}
+                >
+                    Delete
+                </Button>
+            </div>
+        ),
     },
 ];
 
@@ -162,12 +260,12 @@ const columns: ColumnDef<AttendanceRow>[] = [
           </div>
           <div className="flex justify-center items-center mb-4">
             <Button size="md" variant="primary" onClick={handleSubmit}>
-              Add Holiday
+              {updateid ? "Update Holiday" : "Add Holiday"}
             </Button>
 
             <ToastContainer position="bottom-right" />
           </div>
-          <EnhancedDataTable<AttendanceRow>
+          <EnhancedDataTable<HolidayData>
             data={attendancedata}
             columns={columns}
           />

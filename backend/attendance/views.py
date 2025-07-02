@@ -66,6 +66,60 @@ class AttendanceView:
             return JsonResponse(records, safe=False)
         finally:
             session.close()
+            
+    @csrf_exempt
+    @require_POST
+    def attendance_individual(request):
+        data=json.loads(request.body)
+        erpid = data.get('erpid')
+        if not erpid:
+            return JsonResponse({"error": "erpid is required"}, status=400)
+        
+        fromdate = data.get('fromdate')
+        todate = data.get('todate')
+        
+        session = SessionLocal()
+        records = []
+        try:
+            query = text("""
+                SELECT
+                    e.id AS id,
+                    e.erp_id AS erp_id,
+                    e.name AS name,
+                    d.title AS designation,
+                    s.name AS section,
+                    a.uid AS uid,
+                    e.hris_id AS user_id,
+                    a.timestamp AS timestamp,
+                    a.status AS status,
+                    a.lateintime AS lateintime,
+                    a.punch AS punch
+                FROM employees e
+                LEFT JOIN sections s ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) between :fromdate and :todate
+                WHERE e.erp_id = :erpid
+            """)
+            result = session.execute(query, {"fromdate": fromdate, "todate": todate, "erpid": erpid})
+            for row in result:
+
+                records.append({
+                    'id': row.id,
+                    'erp_id': row.erp_id,
+                    'name': row.name,
+                    'designation': row.designation,
+                    'section': row.section,
+                    'uid': row.uid,
+                    'user_id': row.user_id,
+                    'timestamp': '-' if row.timestamp is None else row.timestamp,
+                    'late':  row.lateintime,
+                    'status': '-' if row.status is None else row.status,
+                    'flag': 'Present' if row.uid is not None else 'Absent',
+                    'punch': row.punch
+                })
+            return JsonResponse(records, safe=False)
+        finally:
+            session.close()
 
     @csrf_exempt
     @require_POST

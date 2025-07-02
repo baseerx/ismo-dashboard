@@ -39,6 +39,7 @@ const navItems: NavItem[] = [
       { name: "Today's Attendance", path: "/attendance/today", pro: false },
       { name: "Attendance History", path: "/attendance/history", pro: false },
       { name: "Section Attendance", path: "/attendance/section", pro: false },
+      { name: "Individual Attendance", path: "/attendance/individual", pro: false },
     ],
   },
   {

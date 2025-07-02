@@ -24,6 +24,7 @@ import SectionAttendanceReport from "./pages/Tables/SectionAttendanceReport";
 import ApplyLeave from "./pages/Leaves/ApplyLeave";
 import PublicHoliday from "./pages/Leaves/PublicHolidays";
 import TodaysAttendance from "./pages/Tables/TodaysAttendance";
+import IndividualAttendance from "./pages/Tables/IndividualAttendance";
 
 export default function App() {
   return (
@@ -47,6 +48,7 @@ export default function App() {
             <Route path="/basic-tables" element={<BasicTables />} />
             <Route path="/attendance/today" element={<DataTableOne />} />
             <Route path="/attendance/history" element={<AttendanceHistory />} />
+            <Route path="/attendance/individual" element={<IndividualAttendance />} />
             <Route
               path="/attendance/section"
               element={<SectionAttendanceReport />}

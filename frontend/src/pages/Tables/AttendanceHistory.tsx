@@ -29,7 +29,8 @@ export default function DataTable() {
 
   useEffect(() => {
     if (fromdate <= todate) {
-      fetchAttendanceData();
+        fetchAttendanceData();
+        toast.success(`Attendance data fetched from ${fromdate} to ${todate}`);
     } else {
       toast.error("from date cannot be greater than to date");
     }
