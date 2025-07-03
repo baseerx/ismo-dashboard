@@ -45,6 +45,12 @@ class AttendanceView:
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) = :today
+                ORDER BY a.timestamp desc,
+                         CASE a.status
+                             WHEN 'Checked In' THEN 0
+                             WHEN 'Checked Out' THEN 1
+                             ELSE 2
+                         END
             """)
             result = session.execute(query, {"today": today})
             for row in result:
@@ -99,6 +105,13 @@ class AttendanceView:
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) between :fromdate and :todate
                 WHERE e.erp_id = :erpid
+                ORDER BY e.id, 
+                         CASE 
+                             WHEN a.status = 'Checked In' THEN 0
+                             WHEN a.status = 'Checked Out' THEN 1
+                             ELSE 2
+                         END,
+                         a.timestamp
             """)
             result = session.execute(query, {"fromdate": fromdate, "todate": todate, "erpid": erpid})
             for row in result:
@@ -136,7 +149,7 @@ class AttendanceView:
                     e.id AS id,
                     e.erp_id AS erp_id,
                     e.name AS name,
-                         a.uid AS uid,
+                    a.uid AS uid,
                     e.hris_id AS user_id,
                     d.title AS designation,
                     s.name AS section,
@@ -148,7 +161,13 @@ class AttendanceView:
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) BETWEEN :fromdate AND :todate
-                ORDER BY a.timestamp DESC
+                ORDER BY e.id, 
+                         CASE 
+                             WHEN a.status = 'Checked In' THEN 0
+                             WHEN a.status = 'Checked Out' THEN 1
+                             ELSE 2
+                         END,
+                         a.timestamp
             """)
             result = session.execute(
                 query, {"fromdate": fromdate, "todate": todate})
@@ -184,8 +203,8 @@ class AttendanceView:
             query = text("""
                 SELECT
                     e.id AS id,
-                         a.uid AS uid,
-                           e.erp_id AS erp_id,
+                    a.uid AS uid,
+                    e.erp_id AS erp_id,
                     e.name AS name,
                     d.title AS designation,
                     s.name AS section,
@@ -194,11 +213,17 @@ class AttendanceView:
                     a.lateintime AS lateintime,
                     a.punch AS punch
                 FROM employees e
-               
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) = :date
                 WHERE s.id = :section
+                ORDER BY e.id, 
+                         CASE 
+                             WHEN a.status = 'Checked In' THEN 0
+                             WHEN a.status = 'Checked Out' THEN 1
+                             ELSE 2
+                         END,
+                         a.timestamp
             """)
             result = session.execute(
                 query, {"section": section, "date": date})
