@@ -184,6 +184,7 @@ class AttendanceView:
             query = text("""
                 SELECT
                     e.id AS id,
+                         a.uid AS uid,
                            e.erp_id AS erp_id,
                     e.name AS name,
                     d.title AS designation,
@@ -211,6 +212,7 @@ class AttendanceView:
                     'section': row.section,
                     'timestamp': '-' if row.timestamp is None else row.timestamp,
                     'late': '-' if row.timestamp is None else row.lateintime,
+                    'flag': 'Present' if row.uid is not None else 'Absent',
                     'status': '-' if row.status is None else row.status,
                     'punch': row.punch
                 })

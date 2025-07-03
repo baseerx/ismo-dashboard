@@ -75,6 +75,7 @@ const fetchAttendanceData = async () => {
               timestamp: item.timestamp!='-'?moment(item.timestamp).format("YYYY-MM-DD HH:mm:ss"): "-",
               late: item.late,
               status: item.status,
+
               punch: item.punch,
               flag: item.flag, // If flag is still needed
             };
@@ -105,6 +106,10 @@ const columns: ColumnDef<AttendanceRow>[] = [
   {
     accessorKey: "timestamp",
     header: "Timestamp",
+  },
+  {
+    accessorKey: "flag",
+    header: "Present/Absent",
   },
   {
     accessorKey: "late",
