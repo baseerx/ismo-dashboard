@@ -3,7 +3,7 @@ from django.db import models
 
 class Employees(models.Model):
     # assuming it's an auto-increment primary key
-    id = models.AutoField(primary_key=True)
+
     erp_id = models.IntegerField()
     hris_id = models.IntegerField()
     name = models.CharField(max_length=100)

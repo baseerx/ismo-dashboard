@@ -92,15 +92,18 @@ WSGI_APPLICATION = 'hris.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'attendance_system',  # Replace with your actual database name
-        'USER': 'root',
-        'PASSWORD': '',
-        'HOST': 'localhost',
-        'PORT': '3306',
+        'ENGINE': 'mssql',
+        'NAME': 'Attendance_System',  # Replace with your actual database name
+        'USER': 'sa',
+        'PASSWORD': 'Sa@157',
+        'HOST': '192.168.157.51',
+        'PORT': '9090',
         'OPTIONS': {
-            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+            'driver': 'ODBC Driver 17 for SQL Server',  # Ensure you have the correct ODBC driver installed
+            'charset': 'utf8mb4',  # Optional, adjust as needed
+            'extra_params': 'TrustServerCertificate'  # Optional, adjust as needed
         },
+
     }
 }
 

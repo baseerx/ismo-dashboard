@@ -3,7 +3,6 @@ from django.utils import timezone
 # Create your models here.
 
 class LeaveModel(models.Model):
-    id= models.AutoField(primary_key=True)
     employee_id = models.IntegerField(default=0)
     erp_id = models.IntegerField(default=0)  # Assuming erp_id is an integer, adjust as necessary
     leave_type = models.CharField(max_length=50, null=True, blank=True)

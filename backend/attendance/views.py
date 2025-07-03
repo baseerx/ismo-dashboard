@@ -161,13 +161,18 @@ class AttendanceView:
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) BETWEEN :fromdate AND :todate
-                ORDER BY e.id, 
-                         CASE 
-                             WHEN a.status = 'Checked In' THEN 0
-                             WHEN a.status = 'Checked Out' THEN 1
-                             ELSE 2
-                         END,
-                         a.timestamp
+               WHERE a.status IN ('Checked In', 'Checked Out', 'Early Checked Out')
+                ORDER BY
+                    e.name,
+                    DATE(a.timestamp),
+                    CASE 
+                        WHEN a.status = 'Checked In' THEN 0
+                        WHEN a.status = 'Early Checked Out' THEN 1
+                        WHEN a.status = 'Checked Out' THEN 2
+                        ELSE 3
+                    END,
+                    a.timestamp;
+
             """)
             result = session.execute(
                 query, {"fromdate": fromdate, "todate": todate})
@@ -217,13 +222,17 @@ class AttendanceView:
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) = :date
                 WHERE s.id = :section
-                ORDER BY e.id, 
-                         CASE 
-                             WHEN a.status = 'Checked In' THEN 0
-                             WHEN a.status = 'Checked Out' THEN 1
-                             ELSE 2
-                         END,
-                         a.timestamp
+                   WHERE a.status IN ('Checked In', 'Checked Out', 'Early Checked Out')
+                ORDER BY
+                    e.name,
+                    DATE(a.timestamp),
+                    CASE 
+                        WHEN a.status = 'Checked In' THEN 0
+                        WHEN a.status = 'Early Checked Out' THEN 1
+                        WHEN a.status = 'Checked Out' THEN 2
+                        ELSE 3
+                    END,
+                    a.timestamp;
             """)
             result = session.execute(
                 query, {"section": section, "date": date})
