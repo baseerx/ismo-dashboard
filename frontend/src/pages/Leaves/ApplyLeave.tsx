@@ -73,10 +73,11 @@ export default function IndividualAttendance() {
     const getEmployeesLeaves = async () => {
         try {
             const response = await axios.get("/leaves/get/");
-            console.log("Response data:", response.data);
+            
             const cleanedData: AttendanceRow[] = response.data.leaves.map((item: any) => {
                 const picked = _.pick(item, [
                     "id",
+                    "employee_name",
                     "employee_id",
                     "erp_id",
                     "leave_type",
@@ -98,6 +99,10 @@ export default function IndividualAttendance() {
         {
         header: "ERP ID",
         accessorKey: "erp_id",
+        },
+        {
+        header: "Name",
+        accessorKey: "employee_name",
         },
         {
         header: "Employee ID",
@@ -181,6 +186,7 @@ export default function IndividualAttendance() {
         start_date: moment().format("YYYY-MM-DD").toString(),
         end_date: moment().format("YYYY-MM-DD").toString(),
       });
+      getEmployeesLeaves();
       toast.success("Leave application submitted successfully");
     } catch (error) {
       console.error("Error applying for leave:", error);
@@ -223,7 +229,7 @@ export default function IndividualAttendance() {
                 hint={fielderror.employee_id}
               />
             </div>
-            <div className="w-full">
+            <div className="w-full my-3">
               <Label>Leave Type</Label>
               <Select
                 options={leavetype.map((type) => ({
@@ -239,7 +245,7 @@ export default function IndividualAttendance() {
                 hint={fielderror.leave_type}
               />
             </div>
-            <div className="w-full">
+            <div className="w-full my-3">
               <DatePicker
                 id="from-date-picker"
                 defaultDate={data.start_date.toString()}
@@ -265,7 +271,7 @@ export default function IndividualAttendance() {
                 }}
               />
             </div>
-            <div className="my-3">
+            <div className="my-5">
               <TextArea
                 value={data.reason}
                 onChange={(value) => {
@@ -275,7 +281,7 @@ export default function IndividualAttendance() {
                 hint={fielderror.reason}
               />
             </div>
-            <div className="flex justify-center items-center gap-4 mt-2">
+            <div className="flex justify-center items-center gap-4 my-3">
               <Radio
                 id="status-approved"
                 name="leave-status"

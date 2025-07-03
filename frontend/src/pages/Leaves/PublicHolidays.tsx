@@ -225,7 +225,7 @@ const [attendancedata, setAttendanceData] = useState<HolidayData[]>([]);
         <ComponentCard
           title={`Attendance on ${moment().format("DD MMMM YYYY")}`}
         >
-          <div className="mb-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
+          <div className="mb-4 grid grid-cols-1 sm:grid-cols-2  gap-4">
             <DatePicker
               id="holiday-date"
               mode="single"
@@ -249,7 +249,8 @@ const [attendancedata, setAttendanceData] = useState<HolidayData[]>([]);
               hint={fielderror.name}
             />
             <TextArea
-              placeholder="Holiday Description"
+                          placeholder="Holiday Description"
+                          className="my-3"
               value={holidayData.description}
               onChange={(val) =>
                 setHolidayData({ ...holidayData, description: val })

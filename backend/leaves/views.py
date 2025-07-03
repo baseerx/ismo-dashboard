@@ -4,29 +4,46 @@ from .models import LeaveModel
 from django.views.decorators.http import require_GET,require_POST
 from django.views.decorators.csrf import csrf_exempt
 import json
-
+from sqlalchemy import text
+from db import SessionLocal
 # Create your views here.
 
 @require_GET
 def get_leave_requests(request):
     leaves = LeaveModel.objects.all()
-    data = {
-        "leaves": [
-            {
-                "id": leave.id,
-                "employee_id": leave.employee_id,
-                "erp_id": leave.erp_id,
-                "leave_type": leave.leave_type,
-                "start_date": leave.start_date,
-                "end_date": leave.end_date,
-                "reason": leave.reason,
-                "status": leave.status,
-                "created_at": leave.created_at,
-            }
-            for leave in leaves
-        ]
-    }
-    return JsonResponse(data)
+    data=[]
+    sessions= SessionLocal()
+    query=text("""
+    SELECT
+        l.id,
+               e.name,
+        l.employee_id,
+        l.erp_id,
+        l.leave_type,
+        l.start_date,
+        l.end_date,
+        l.reason,
+        l.status,
+        l.created_at
+    FROM leaves l JOIN employees e ON l.employee_id = e.id 
+""")
+    
+    result=sessions.execute(query).fetchall()
+    for row in result:
+        data.append({
+            "id": row[0],
+            "employee_name": row[1],
+            "employee_id": row[2],
+            "erp_id": row[3],
+            "leave_type": row[4],
+            "start_date": row[5].strftime('%Y-%m-%d'),
+            "end_date": row[6].strftime('%Y-%m-%d'),
+            "reason": row[7],
+            "status": row[8],
+            "created_at": row[9].strftime('%Y-%m-%d %H:%M:%S')
+        })
+    sessions.close()
+    return JsonResponse({"leaves": data})
 
 @csrf_exempt
 @require_POST
