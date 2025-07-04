@@ -244,7 +244,7 @@ export default function IndividualAttendance() {
                 onChange={(value) => {
                   setData({ ...data, leave_type: value?.toString() || "" });
                 }}
-                className="dark:bg-dark-900"
+                className="dark:bg-dark-900 bg-amber-50"
                 error={!!fielderror.leave_type}
                 hint={fielderror.leave_type}
               />
