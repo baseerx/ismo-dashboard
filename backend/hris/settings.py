@@ -25,6 +25,8 @@ SECRET_KEY = 'django-insecure-4&quhz))qhg9a(t#^fmycf=bf=dn#5n$k1k2d61)u+d&=ro8e#
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 CORS_ALLOW_ALL_ORIGINS = True
+USE_TZ = False
+
 # CORS settings
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",  # Vite (React dev server)
@@ -136,7 +138,6 @@ TIME_ZONE = 'UTC'
 
 USE_I18N = True
 
-USE_TZ = True
 
 
 # Static files (CSS, JavaScript, Images)

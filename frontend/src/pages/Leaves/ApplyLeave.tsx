@@ -5,7 +5,7 @@ import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
 import axios from "../../api/axios"; // Adjust the import path as necessary
 import { useState, useEffect } from "react";
 import moment from "moment";
-import _, { get, set } from "lodash";
+import _ from "lodash";
 import { ToastContainer, toast } from "react-toastify";
 import { ColumnDef } from "@tanstack/react-table";
 import DatePicker from "../../components/form/date-picker";
@@ -34,7 +34,7 @@ export default function IndividualAttendance() {
   const [options, setOptions] = useState<{ label: string; value: string }[]>(
     []
   );
-  const [leavetype, setLeaveType] = useState<string[]>([
+  const leavetype  = [
     "Sick Leave",
     "Casual Leave",
     "Annual Leave",
@@ -45,7 +45,8 @@ export default function IndividualAttendance() {
     "Study Leave",
     "Marriage Leave",
     "Paternity Leave",
-  ]);
+    ];
+    
   useEffect(() => {
       fetchEmployeesOptions();
       getEmployeesLeaves();
@@ -176,7 +177,10 @@ export default function IndividualAttendance() {
         return;
       }
 
-      const response = await axios.post("/leaves/apply/", data);
+        const response = await axios.post("/leaves/apply/", data);
+        if (response.status !== 201) {
+          throw new Error("Failed to apply for leave");
+        }
       setData({
         erp_id: 0,
         employee_id: 0,

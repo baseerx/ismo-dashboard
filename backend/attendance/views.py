@@ -44,7 +44,7 @@ class AttendanceView:
                 FROM employees e
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) = :today
+                LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) = :today
                 ORDER BY a.timestamp desc,
                          CASE a.status
                              WHEN 'Checked In' THEN 0
@@ -103,7 +103,7 @@ class AttendanceView:
                 FROM employees e
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) between :fromdate and :todate
+                LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) BETWEEN :fromdate AND :todate
                 WHERE e.erp_id = :erpid
                 ORDER BY e.id, 
                          CASE 
@@ -142,6 +142,8 @@ class AttendanceView:
         todate = data.get('todate')
 
         session = SessionLocal()
+        if session is None:
+            return JsonResponse({"error": "Database session could not be created"}, status=500)
         records = []
         try:
             query = text("""
@@ -160,11 +162,11 @@ class AttendanceView:
                 FROM employees e
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) BETWEEN :fromdate AND :todate
+                LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) BETWEEN :fromdate AND :todate
                WHERE a.status IN ('Checked In', 'Checked Out', 'Early Checked Out')
                 ORDER BY
                     e.name,
-                    DATE(a.timestamp),
+                    CAST(a.timestamp AS DATE),
                     CASE 
                         WHEN a.status = 'Checked In' THEN 0
                         WHEN a.status = 'Early Checked Out' THEN 1
@@ -176,6 +178,7 @@ class AttendanceView:
             """)
             result = session.execute(
                 query, {"fromdate": fromdate, "todate": todate})
+            print('baseer',result)
             for row in result:
 
                 records.append({
@@ -220,12 +223,12 @@ class AttendanceView:
                 FROM employees e
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN attendance a ON e.hris_id = a.user_id AND DATE(a.timestamp) = :date
+                LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) = :date
                 WHERE s.id = :section
-                   WHERE a.status IN ('Checked In', 'Checked Out', 'Early Checked Out')
+                   AND a.status IN ('Checked In', 'Checked Out', 'Early Checked Out')
                 ORDER BY
                     e.name,
-                    DATE(a.timestamp),
+                    CAST(a.timestamp AS DATE),
                     CASE 
                         WHEN a.status = 'Checked In' THEN 0
                         WHEN a.status = 'Early Checked Out' THEN 1
