@@ -25,6 +25,7 @@ import ApplyLeave from "./pages/Leaves/ApplyLeave";
 import PublicHoliday from "./pages/Leaves/PublicHolidays";
 import TodaysAttendance from "./pages/Tables/TodaysAttendance";
 import IndividualAttendance from "./pages/Tables/IndividualAttendance";
+import CreateUser from "./pages/UserManagement/CreateUser";
 
 export default function App() {
   return (
@@ -52,7 +53,10 @@ export default function App() {
             <Route
               path="/attendance/section"
               element={<SectionAttendanceReport />}
-            />
+                      />
+                      
+                      {/* User managment */}
+            <Route path="/users/create" element={<CreateUser />} />
 
             {/* Leaves */}
             <Route path="/leaves/apply" element={<ApplyLeave />} />
