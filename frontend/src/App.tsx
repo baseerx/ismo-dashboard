@@ -26,6 +26,9 @@ import PublicHoliday from "./pages/Leaves/PublicHolidays";
 import TodaysAttendance from "./pages/Tables/TodaysAttendance";
 import IndividualAttendance from "./pages/Tables/IndividualAttendance";
 import CreateUser from "./pages/UserManagement/CreateUser";
+import AssignRights from "./pages/UserManagement/AssignRights";
+import MainMenu from "./pages/Menus/MainMenu";
+import SubMenu from "./pages/Menus/SubMenu";
 
 export default function App() {
   return (
@@ -57,6 +60,11 @@ export default function App() {
                       
                       {/* User managment */}
             <Route path="/users/create" element={<CreateUser />} />
+                      <Route path="/users/assign-rights" element={<AssignRights />} />
+                      
+                      {/* Menu Management */}
+                      <Route path="/create-menu" element={<MainMenu />} />
+                        <Route path="/sub-menu" element={<SubMenu />} />
 
             {/* Leaves */}
             <Route path="/leaves/apply" element={<ApplyLeave />} />
