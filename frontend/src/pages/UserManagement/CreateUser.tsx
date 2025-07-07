@@ -150,7 +150,7 @@ const columns: ColumnDef<UserRow>[] = [
             <Button
                 size="xs"
                 variant="danger"
-                onClick={() => handleDeleteUser(row.original.id)}
+                onClick={() => handleDeleteUser(row.original.id || 0)}
             >
                 Delete
             </Button>
