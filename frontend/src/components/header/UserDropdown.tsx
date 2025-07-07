@@ -8,7 +8,7 @@ export default function UserDropdown() {
   const [isOpen, setIsOpen] = useState(false);
   const { logout,user } = useAuth();
     const navigate = useNavigate();
-    console.log("UserDropdown rendered with user:", user);
+
   const  logoutUser=()=> {
     logout();
         navigate("/");
@@ -145,6 +145,7 @@ export default function UserDropdown() {
         <Button
                   onClick={logoutUser}
                   variant="outline"
+                  className="mt-2"
           
         >
           <svg

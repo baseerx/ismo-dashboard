@@ -6,4 +6,6 @@ urlpatterns = [
     path('employees/', EmployeesView.get),  # Include the employees app URLs
     path('create_user/', UsersView.create_user),  # Include the create user URL
     path('login/',UsersView.login_user),  # Include the login URL
+    path('get_auth_users/', UsersView.auth_users),  # Include the login URL
+    path('delete_user/<int:user_id>/', UsersView.delete_user),  # Include the login URL
 ]

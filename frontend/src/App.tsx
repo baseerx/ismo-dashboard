@@ -29,6 +29,7 @@ import CreateUser from "./pages/UserManagement/CreateUser";
 import AssignRights from "./pages/UserManagement/AssignRights";
 import MainMenu from "./pages/Menus/MainMenu";
 import SubMenu from "./pages/Menus/SubMenu";
+import ProtectedRoute from "./components/auth/ProtectedRoute";
 
 export default function App() {
   return (
@@ -37,54 +38,63 @@ export default function App() {
         <ScrollToTop />
         <Routes>
           {/* Dashboard Layout */}
-          <Route element={<AppLayout />}>
-            
-            <Route  path="/dashboard" element={<TodaysAttendance />} />
+          <Route element={<ProtectedRoute />}>
+            <Route element={<AppLayout />}>
+              <Route path="/dashboard" element={<TodaysAttendance />} />
 
-            {/* Others Page */}
-            <Route path="/profile" element={<UserProfiles />} />
-            <Route path="/calendar" element={<Calendar />} />
-            <Route path="/blank" element={<Blank />} />
+              {/* Others Page */}
+              <Route path="/profile" element={<UserProfiles />} />
+              <Route path="/calendar" element={<Calendar />} />
+              <Route path="/blank" element={<Blank />} />
 
-            {/* Forms */}
-            <Route path="/form-elements" element={<FormElements />} />
+              {/* Forms */}
+              <Route path="/form-elements" element={<FormElements />} />
 
-            {/* Tables */}
-            <Route path="/basic-tables" element={<BasicTables />} />
-            <Route path="/attendance/today" element={<DataTableOne />} />
-            <Route path="/attendance/history" element={<AttendanceHistory />} />
-            <Route path="/attendance/individual" element={<IndividualAttendance />} />
-            <Route
-              path="/attendance/section"
-              element={<SectionAttendanceReport />}
-                      />
-                      
-                      {/* User managment */}
-            <Route path="/users/create" element={<CreateUser />} />
-                      <Route path="/users/assign-rights" element={<AssignRights />} />
-                      
-                      {/* Menu Management */}
-                      <Route path="/create-menu" element={<MainMenu />} />
-                        <Route path="/sub-menu" element={<SubMenu />} />
+              {/* Tables */}
+              <Route path="/basic-tables" element={<BasicTables />} />
+              <Route path="/attendance/today" element={<DataTableOne />} />
+              <Route
+                path="/attendance/history"
+                element={<AttendanceHistory />}
+              />
+              <Route
+                path="/attendance/individual"
+                element={<IndividualAttendance />}
+              />
+              <Route
+                path="/attendance/section"
+                element={<SectionAttendanceReport />}
+              />
 
-            {/* Leaves */}
-            <Route path="/leaves/apply" element={<ApplyLeave />} />
-            <Route path="/leaves/public-holidays" element={<PublicHoliday />} />
+              {/* User managment */}
+              <Route path="/users/create" element={<CreateUser />} />
+              <Route path="/users/assign-rights" element={<AssignRights />} />
 
-            {/* Plugins */}
-            {/* Ui Elements */}
-            <Route path="/alerts" element={<Alerts />} />
-            <Route path="/avatars" element={<Avatars />} />
-            <Route path="/badge" element={<Badges />} />
-            <Route path="/buttons" element={<Buttons />} />
-            <Route path="/images" element={<Images />} />
-            <Route path="/videos" element={<Videos />} />
+              {/* Menu Management */}
+              <Route path="/create-menu" element={<MainMenu />} />
+              <Route path="/sub-menu" element={<SubMenu />} />
 
-            {/* Charts */}
-            <Route path="/line-chart" element={<LineChart />} />
-            <Route path="/bar-chart" element={<BarChart />} />
+              {/* Leaves */}
+              <Route path="/leaves/apply" element={<ApplyLeave />} />
+              <Route
+                path="/leaves/public-holidays"
+                element={<PublicHoliday />}
+              />
+
+              {/* Plugins */}
+              {/* Ui Elements */}
+              <Route path="/alerts" element={<Alerts />} />
+              <Route path="/avatars" element={<Avatars />} />
+              <Route path="/badge" element={<Badges />} />
+              <Route path="/buttons" element={<Buttons />} />
+              <Route path="/images" element={<Images />} />
+              <Route path="/videos" element={<Videos />} />
+
+              {/* Charts */}
+              <Route path="/line-chart" element={<LineChart />} />
+              <Route path="/bar-chart" element={<BarChart />} />
+            </Route>
           </Route>
-
           {/* Auth Layout */}
           <Route index path="/" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />

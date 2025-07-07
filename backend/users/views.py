@@ -99,6 +99,42 @@ class UsersView:
         else:
             return JsonResponse({'success': False, 'error': 'Invalid credentials'}, status=401)
 
+    @require_GET
+    def auth_users(request):
+        records = User.objects.all()
+        records_list = records.values(
+            'id', 'username', 'first_name', 'last_name', 'email', 'is_staff', 'is_active', 'is_superuser'
+        )
+        # Add 'success': True and rename 'id' to 'user_id' for each user
+        users_list = [
+            {
+            'success': True,
+            'user_id': user['id'],
+            'username': user['username'],
+            'first_name': user['first_name'],
+            'last_name': user['last_name'],
+            'email': user['email'],
+            'is_staff': user['is_staff'],
+            'is_active': user['is_active'],
+            'is_superuser': user['is_superuser'],
+            }
+            for user in records_list
+        ]
+        users_list = list(records_list)
+        return JsonResponse(users_list, safe=False)  # Return as JSON response
+    
+    @csrf_exempt
+    @require_POST
+    def delete_user(request, user_id):
+        if not user_id:
+            return JsonResponse({'success': False, 'error': 'User ID is required'}, status=400)
+
+        try:
+            user = User.objects.get(pk=user_id)
+            user.delete()
+            return JsonResponse({'success': True}, status=200)
+        except User.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'User not found'}, status=404)
  
 class EmployeesView:
     def get(request):

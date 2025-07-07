@@ -75,65 +75,88 @@ export default function CreateUser() {
 
   const getUsers = async () => {
     try {
-      const response = await axios.get("/users/get/");
-    //   const cleanedData: UserRow[] = response.data.users.map((item: any) => {
-    //     return _.pick(item, [
-    //       "id",
-    //       "username",
-    //       "first_name",
-    //       "last_name",
-    //       "email",
-    //       "is_staff",
-    //       "is_active",
-    //       "is_superuser",
-    //       "date_joined",
-    //     ]);
-    //   });
-    //   setUsers(cleanedData);
+        const response = await axios.get("/users/get_auth_users/");
+        console.log("Response from get_auth_users:", response.data);
+        if (response.data) {
+          const usersData = response.data.map((user: any) => ({
+            id: user.id,
+            username: user.username,
+            first_name: user.first_name,
+            last_name: user.last_name,
+            email: user.email,
+            is_staff: user.is_staff,
+            is_active: user.is_active,
+            is_superuser: user.is_superuser,
+          }));
+          setUsers(usersData);
+        } else {
+          setUsers([]);
+        }
+        
+  
     } catch (error) {
       console.error("Error fetching users:", error);
       toast.error("Failed to load users");
     }
   };
-
-  const columns: ColumnDef<UserRow>[] = [
+const handleDeleteUser=async (userId: number) => {
+    try {
+        await axios.post(`/users/delete_user/${userId}/`);
+        toast.success("User deleted successfully");
+        getUsers();
+    } catch (error) {
+        console.error("Error deleting user:", error);
+        toast.error("Failed to delete user");
+    }
+};
+const columns: ColumnDef<UserRow>[] = [
+ 
     {
-      header: "Username",
-      accessorKey: "username",
+        header: "Username",
+        accessorKey: "username",
     },
     {
-      header: "First Name",
-      accessorKey: "first_name",
+        header: "First Name",
+        accessorKey: "first_name",
     },
     {
-      header: "Last Name",
-      accessorKey: "last_name",
+        header: "Last Name",
+        accessorKey: "last_name",
     },
     {
-      header: "Email",
-      accessorKey: "email",
+        header: "Email",
+        accessorKey: "email",
     },
     {
-      header: "Staff",
-      accessorKey: "is_staff",
-      cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
+        header: "Staff",
+        accessorKey: "is_staff",
+        cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
     },
     {
-      header: "Active",
-      accessorKey: "is_active",
-      cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
+        header: "Active",
+        accessorKey: "is_active",
+        cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
     },
     {
-      header: "Superuser",
-      accessorKey: "is_superuser",
-      cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
+        header: "Superuser",
+        accessorKey: "is_superuser",
+        cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
     },
+    
     {
-      header: "Date Joined",
-      accessorKey: "date_joined",
-      cell: ({ getValue }) => moment(getValue<string>()).format("DD MMM YYYY"),
+        header: "Actions",
+        id: "actions",
+        cell: ({ row }) => (
+            <Button
+                size="xs"
+                variant="danger"
+                onClick={() => handleDeleteUser(row.original.id)}
+            >
+                Delete
+            </Button>
+        ),
     },
-  ];
+];
 
   const createUser = async (userData: UserFormData) => {
     try {

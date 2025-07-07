@@ -13,17 +13,25 @@ type AuthContextType = {
 export const AuthProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
     const [user, setUser] = useState<AuthContextType | null>(null);
     const [token, setToken] = useState<string | null>(null);
-    // useEffect(() => {
-    //     console.log("AuthProvider rendered with user:", user);
+    useEffect(() => {
+        const storedUser = localStorage.getItem("user");
+        const storedToken = localStorage.getItem("token");
+        
+        if (storedUser) {
+            setUser(JSON.parse(storedUser));
+        }
+        if (storedToken) {
+            setToken(storedToken);
+        }
      
-    // }, [user, token]); 
+    }, []); 
     
     const login = (userData: AuthContextType) => {
         setUser(userData.user);
         setToken(userData.user.token);
         
         localStorage.setItem("user", JSON.stringify(userData.user));
-        localStorage.setItem("token", userData.token?.toString() || "");
+        localStorage.setItem("token", userData.user.token || "");
         // Implement login logic here
     };
     const logout = () => {
