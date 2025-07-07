@@ -45,6 +45,7 @@ class AttendanceView:
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN attendance a ON e.hris_id = a.user_id WHERE CAST(a.timestamp AS DATE) = :today
+
                 ORDER BY a.timestamp desc,
                          CASE a.status
                              WHEN 'Checked In' THEN 0
