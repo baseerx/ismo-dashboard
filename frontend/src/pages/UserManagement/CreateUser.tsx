@@ -76,20 +76,20 @@ export default function CreateUser() {
   const getUsers = async () => {
     try {
       const response = await axios.get("/users/get/");
-      const cleanedData: UserRow[] = response.data.users.map((item: any) => {
-        return _.pick(item, [
-          "id",
-          "username",
-          "first_name",
-          "last_name",
-          "email",
-          "is_staff",
-          "is_active",
-          "is_superuser",
-          "date_joined",
-        ]);
-      });
-      setUsers(cleanedData);
+    //   const cleanedData: UserRow[] = response.data.users.map((item: any) => {
+    //     return _.pick(item, [
+    //       "id",
+    //       "username",
+    //       "first_name",
+    //       "last_name",
+    //       "email",
+    //       "is_staff",
+    //       "is_active",
+    //       "is_superuser",
+    //       "date_joined",
+    //     ]);
+    //   });
+    //   setUsers(cleanedData);
     } catch (error) {
       console.error("Error fetching users:", error);
       toast.error("Failed to load users");
@@ -157,12 +157,9 @@ export default function CreateUser() {
         toast.error("Please fix all validation errors");
         return;
       }
-
-      const response = await axios.post("/users/create/", userData);
-      if (response.status !== 201) {
-        throw new Error("Failed to create user");
-      }
-
+      
+      const response = await axios.post("/users/create_user/", userData);
+       
       // Reset form
       setData({
         username: "",
@@ -180,8 +177,7 @@ export default function CreateUser() {
       getUsers();
       toast.success("User created successfully");
     } catch (error) {
-      console.error("Error creating user:", error);
-      toast.error("Failed to create user");
+      toast.error("Failed to create user:" + (error instanceof Error ? error.message : "Unknown error"));
     }
   };
 

@@ -38,7 +38,8 @@ export default function App() {
         <Routes>
           {/* Dashboard Layout */}
           <Route element={<AppLayout />}>
-            <Route index path="/" element={<TodaysAttendance />} />
+            
+            <Route  path="/dashboard" element={<TodaysAttendance />} />
 
             {/* Others Page */}
             <Route path="/profile" element={<UserProfiles />} />
@@ -85,7 +86,7 @@ export default function App() {
           </Route>
 
           {/* Auth Layout */}
-          <Route path="/signin" element={<SignIn />} />
+          <Route index path="/" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
 
           {/* Fallback Route */}
