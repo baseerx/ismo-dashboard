@@ -76,7 +76,6 @@ export default function CreateUser() {
   const getUsers = async () => {
     try {
         const response = await axios.get("/users/get_auth_users/");
-        console.log("Response from get_auth_users:", response.data);
         if (response.data) {
           const usersData = response.data.map((user: any) => ({
             id: user.id,
@@ -150,7 +149,7 @@ const columns: ColumnDef<UserRow>[] = [
             <Button
                 size="xs"
                 variant="danger"
-                onClick={() => handleDeleteUser(row.original.id)}
+                onClick={() => handleDeleteUser(row.original.id || 0)}
             >
                 Delete
             </Button>

@@ -55,6 +55,9 @@ INSTALLED_APPS = [
     'sections',  # Your attendance app
     'leaves',  # Your attendance app
     'holidays',  # Your attendance app
+    'mainmenu',  # Your main menu app
+    'submenu',  # Your submenu app
+    'assignrights',
     'rest_framework',  # If you're using Django REST Framework
 ]
 
