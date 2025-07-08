@@ -20,6 +20,22 @@ class SubMenuView:
             return JsonResponse(data, safe=False, status=200)
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
+        
+    @csrf_exempt
+    @require_GET
+    def get_by_main_menu(request, id):
+        session= SessionLocal()
+        query=text("""
+        SELECT s.id,m.name, s.sub_menu
+        FROM sub_menu s JOIN main_menu m ON s.main_menu = m.id WHERE s.main_menu = :id
+        """)
+        try:
+            result=session.execute(query, {"id": id}).fetchall()
+            data=[{"id":row.id,"mainmenu":row.name, "submenu":row.sub_menu} for row in result]
+            session.close()
+            return JsonResponse(data, safe=False, status=200)
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=500)
     
     @csrf_exempt
     @require_POST

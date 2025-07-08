@@ -26,4 +26,5 @@ urlpatterns = [
     path('api/leaves/', include('leaves.urls')),  # Include the leaves app URLs
     path('api/mainmenu/', include('mainmenu.urls')),  # Include the main menu app URLs
     path('api/submenu/', include('submenu.urls')),  # Include the submenu app URLs
+    path('api/assignrights/', include('assignrights.urls')),  # Include the assign rights app URLs
 ]
