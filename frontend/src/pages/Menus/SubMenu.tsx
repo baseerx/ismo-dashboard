@@ -16,14 +16,16 @@ import SearchableDropdown from "../../components/form/input/SearchableDropDown";
 type submenuRow = {
   id: number;
   mainmenu: any;
+  uri: string;
   submenu: string;
 };
 
 export default function SubMenu() {
   const [mainmenu, setMainMenu] = useState<{ id: number; name: string }[]>([]);
   const [data, setData] = useState({
-      menuid: 0,
-      submenu: "",
+    menuid: 0,
+    submenu: "",
+    uri: "",
   });
 
   const [records, setRecords] = useState<submenuRow[]>([]);
@@ -31,29 +33,30 @@ export default function SubMenu() {
   const [fielderror, setFieldError] = useState<Record<string, string>>({
     menuid: "",
     submenu: "",
+    uri: "",
   });
   const [updateid, setUpdateId] = useState<number>(0);
   useEffect(() => {
-      getMainMenus();
-      getRecords();
+    getMainMenus();
+    getRecords();
   }, []);
- 
-    
-    const getRecords = async () => {
-        try {
-            const response = await axios.get("/submenu/get/");
-            if (response.status === 200) {
-              const submenuData = response.data.map((item: any) => ({
-                id: item.id,
-                mainmenu: item.mainmenu,
-                submenu: item.submenu,
-              }));
-              setRecords(submenuData);
-            }
-          } catch (error) {
-            console.error("Error fetching submenu records:", error);
-          }
-        };
+
+  const getRecords = async () => {
+    try {
+      const response = await axios.get("/submenu/get/");
+      if (response.status === 200) {
+        const submenuData = response.data.map((item: any) => ({
+          id: item.id,
+          mainmenu: item.mainmenu,
+          submenu: item.submenu,
+          uri: item.uri,
+        }));
+        setRecords(submenuData);
+      }
+    } catch (error) {
+      console.error("Error fetching submenu records:", error);
+    }
+  };
   const getMainMenus = async () => {
     try {
       const response = await axios.get("/mainmenu/get/");
@@ -98,7 +101,7 @@ export default function SubMenu() {
       try {
         await axios.post(`/submenu/update/${updateid}/`, data);
         toast.success("Main menu updated successfully");
-        setData({ menuid: 0, submenu: "" });
+        setData({ menuid: 0, submenu: "", uri: "" });
         setFieldError({});
         setUpdateId(0); // Reset update ID after successful update
         getRecords(); // refresh list
@@ -109,15 +112,15 @@ export default function SubMenu() {
       try {
         await axios.post("/submenu/create/", data);
         toast.success("Main menu created successfully");
-        setData({ menuid: 0, submenu: "" });
+        setData({ menuid: 0, submenu: "", uri: "" });
         setFieldError({});
         getRecords(); // refresh list
       } catch (error) {
         toast.error("Failed to create main menu");
       }
     }
-    };
-    
+  };
+
   const handleEdit = async (id: number) => {
     setUpdateId(id);
     try {
@@ -127,14 +130,15 @@ export default function SubMenu() {
         setData({
           menuid: menu.menuid,
           submenu: menu.sub_menu,
+          uri: menu.uri,
         });
       }
     } catch (error) {
       console.error("Error fetching menu for edit:", error);
       toast.error("Failed to fetch menu for editing");
     }
-    };
-    
+  };
+
   // Implement edit functionality here
 
   // 2. Define Columns
@@ -147,7 +151,10 @@ export default function SubMenu() {
       header: "Sub Menu",
       accessorKey: "submenu",
     },
-
+    {
+      header: "URI",
+      accessorKey: "uri",
+    },
     {
       header: "Actions",
       id: "actions",
@@ -193,7 +200,11 @@ export default function SubMenu() {
                 placeholder="Select a menu"
                 label="Main Menu"
                 id="menu-dropdown"
-                value={updateid==0 ? data.menuid : mainmenu.find(item => item.id === data.menuid)?.id || 0}
+                value={
+                  updateid == 0
+                    ? data.menuid
+                    : mainmenu.find((item) => item.id === data.menuid)?.id || 0
+                }
                 onChange={(value) => {
                   setData({
                     ...data,
@@ -213,6 +224,17 @@ export default function SubMenu() {
                 onChange={(e) => setData({ ...data, submenu: e.target.value })}
                 error={!!fielderror.submenu}
                 hint={fielderror.submenu}
+              />
+            </div>
+            <div className="w-full">
+              <Label>URI</Label>
+              <Input
+                type="text"
+                placeholder="Enter URI"
+                value={data.uri}
+                onChange={(e) => setData({ ...data, uri: e.target.value })}
+                error={!!fielderror.uri}
+                hint={fielderror.uri}
               />
             </div>
           </div>

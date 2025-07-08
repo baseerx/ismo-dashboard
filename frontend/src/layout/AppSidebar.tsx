@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
-
+import axios from "../api/axios";
+import _ from "lodash";
 // Assume these icons are imported from an icon library
 import {
-//   BoxCubeIcon,
-//   CalenderIcon,
+  //   BoxCubeIcon,
+  //   CalenderIcon,
   ChevronDownIcon,
   GridIcon,
   HorizontaLDots,
-//   ListIcon,
-//   PageIcon,
-//   PieChartIcon,
-//   PlugInIcon,
-//   TableIcon,
+  //   ListIcon,
+  //   PageIcon,
+  //   PieChartIcon,
+  //   PlugInIcon,
+  //   TableIcon,
   LeaveIcon,
   BiometricRecognitionIcon,
   UserCircleIcon,
@@ -22,7 +23,7 @@ import { useSidebar } from "../context/SidebarContext";
 
 type NavItem = {
   name: string;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   path?: string;
   subItems?: { name: string; path: string; pro?: boolean; new?: boolean }[];
 };
@@ -103,40 +104,41 @@ const navItems: NavItem[] = [
 ];
 
 const othersItems: NavItem[] = [
-//   {
-//     icon: <PieChartIcon />,
-//     name: "Charts",
-//     subItems: [
-//       { name: "Line Chart", path: "/line-chart", pro: false },
-//       { name: "Bar Chart", path: "/bar-chart", pro: false },
-//     ],
-//   },
-//   {
-//     icon: <BoxCubeIcon />,
-//     name: "UI Elements",
-//     subItems: [
-//       { name: "Alerts", path: "/alerts", pro: false },
-//       { name: "Avatar", path: "/avatars", pro: false },
-//       { name: "Badge", path: "/badge", pro: false },
-//       { name: "Buttons", path: "/buttons", pro: false },
-//       { name: "Images", path: "/images", pro: false },
-//       { name: "Videos", path: "/videos", pro: false },
-//     ],
-//   },
-//   {
-//     icon: <PlugInIcon />,
-//     name: "Authentication",
-//     subItems: [
-//       { name: "Sign In", path: "/signin", pro: false },
-//       { name: "Sign Up", path: "/signup", pro: false },
-//     ],
-//   },
+  //   {
+  //     icon: <PieChartIcon />,
+  //     name: "Charts",
+  //     subItems: [
+  //       { name: "Line Chart", path: "/line-chart", pro: false },
+  //       { name: "Bar Chart", path: "/bar-chart", pro: false },
+  //     ],
+  //   },
+  //   {
+  //     icon: <BoxCubeIcon />,
+  //     name: "UI Elements",
+  //     subItems: [
+  //       { name: "Alerts", path: "/alerts", pro: false },
+  //       { name: "Avatar", path: "/avatars", pro: false },
+  //       { name: "Badge", path: "/badge", pro: false },
+  //       { name: "Buttons", path: "/buttons", pro: false },
+  //       { name: "Images", path: "/images", pro: false },
+  //       { name: "Videos", path: "/videos", pro: false },
+  //     ],
+  //   },
+  //   {
+  //     icon: <PlugInIcon />,
+  //     name: "Authentication",
+  //     subItems: [
+  //       { name: "Sign In", path: "/signin", pro: false },
+  //       { name: "Sign Up", path: "/signup", pro: false },
+  //     ],
+  //   },
 ];
 
 const AppSidebar: React.FC = () => {
   const { isExpanded, isMobileOpen, isHovered, setIsHovered } = useSidebar();
   const location = useLocation();
-
+  const [transformedNavItems, setTransformedNavItems] =
+    useState<NavItem[]>(navItems);
   const [openSubmenu, setOpenSubmenu] = useState<{
     type: "main" | "others";
     index: number;
@@ -324,6 +326,52 @@ const AppSidebar: React.FC = () => {
     </ul>
   );
 
+  const userRights = async () => {
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    try {
+      const response = await axios.get(`/assignrights/get/${user.user_id}/`);
+      if (response.status !== 200) {
+        throw new Error("Failed to fetch user rights");
+      }
+      const data = response.data;
+    const transformed = _(data)
+      .groupBy("mainmenu")
+      .map((items, mainmenu) => {
+        const icon =
+        navItems.find((item) => item.name === mainmenu)?.icon ||
+        <HorizontaLDots className="size-6" />;
+        return {
+        icon,
+        name: mainmenu,
+        subItems: items.map((item) => ({
+          name: item.submenu,
+          path: item.uri,
+          pro: false,
+          icon: icon,
+        })),
+        };
+      })
+      .value();
+
+    // Ensure Dashboard is first if it exists
+    const dashboardIndex = transformed.findIndex(
+      (item) => item.name === "Dashboard"
+    );
+    if (dashboardIndex > 0) {
+      const [dashboard] = transformed.splice(dashboardIndex, 1);
+      transformed.unshift(dashboard);
+    }
+
+    setTransformedNavItems(transformed);
+    //   console.log("User Rights Data:", transformed);
+      // Process the user rights data as needed
+    } catch (error) {
+      console.error("Error fetching user rights:", error);
+    }
+  };
+  useEffect(() => {
+    userRights();
+  }, []);
   return (
     <aside
       className={`fixed mt-16 flex flex-col lg:mt-0 top-0 px-5 left-0 bg-white dark:bg-gray-900 dark:border-gray-800 text-gray-900 h-screen transition-all duration-300 ease-in-out z-50 border-r border-gray-200 
@@ -389,7 +437,7 @@ const AppSidebar: React.FC = () => {
                   <HorizontaLDots className="size-6" />
                 )}
               </h2>
-              {renderMenuItems(navItems, "main")}
+              {renderMenuItems(transformedNavItems, "main")}
             </div>
             {/* <div className="">
               <h2

@@ -4,6 +4,7 @@ from django.db import models
 class SubMenuModel(models.Model):
     main_menu = models.IntegerField()
     sub_menu = models.CharField(max_length=100, unique=True)
+    uri = models.CharField(max_length=100, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

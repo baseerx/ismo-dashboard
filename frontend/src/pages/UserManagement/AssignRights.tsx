@@ -3,11 +3,9 @@ import ComponentCard from "../../components/common/ComponentCard";
 import PageMeta from "../../components/common/PageMeta";
 import axios from "../../api/axios";
 import { useEffect, useState } from "react";
-import _, { assign, get, set } from "lodash";
 import { ToastContainer, toast } from "react-toastify";
 import Button from "../../components/ui/button/Button";
-import Label from "../../components/form/Label";
-import Input from "../../components/form/input/InputField";
+
 import { ColumnDef } from "@tanstack/react-table";
 import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
 import SearchableDropdown from "../../components/form/input/SearchableDropDown";
@@ -29,44 +27,49 @@ export default function AssignRights() {
   const [submenus, setSubMenus] = useState<{ id: number; submenu: string }[]>(
     []
   );
-  const [data, setData] = useState<{userid:number,menuid:number,submenuid:number}>({
-      userid: 0,
-        menuid: 0,
-    submenuid: 0,
+
+  const [data, setData] = useState<{
+    userid: number;
+    menuid: number;
+    submenuid: number[];
+  }>({
+    userid: 0,
+    menuid: 0,
+    submenuid: [],
   });
 
   const [records, setRecords] = useState<UserRightsType[]>([]);
 
-const [fielderror, setFieldError] = useState<Record<string, string>>({
+  const [fielderror, setFieldError] = useState<Record<string, string>>({
     userid: "",
     menuid: "",
     submenuid: "",
-});     
- 
+  });
 
   const [updateid, setUpdateId] = useState<number>(0);
-  useEffect(() => {
-      getMainMenus();
-      getUsers();
 
+  useEffect(() => {
+    getMainMenus();
+    getUsers();
   }, []);
 
-    const getUsers = async () => {
-        try {
-            const response = await axios.get("/users/get_auth_users/");
-            if (response.status === 200) {
-                const userData = response.data.map((item: any) => ({
-                    id: item.id,
-                    full_name: item.first_name+' '+item.last_name,
-                    email: item.email,
-                }));
-                setUsers(userData);
-            }
-        } catch (error) {
-            console.error("Error fetching users:", error);
-        }
+  const getUsers = async () => {
+    try {
+      const response = await axios.get("/users/get_auth_users/");
+      if (response.status === 200) {
+        const userData = response.data.map((item: any) => ({
+          id: item.id,
+          full_name: item.first_name + " " + item.last_name,
+          email: item.email,
+        }));
+        setUsers(userData);
+      }
+    } catch (error) {
+      console.error("Error fetching users:", error);
     }
-    const getSubMenus = async (id: any) => {
+  };
+
+  const getSubMenus = async (id: any) => {
     try {
       const response = await axios.get(`/submenu/bymenu/${id}/`);
       if (response.status === 200) {
@@ -80,24 +83,25 @@ const [fielderror, setFieldError] = useState<Record<string, string>>({
       console.error("Error fetching submenu records:", error);
     }
   };
-  const getRecords = async (id:any) => {
+
+  const getRecords = async (id: any) => {
     try {
-        const response = await axios.get(`/assignrights/get/${id}/`);
+      const response = await axios.get(`/assignrights/get/${id}/`);
       if (response.status === 200) {
         const assignrights = response.data.map((item: any) => ({
           id: item.id,
-          mainmenu: item.mainmenu, // m.name from main_menu
+          mainmenu: item.mainmenu,
           submenu: item.submenu,
           username: item.username,
-          email: item.email, // s.sub_menu from sub_menu
-
+          email: item.email,
         }));
         setRecords(assignrights);
       }
     } catch (error) {
-      console.error("Error fetching submenu records:", error);
+      console.error("Error fetching assigned records:", error);
     }
   };
+
   const getMainMenus = async () => {
     try {
       const response = await axios.get("/mainmenu/get/");
@@ -111,116 +115,75 @@ const [fielderror, setFieldError] = useState<Record<string, string>>({
         console.error("Failed to fetch main menu data");
       }
     } catch (error) {
-      console.error("Error fetching records:", error);
+      console.error("Error fetching main menus:", error);
     }
   };
 
   const handleDelete = async (id: number) => {
     try {
-      await axios.post(`/submenu/delete/${id}/`);
-      toast.success("Main menu deleted successfully");
+      await axios.post(`/assignrights/delete/${id}/`);
+      getRecords(data.userid);
+      toast.success("Assign rights deleted successfully");
     } catch (error) {
       console.error("Delete error:", error);
-      toast.error("Failed to delete main menu");
+      toast.error("Failed to delete assign rights");
     }
   };
 
-const handleSubmit = async () => {
+  const handleSubmit = async () => {
     const errors: Record<string, string> = {};
     if (!data.userid) errors.userid = "Employee is required";
     if (!data.menuid) errors.menuid = "Main menu is required";
-    if (!data.submenuid) errors.submenuid = "Sub menu is required";
+    if (!data.submenuid.length) errors.submenuid = "Sub menu is required";
 
     setFieldError(errors);
 
     if (Object.keys(errors).length > 0) {
-        toast.error("Please fix all validation errors");
-        return;
+      toast.error("Please fix all validation errors");
+      return;
     }
 
-    if (updateid > 0) {
-        try {
-            await axios.post(`/assignrights/update/${updateid}/`, data);
-            toast.success("Rights updated successfully");
-            setData({ userid: 0, menuid: 0, submenuid: 0 });
-            setFieldError({ userid: "", menuid: "", submenuid: "" });
-            setUpdateId(0);
-        } catch (error) {
-            toast.error("Failed to update rights");
-        }
-    } else {
-        try {
-            await axios.post("/assignrights/create/", data);
-            toast.success("Rights assigned successfully");
-            setData({ userid: 0, menuid: 0, submenuid: 0 });
-            setFieldError({ userid: "", menuid: "", submenuid: "" });
-        } catch (error) {
-            toast.error("Failed to assign rights");
-        }
-    }
-};
-
-  const handleEdit = async (id: number) => {
-    setUpdateId(id);
     try {
-      const response = await axios.get(`/submenu/record/${id}/`);
-      if (response.status === 200) {
-        const menu = response.data;
-        setData({
-          userid: menu.userid,
-          menuid: menu.menuid,
-          submenuid: menu.submenuid,
-        });
+      if (updateid > 0) {
+        await axios.post(`/assignrights/update/${updateid}/`, data);
+        toast.success("Rights updated successfully");
+        setUpdateId(0);
+      } else {
+        await axios.post("/assignrights/create/", data);
+        toast.success("Rights assigned successfully");
       }
+
+      setFieldError({ userid: "", menuid: "", submenuid: "" });
+      setData({ userid: 0, menuid: 0, submenuid: [] });
+      setSubMenus([]);
+      getRecords(data.userid);
     } catch (error) {
-      console.error("Error fetching menu for edit:", error);
-      toast.error("Failed to fetch menu for editing");
+      toast.error("Failed to assign/update rights");
     }
   };
 
-  // Implement edit functionality here
-
   // 2. Define Columns
-const columns: ColumnDef<UserRightsType>[] = [
+  const columns: ColumnDef<UserRightsType>[] = [
+    { header: "Main Menu", accessorKey: "mainmenu" },
+    { header: "Sub Menu", accessorKey: "submenu" },
+    { header: "Username", accessorKey: "username" },
+    { header: "Email", accessorKey: "email" },
     {
-        header: "Main Menu",
-        accessorKey: "mainmenu",
+      header: "Actions",
+      id: "actions",
+      cell: ({ row }) => (
+        <div className="flex space-x-2">
+          <Button
+            size="xs"
+            variant="danger"
+            onClick={() => handleDelete(row.original.id)}
+          >
+            Delete
+          </Button>
+        </div>
+      ),
     },
-    {
-        header: "Sub Menu",
-        accessorKey: "submenu",
-    },
-    {
-        header: "Username",
-        accessorKey: "username",
-    },
-    {
-        header: "Email",
-        accessorKey: "email",
-    },
-    {
-        header: "Actions",
-        id: "actions",
-        cell: ({ row }) => (
-            <div className="flex space-x-2">
-                <Button
-                    size="xs"
-                    variant="primary"
-                    onClick={() => handleEdit(row.original.id)}
-                >
-                    Edit
-                </Button>
-                <Button
-                    size="xs"
-                    variant="danger"
-                    onClick={() => handleDelete(row.original.id)}
-                >
-                    Delete
-                </Button>
-            </div>
-        ),
-    },
-];
+  ];
 
   return (
     <>
@@ -237,23 +200,17 @@ const columns: ColumnDef<UserRightsType>[] = [
             <div className="w-full">
               <SearchableDropdown
                 options={users.map((item) => ({
-                  label: item.full_name + ' (' + item.email+ ')',
+                  label: item.full_name + " (" + item.email + ")",
                   value: item.id,
                 }))}
-                placeholder="Select a Employee"
+                placeholder="Select an Employee"
                 label="Employees"
-                id="menu-dropdown"
-                value={
-                  updateid == 0
-                    ? data.userid
-                    : users.find((item) => item.id === data.userid)?.id || 0
-                }
-                              onChange={(value) => {
-                    getRecords(value);
-                  setData({
-                    ...data,
-                    userid: value ? parseInt(value.toString(), 10) : 0,
-                  });
+                id="employee-dropdown"
+                value={data.userid}
+                onChange={(value) => {
+                  const userid = value ? parseInt(value.toString(), 10) : 0;
+                  setData({ ...data, userid });
+                  getRecords(userid);
                 }}
                 error={!!fielderror.userid}
                 hint={fielderror.userid}
@@ -265,22 +222,17 @@ const columns: ColumnDef<UserRightsType>[] = [
                   label: item.name,
                   value: item.id,
                 }))}
-                placeholder="Select a menu"
+                placeholder="Select a Main Menu"
                 label="Main Menu"
-                id="menu-dropdown"
-                value={
-                  updateid == 0
-                    ? data.menuid
-                    : mainmenu.find((item) => item.id === data.menuid)?.id || 0
-                }
-                onChange={(value) => {
-                  getSubMenus(value);
-                  setSubMenus([]); // Clear submenus on main menu change
-                  setData({
-                    ...data,
-                    menuid: value ? parseInt(value.toString(), 10) : 0,
-                    submenuid: 0, // Clear selected submenu
-                  });
+                id="mainmenu-dropdown"
+                value={data.menuid}
+                onChange={async (value) => {
+                  const menuid = value ? parseInt(value.toString(), 10) : 0;
+                  setData({ ...data, menuid, submenuid: [] });
+                  setSubMenus([]);
+                  if (menuid > 0) {
+                    await getSubMenus(menuid);
+                  }
                 }}
                 error={!!fielderror.menuid}
                 hint={fielderror.menuid}
@@ -293,19 +245,16 @@ const columns: ColumnDef<UserRightsType>[] = [
                   text: item.submenu,
                 }))}
                 label="Sub Menu"
-                defaultSelected={
-                  data.submenuid ? [data.submenuid.toString()] : []
-                }
+                defaultSelected={data.submenuid.map((id) => id.toString())}
                 onChange={(selected) => {
                   setData({
                     ...data,
-                    submenuid: selected.length > 0 ? parseInt(selected[0], 10) : 0,
+                    submenuid: selected.map((item) => parseInt(item, 10)),
                   });
                 }}
-                disabled={false}
+                disabled={data.menuid === 0}
               />
             </div>
-      
           </div>
 
           <div className="w-full flex justify-center items-center">
@@ -320,7 +269,6 @@ const columns: ColumnDef<UserRightsType>[] = [
           </div>
         </ComponentCard>
 
-        {/* 3. Display table below the form */}
         <ComponentCard title="Sub Menu Records">
           <EnhancedDataTable<UserRightsType> data={records} columns={columns} />
         </ComponentCard>
