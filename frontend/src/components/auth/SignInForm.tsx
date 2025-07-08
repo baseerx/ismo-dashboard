@@ -47,13 +47,13 @@ export default function SignInForm() {
         <div className="rounded-lg shadow-2xl bg-white flex justify-center animate-pulse mb-5">
           <img src="/images/logo/ismo_logo.png" width={200} height={50} alt="Ismo Logo" />
         </div>
-        <Link
+        {/* <Link
           to="/"
           className="inline-flex items-center text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 mt-2"
         >
           <ChevronLeftIcon className="size-5" />
           Back to dashboard
-        </Link>
+        </Link> */}
       </div>
       <div className="flex flex-col justify-center mt-[5%] w-full max-w-md mx-auto">
         <div>
