@@ -11,6 +11,7 @@ from django.contrib.auth.hashers import make_password
 from django.contrib.auth import authenticate
 from django.conf import settings
 import jwt
+from addtouser.models import CustomUser  # Import CustomUser from another app named 'addtousers'
 # Create your views here.
 class UsersView:
     @require_GET
@@ -30,6 +31,7 @@ class UsersView:
         username = data.get('username', '')
         first_name = data.get('first_name', '')
         last_name = data.get('last_name', '')
+        erpid = data.get('erpid', '')
         email = data.get('email', '')
         password = data.get('password', '')
         verify_password = data.get('verify_password', '')
@@ -61,8 +63,14 @@ class UsersView:
             is_active=is_active,
             date_joined=date_joined
         )
-
-        return JsonResponse({'success': True, 'user_id': user.pk})
+        profile_tbl=CustomUser.objects.create(
+            authid=user.pk,
+            erpid=erpid)
+        if profile_tbl is not None:
+            return JsonResponse({'success': True, 'user_id': user.pk, 'profile_id': profile_tbl.pk})
+        else:
+            user.delete()
+            return JsonResponse({'success': False, 'error': 'Failed to create user profile'}, status=500)
     
     @csrf_exempt
     @require_POST

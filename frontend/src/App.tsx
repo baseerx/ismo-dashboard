@@ -40,7 +40,7 @@ export default function App() {
           {/* Dashboard Layout */}
           <Route element={<ProtectedRoute />}>
             <Route element={<AppLayout />}>
-              <Route path="/dashboard" element={<TodaysAttendance />} />
+              <Route path="/dashboard" index element={<TodaysAttendance />} />
 
               {/* Others Page */}
               <Route path="/profile" element={<UserProfiles />} />
@@ -96,7 +96,7 @@ export default function App() {
             </Route>
           </Route>
           {/* Auth Layout */}
-          <Route index path="/" element={<SignIn />} />
+          <Route path="/" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
 
           {/* Fallback Route */}

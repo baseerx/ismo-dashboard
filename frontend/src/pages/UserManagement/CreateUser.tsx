@@ -33,6 +33,7 @@ type UserFormData = {
   last_name: string;
   email: string;
   password: string;
+  erpid: string;
   verify_password: string;
   is_staff: boolean;
   is_active: boolean;
@@ -49,6 +50,7 @@ export default function CreateUser() {
     last_name: "",
     email: "",
     password: "",
+    erpid: "",
     verify_password: "",
     is_staff: false,
     is_active: true,
@@ -62,7 +64,8 @@ export default function CreateUser() {
     last_name: "",
     email: "",
     password: "",
-    verify_password: "",
+      verify_password: "",
+    erpid: "",
     is_staff: "",
     is_active: "",
     is_superuser: "",
@@ -166,7 +169,8 @@ const columns: ColumnDef<UserRow>[] = [
       if (!userData.first_name) errors.first_name = "First name is required";
       if (!userData.last_name) errors.last_name = "Last name is required";
       if (!userData.email) errors.email = "Email is required";
-      if (!userData.password) errors.password = "Password is required";
+        if (!userData.password) errors.password = "Password is required";
+        if (!userData.erpid) errors.erpid = "ERP ID is required";
       if (!userData.verify_password)
         errors.verify_password = "Password verification is required";
       if (userData.password !== userData.verify_password) {
@@ -189,6 +193,7 @@ const columns: ColumnDef<UserRow>[] = [
         last_name: "",
         email: "",
         password: "",
+        erpid: "",
         verify_password: "",
         is_staff: false,
         is_active: true,
@@ -321,6 +326,18 @@ const columns: ColumnDef<UserRow>[] = [
                 hint={fielderror.is_superuser}
               />
             </div>
+            <div className="w-full">
+              <Label>Erp Id</Label>
+              <Input
+                type="text"
+                placeholder="Enter ERP ID"
+                value={data.erpid}
+                onChange={(e) => setData({ ...data, erpid: e.target.value })}
+                error={!!fielderror.erpid}
+                hint={fielderror.erpid}
+              />
+            </div>
+            
           </div>
 
           <div className="flex justify-center items-center gap-12 my-6">
