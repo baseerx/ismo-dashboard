@@ -23,14 +23,14 @@ import { ScrollToTop } from "./components/common/ScrollToTop";
 import SectionAttendanceReport from "./pages/Tables/SectionAttendanceReport";
 import ApplyLeave from "./pages/Leaves/ApplyLeave";
 import PublicHoliday from "./pages/Leaves/PublicHolidays";
-import TodaysAttendance from "./pages/Tables/TodaysAttendance";
+// import TodaysAttendance from "./pages/Tables/TodaysAttendance";
 import IndividualAttendance from "./pages/Tables/IndividualAttendance";
 import CreateUser from "./pages/UserManagement/CreateUser";
 import AssignRights from "./pages/UserManagement/AssignRights";
 import MainMenu from "./pages/Menus/MainMenu";
 import SubMenu from "./pages/Menus/SubMenu";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
-
+import Home from "./pages/Dashboard/Home";
 export default function App() {
   return (
     <>
@@ -40,7 +40,7 @@ export default function App() {
           {/* Dashboard Layout */}
           <Route element={<ProtectedRoute />}>
             <Route element={<AppLayout />}>
-              <Route path="/dashboard" element={<TodaysAttendance />} />
+              <Route path="/dashboard" index element={<Home />} />
 
               {/* Others Page */}
               <Route path="/profile" element={<UserProfiles />} />
@@ -96,7 +96,7 @@ export default function App() {
             </Route>
           </Route>
           {/* Auth Layout */}
-          <Route index path="/" element={<SignIn />} />
+          <Route path="/" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
 
           {/* Fallback Route */}

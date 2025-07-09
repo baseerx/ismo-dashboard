@@ -6,6 +6,7 @@ from django.views.decorators.http import require_POST, require_GET
 import json
 from sqlalchemy import text
 from db import SessionLocal
+from datetime import datetime
 # Create your views here.
 class AssignRightsView:
    
@@ -17,7 +18,8 @@ select a.id, m.name as mainmenu, s.sub_menu as submenu, u.username, u.email,s.ur
 from assign_rights a
 inner join main_menu m on a.main_menu = m.id
 inner join sub_menu s on a.sub_menu = s.id
-inner join auth_user u on a.user_id = :id
+inner join auth_user u on a.user_id = u.id
+where a.user_id = :id
             """)
            
             data = session.execute(query,{'id':id}).fetchall()
@@ -39,11 +41,12 @@ inner join auth_user u on a.user_id = :id
     def create(request):
         try:
             data = json.loads(request.body.decode('utf-8'))
+            print(data)
             for submenuin in data.get('submenuid', []):
                 assign_rights = AssignRightsModel.objects.create(
                     user_id=data.get('userid'),
                     main_menu=data.get('menuid'),
-                    sub_menu=submenuin
+                    sub_menu=submenuin,
                 )
             return JsonResponse({"message": "Assign rights created successfully"}, status=201)
         except Exception as e:

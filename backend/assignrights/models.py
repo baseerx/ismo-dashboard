@@ -4,7 +4,7 @@ from django.db import models
 class AssignRightsModel(models.Model):
     user_id = models.IntegerField()
     main_menu = models.IntegerField()
-    sub_menu = models.IntegerField(max_length=100, unique=True)
+    sub_menu = models.IntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

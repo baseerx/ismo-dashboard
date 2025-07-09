@@ -11,6 +11,9 @@ from django.contrib.auth.hashers import make_password
 from django.contrib.auth import authenticate
 from django.conf import settings
 import jwt
+from datetime import date
+from addtouser.models import CustomUser  # Import CustomUser from another app named 'addtousers'
+from attendance.models import Attendance  # Import LeaveModel from another app named 'attendance'
 # Create your views here.
 class UsersView:
     @require_GET
@@ -30,6 +33,7 @@ class UsersView:
         username = data.get('username', '')
         first_name = data.get('first_name', '')
         last_name = data.get('last_name', '')
+        erpid = data.get('erpid', '')
         email = data.get('email', '')
         password = data.get('password', '')
         verify_password = data.get('verify_password', '')
@@ -61,8 +65,14 @@ class UsersView:
             is_active=is_active,
             date_joined=date_joined
         )
-
-        return JsonResponse({'success': True, 'user_id': user.pk})
+        profile_tbl=CustomUser.objects.create(
+            authid=user.pk,
+            erpid=erpid)
+        if profile_tbl is not None:
+            return JsonResponse({'success': True, 'user_id': user.pk, 'profile_id': profile_tbl.pk})
+        else:
+            user.delete()
+            return JsonResponse({'success': False, 'error': 'Failed to create user profile'}, status=500)
     
     @csrf_exempt
     @require_POST
@@ -144,3 +154,25 @@ class EmployeesView:
         )
         employees_list = list(records_list)
         return JsonResponse(employees_list, safe=False)  # Return as JSON response
+
+    @require_GET
+    def employees_summary(request):
+        today = date.today()
+
+        total_employees = Employees.objects.count()
+
+        # Get unique user_ids from attendance where timestamp is today
+        present_user_ids = Attendance.objects.filter(
+            timestamp__date=today
+        ).values_list('user_id', flat=True).distinct()
+
+        present_count = present_user_ids.count()
+        absent_count = total_employees - present_count
+
+        summary = {
+            "total_employees": total_employees,
+            "present_today": present_count,
+            "absent_today": absent_count
+        }
+
+        return JsonResponse(summary)

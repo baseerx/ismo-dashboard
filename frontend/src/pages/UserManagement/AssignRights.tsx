@@ -144,18 +144,15 @@ export default function AssignRights() {
     }
 
     try {
-      if (updateid > 0) {
-        await axios.post(`/assignrights/update/${updateid}/`, data);
-        toast.success("Rights updated successfully");
-        setUpdateId(0);
-      } else {
+  
         await axios.post("/assignrights/create/", data);
         toast.success("Rights assigned successfully");
-      }
+      
 
       setFieldError({ userid: "", menuid: "", submenuid: "" });
       setData({ userid: 0, menuid: 0, submenuid: [] });
-      setSubMenus([]);
+        setSubMenus([]);
+        location.reload();
       getRecords(data.userid);
     } catch (error) {
       toast.error("Failed to assign/update rights");
@@ -195,9 +192,8 @@ export default function AssignRights() {
       <div className="space-y-6">
         <ComponentCard title="Create New Sub Menu">
           <ToastContainer position="bottom-right" />
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 mb-4 gap-4">
-            <div className="w-full">
+          <div className="grid grid-cols-1 md:grid-cols-3 mb-4 gap-4">
+            <div className="w-full md:col-span-1">
               <SearchableDropdown
                 options={users.map((item) => ({
                   label: item.full_name + " (" + item.email + ")",
@@ -216,7 +212,7 @@ export default function AssignRights() {
                 hint={fielderror.userid}
               />
             </div>
-            <div className="w-full">
+            <div className="w-full md:col-span-1">
               <SearchableDropdown
                 options={mainmenu.map((item) => ({
                   label: item.name,
@@ -238,7 +234,7 @@ export default function AssignRights() {
                 hint={fielderror.menuid}
               />
             </div>
-            <div className="w-full">
+            <div className="w-full md:col-span-1">
               <MultiSelect
                 options={submenus.map((item) => ({
                   value: item.id.toString(),
