@@ -11,6 +11,7 @@ from django.contrib.auth.hashers import make_password
 from django.contrib.auth import authenticate
 from django.conf import settings
 import jwt
+from addtouser.models import CustomUser
 from datetime import date
 from addtouser.models import CustomUser  # Import CustomUser from another app named 'addtousers'
 from attendance.models import Attendance  # Import LeaveModel from another app named 'attendance'
@@ -88,24 +89,27 @@ class UsersView:
             return JsonResponse({'success': False, 'error': 'Invalid credentials'}, status=401)
 
         user = authenticate(username=username, password=password)
-        print(f"User authenticated: {user}")  # Debugging line to check user authentication
+        # print(f"User authenticated: {user}")  # Debugging line to check user authentication
         if user is not None:
+            erpid=CustomUser.objects.filter(authid=user.pk).values_list('erpid', flat=True).first()
+            if erpid is not None:
             # return user details alongside token and success status
-            payload = {
-                'success': True,
-                'user_id': user.pk,
-                'username': user.username,
-                'first_name': user.first_name,
-                'last_name': user.last_name,
-                'email': user.email,
-                'is_staff': user.is_staff,
-                'is_active': user.is_active,
-                'is_superuser': user.is_superuser,
-                'expires': (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=getattr(settings, "JWT_EXP_DELTA_SECONDS", 3600))).isoformat(),
-            }
-            token=jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
-            payload['token'] = token
-            return JsonResponse({'success': True, 'user': payload}, status=200)
+                payload = {
+                    'success': True,
+                    'user_id': user.pk,
+                    'username': user.username,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'erpid': erpid,
+                    'email': user.email,
+                    'is_staff': user.is_staff,
+                    'is_active': user.is_active,
+                    'is_superuser': user.is_superuser,
+                    'expires': (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=getattr(settings, "JWT_EXP_DELTA_SECONDS", 3600))).isoformat(),
+                }
+                token=jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+                payload['token'] = token
+                return JsonResponse({'success': True, 'user': payload}, status=200)
         else:
             return JsonResponse({'success': False, 'error': 'Invalid credentials'}, status=401)
 

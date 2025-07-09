@@ -31,6 +31,8 @@ import MainMenu from "./pages/Menus/MainMenu";
 import SubMenu from "./pages/Menus/SubMenu";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import Home from "./pages/Dashboard/Home";
+import AttendanceOverview from "./pages/Attendance/AttendanceOverview";
+
 export default function App() {
   return (
     <>
@@ -64,6 +66,10 @@ export default function App() {
               <Route
                 path="/attendance/section"
                 element={<SectionAttendanceReport />}
+              />
+              <Route
+                path="/attendance/overview"
+                element={<AttendanceOverview />}
               />
 
               {/* User managment */}

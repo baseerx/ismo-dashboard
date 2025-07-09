@@ -74,6 +74,69 @@ class AttendanceView:
         finally:
             session.close()
             
+    @require_GET
+    def attendance_overview(request,erpid):
+        today = datetime.now().date()
+        session = SessionLocal()
+        section_query = text("""
+            SELECT e.hris_id AS hrisid, s.name AS name
+            FROM dbo.employees e
+            JOIN dbo.sections s ON e.section_id = s.id
+            WHERE e.erp_id = :erpid
+        """)
+        section_result = session.execute(section_query, {"erpid": erpid})
+        row = section_result.first()
+        if row:
+            section_data = {"hrisid": row.hrisid, "name": row.name}
+            query=text("""
+               SELECT
+                    e.id AS id,
+                    e.erp_id AS erp_id,
+                    e.name AS name,
+                    d.title AS designation,
+                    s.name AS section,
+                    a.uid AS uid,
+                    e.hris_id AS user_id,
+                    a.timestamp AS timestamp,
+                    a.status AS status,
+                    a.lateintime AS lateintime,
+                    a.punch AS punch
+                FROM employees e
+                LEFT JOIN sections s ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN attendance a ON e.hris_id = a.user_id WHERE CAST(a.timestamp AS DATE) = :today and e.section_id = (SELECT id FROM sections WHERE name = :section_name)
+
+                ORDER BY a.timestamp desc,
+                         CASE a.status
+                             WHEN 'Checked In' THEN 0
+                             WHEN 'Checked Out' THEN 1
+                             ELSE 2
+                         END
+            """)
+            result = session.execute(query, {"today": today, "section_name": row.name})
+            records = []
+            for row in result:
+                records.append({
+                    'id': row.id,
+                    'erp_id': row.erp_id,
+                    'name': row.name,
+                    'designation': row.designation,
+                    'section': row.section,
+                    'uid': row.uid,
+                    'user_id': row.user_id,
+                    'timestamp': '-' if row.timestamp is None else row.timestamp,
+                    'late': '-' if row.uid is None else row.lateintime,
+                    'status': '-' if row.status is None else row.status,
+                    'flag': 'Present' if row.uid is not None else 'Absent',
+                    'punch': row.punch
+                })
+            return JsonResponse(records, safe=False)
+        else:
+            section_data = None
+        return JsonResponse({"section": section_data}, safe=False)
+
+    
+
     @csrf_exempt
     @require_POST
     def attendance_individual(request):
