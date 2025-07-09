@@ -1,13 +1,6 @@
 type BadgeVariant = "light" | "solid";
 type BadgeSize = "sm" | "md";
-type BadgeColor =
-  | "primary"
-  | "success"
-  | "error"
-  | "warning"
-  | "info"
-  | "light"
-  | "dark";
+type BadgeColor = "primary" | "success" | "error" | "warning" | "info" | "light" | "dark";
 
 interface BadgeProps {
   variant?: BadgeVariant; // Light or solid variant
@@ -63,7 +56,9 @@ const Badge: React.FC<BadgeProps> = ({
 
   // Get styles based on size and color variant
   const sizeClass = sizeStyles[size];
-  const colorStyles = variants[variant][color];
+  const colorStyles =
+    variants[variant][color] ??
+    variants[variant]["primary"]; // fallback to primary if color is invalid
 
   return (
     <span className={`${baseStyles} ${sizeClass} ${colorStyles}`}>

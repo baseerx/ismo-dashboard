@@ -46,7 +46,7 @@ export default function AssignRights() {
     submenuid: "",
   });
 
-  const [updateid, setUpdateId] = useState<number>(0);
+ 
 
   useEffect(() => {
     getMainMenus();
@@ -260,7 +260,7 @@ export default function AssignRights() {
               variant="primary"
               onClick={handleSubmit}
             >
-              {updateid > 0 ? "Update Record" : "Add Record"}
+              Add Rights
             </Button>
           </div>
         </ComponentCard>

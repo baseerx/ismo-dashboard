@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { ChevronLeftIcon, EyeCloseIcon, EyeIcon } from "../../icons";
+import { EyeCloseIcon, EyeIcon } from "../../icons";
 import Label from "../form/Label";
 import Input from "../form/input/InputField";
 import Checkbox from "../form/input/Checkbox";
@@ -29,6 +29,7 @@ export default function SignInForm() {
             const response = await axios.post("/users/login/", user);
             if (response.status === 200) {
                 const userData = response.data;
+                // console.log("Login response:", userData);
                 login(userData);
                 toast.success("Login successful");
                 // Redirect to dashboard or perform any other action
@@ -45,7 +46,12 @@ export default function SignInForm() {
     <div className="flex flex-col flex-1 ">
       <div className="w-full max-w-md pt-10 mx-auto">
         <div className="rounded-lg shadow-2xl bg-white flex justify-center animate-pulse mb-5">
-          <img src="/images/logo/ismo_logo.png" width={200} height={50} alt="Ismo Logo" />
+          <img
+            src="/images/logo/ismo_logo.png"
+            width={200}
+            height={50}
+            alt="Ismo Logo"
+          />
         </div>
         {/* <Link
           to="/"
@@ -66,13 +72,18 @@ export default function SignInForm() {
             </p>
           </div>
           <div>
-            <form>
+            <form onSubmit={handleSignIn} className="space-y-6">
               <div className="space-y-6">
                 <div>
                   <Label>
                     Email <span className="text-error-500">*</span>{" "}
                   </Label>
-                  <Input onChange={(e) => setUser({...user,email:e.target.value})} placeholder="info@gmail.com" />
+                  <Input
+                    onChange={(e) =>
+                      setUser({ ...user, email: e.target.value })
+                    }
+                    placeholder="info@gmail.com"
+                  />
                 </div>
                 <div>
                   <Label>
@@ -80,8 +91,10 @@ export default function SignInForm() {
                   </Label>
                   <div className="relative">
                     <Input
-                                          type={showPassword ? "text" : "password"}
-                    onChange={(e) => setUser({...user,password:e.target.value})}
+                      type={showPassword ? "text" : "password"}
+                      onChange={(e) =>
+                        setUser({ ...user, password: e.target.value })
+                      }
                       placeholder="Enter your password"
                     />
                     <span
@@ -111,7 +124,11 @@ export default function SignInForm() {
                   </Link>
                 </div>
                 <div>
-                  <Button onClick={handleSignIn} className="w-full" size="sm">
+                  <Button
+                    type="submit"
+                    className="w-full"
+                    size="sm"
+                  >
                     Sign in
                   </Button>
                 </div>
@@ -129,9 +146,7 @@ export default function SignInForm() {
                 </Link>
               </p>
             </div> */}
-            <ToastContainer
-              position="bottom-right"
-            />
+            <ToastContainer position="bottom-right" />
           </div>
         </div>
       </div>

@@ -186,23 +186,28 @@ const columns: ColumnDef<UserRow>[] = [
       
       const response = await axios.post("/users/create_user/", userData);
        
-      // Reset form
-      setData({
-        username: "",
-        first_name: "",
-        last_name: "",
-        email: "",
-        password: "",
-        erpid: "",
-        verify_password: "",
-        is_staff: false,
-        is_active: true,
-        is_superuser: false,
-        date_joined: moment().format("YYYY-MM-DD"),
-      });
-      setFieldError({});
-      getUsers();
-      toast.success("User created successfully");
+        if (response.status === 201) {
+          // Reset form
+          setData({
+            username: "",
+            first_name: "",
+            last_name: "",
+            email: "",
+            password: "",
+            erpid: "",
+            verify_password: "",
+            is_staff: false,
+            is_active: true,
+            is_superuser: false,
+            date_joined: moment().format("YYYY-MM-DD"),
+          });
+          setFieldError({});
+          getUsers();
+          toast.success("User created successfully");
+        }
+        else {
+          toast.error("Failed to create user: " + response.data.detail);
+        }
     } catch (error) {
       toast.error("Failed to create user:" + (error instanceof Error ? error.message : "Unknown error"));
     }
@@ -304,7 +309,8 @@ const columns: ColumnDef<UserRow>[] = [
                 defaultDate={data.date_joined}
                 label="Date Joined"
                 placeholder="Select date joined"
-                onChange={(dates, currentDateString) => {
+                              onChange={(dates, currentDateString) => {
+                    console.log("Selected date:", dates);
                   setData({ ...data, date_joined: currentDateString });
                 }}
               />

@@ -6,7 +6,7 @@ type CardProps = {
   value: string | number;
   icon: React.ReactNode;
   percentage: string;
-  badgeclr: string;
+  badgeclr: any;
 };
 
 export default function BasicCard({

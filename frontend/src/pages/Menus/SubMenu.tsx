@@ -3,7 +3,7 @@ import ComponentCard from "../../components/common/ComponentCard";
 import PageMeta from "../../components/common/PageMeta";
 import axios from "../../api/axios";
 import { useEffect, useState } from "react";
-import _, { get, set } from "lodash";
+import _ from "lodash";
 import { ToastContainer, toast } from "react-toastify";
 import Button from "../../components/ui/button/Button";
 import Label from "../../components/form/Label";
