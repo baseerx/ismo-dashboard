@@ -252,56 +252,85 @@ ORDER BY
         todate = data.get('todate')
 
         session = SessionLocal()
-        if session is None:
-            return JsonResponse({"error": "Database session could not be created"}, status=500)
         records = []
         try:
             query = text("""
+                WITH date_range AS (
+                    SELECT 
+                        DATEADD(DAY, v.number, :fromdate) AS the_date
+                    FROM master..spt_values v
+                    WHERE v.type = 'P'
+                        AND DATEADD(DAY, v.number, :fromdate) <= :todate
+                )
                 SELECT
+                    dr.the_date,
                     e.id AS id,
                     e.erp_id AS erp_id,
                     e.name AS name,
-                    a.uid AS uid,
-                    e.hris_id AS user_id,
                     d.title AS designation,
                     s.name AS section,
+                    a.uid AS uid,
+                    e.hris_id AS user_id,
                     a.timestamp AS timestamp,
                     a.status AS status,
                     a.lateintime AS lateintime,
                     a.punch AS punch
-                FROM employees e
+                FROM date_range dr
+                JOIN employees e ON 1=1
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) BETWEEN :fromdate AND :todate
-               WHERE a.status IN ('Checked In', 'Checked Out', 'Early Checked Out')
-                ORDER BY
-                    e.name,
-                    CAST(a.timestamp AS DATE),
-                    CASE 
-                        WHEN a.status = 'Checked In' THEN 0
-                        WHEN a.status = 'Early Checked Out' THEN 1
-                        WHEN a.status = 'Checked Out' THEN 2
-                        ELSE 3
-                    END,
-                    a.timestamp;
-
+                LEFT JOIN attendance a 
+                    ON e.hris_id = a.user_id 
+                    AND CAST(a.timestamp AS DATE) = dr.the_date
+                ORDER BY dr.the_date,
+                         e.id,
+                         CASE 
+                             WHEN a.status = 'Checked In' THEN 0
+                             WHEN a.status = 'Checked Out' THEN 1
+                             ELSE 2
+                         END,
+                         a.timestamp
             """)
+
             result = session.execute(
                 query, {"fromdate": fromdate, "todate": todate})
-            print('baseer', result)
-            for row in result:
+            rows = result.fetchall()
+            for row in rows:
+                flag = 'Absent'
+                leave_result = session.execute(text("""
+                        SELECT leave_type FROM leaves
+                        WHERE erp_id = :erp_id
+                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                    """), {"erp_id": row.erp_id, "att_date": row.the_date}).first()
+                
+                if row.uid is not None:
+                    flag = 'Present'
+                elif row.the_date:
+                    if leave_result:
+                        flag = leave_result.leave_type
+                    else:
+                        holiday_result = session.execute(text("""
+                            SELECT name FROM public_holidays
+                            WHERE CAST(date AS DATE) = :att_date
+                        """), {"att_date": row.the_date}).first()
+                        if holiday_result:
+                            flag = holiday_result.name
+                        else:
+                            flag = 'Absent'
 
                 records.append({
                     'id': row.id,
                     'erp_id': row.erp_id,
+                    'name': row.name,
+                    'designation': row.designation,
+                    'section': row.section,
                     'uid': row.uid,
                     'user_id': row.user_id,
-                    'name': row.name,
-                    'timestamp': '-' if row.timestamp is None else row.timestamp,
-                    # Assuming 9 AM is the cutoff for being on time
-                    'late': '-' if row.uid is None else row.lateintime,
+                    'timestamp': row.the_date if row.timestamp is None else row.timestamp,
+                    'late': row.lateintime,
+                    'flag': flag,
                     'status': '-' if row.status is None else row.status,
-                    'flag': 'Present' if row.uid is not None else 'Absent',
                     'punch': row.punch
                 })
             return JsonResponse(records, safe=False)
