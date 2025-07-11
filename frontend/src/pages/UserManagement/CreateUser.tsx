@@ -185,8 +185,8 @@ const columns: ColumnDef<UserRow>[] = [
       }
       
       const response = await axios.post("/users/create_user/", userData);
+       console.log("User created successfully:", response.data);
        
-        if (response.status === 201) {
           // Reset form
           setData({
             username: "",
@@ -204,10 +204,7 @@ const columns: ColumnDef<UserRow>[] = [
           setFieldError({});
           getUsers();
           toast.success("User created successfully");
-        }
-        else {
-          toast.error("Failed to create user: " + response.data.detail);
-        }
+      
     } catch (error) {
       toast.error("Failed to create user:" + (error instanceof Error ? error.message : "Unknown error"));
     }

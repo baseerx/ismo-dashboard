@@ -42,6 +42,7 @@ export default function IndividualAttendance() {
     "Hajj Leave",
     "Recreational Leave",
     "Compensatory Leave",
+    "Short Leave",
     "Study Leave",
     "Marriage Leave",
     "Paternity Leave",
@@ -178,9 +179,7 @@ export default function IndividualAttendance() {
       }
 
         const response = await axios.post("/leaves/apply/", data);
-        if (response.status !== 201) {
-          throw new Error("Failed to apply for leave");
-        }
+       
       setData({
         erp_id: 0,
         employee_id: 0,

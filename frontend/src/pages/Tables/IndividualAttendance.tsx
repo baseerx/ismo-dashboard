@@ -75,7 +75,7 @@ export default function IndividualAttendance() {
           timestamp: item.timestamp === null ? "-" : item.timestamp,
           late: item.uid === null ? "-" : item.late,
           status: item.status === null ? "-" : item.status,
-          flag: item.uid !== null ? "Present" : "Absent",
+          flag: item.flag,
           punch: item.punch,
         };
         if (picked.timestamp && typeof picked.timestamp === "string") {

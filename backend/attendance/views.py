@@ -9,6 +9,8 @@ import json
 # Assuming you have a SessionLocal defined for database access
 from db import SessionLocal
 # Create your views here.
+from leaves.models import LeaveModel
+from holidays.models import Holiday
 
 
 class AttendanceView:
@@ -29,29 +31,32 @@ class AttendanceView:
         records = []
         try:
             query = text("""
-                SELECT
-                    e.id AS id,
-                    e.erp_id AS erp_id,
-                    e.name AS name,
-                    d.title AS designation,
-                    s.name AS section,
-                    a.uid AS uid,
-                    e.hris_id AS user_id,
-                    a.timestamp AS timestamp,
-                    a.status AS status,
-                    a.lateintime AS lateintime,
-                    a.punch AS punch
-                FROM employees e
-                LEFT JOIN sections s ON s.id = e.section_id
-                LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN attendance a ON e.hris_id = a.user_id WHERE CAST(a.timestamp AS DATE) = :today
+            SELECT
+    e.id AS id,
+    e.erp_id AS erp_id,
+    e.name AS name,
+    d.title AS designation,
+    s.name AS section,
+    a.uid AS uid,
+    e.hris_id AS user_id,
+    a.timestamp AS timestamp,
+    a.status AS status,
+    a.lateintime AS lateintime,
+    a.punch AS punch
+FROM employees e
+LEFT JOIN sections s ON s.id = e.section_id
+LEFT JOIN designations d ON d.id = e.designation_id
+LEFT JOIN attendance a 
+    ON e.hris_id = a.user_id 
+    AND CAST(a.timestamp AS DATE) = :today
+ORDER BY 
+    a.timestamp DESC,
+    CASE a.status
+        WHEN 'Checked In' THEN 0
+        WHEN 'Checked Out' THEN 1
+        ELSE 2
+    END;
 
-                ORDER BY a.timestamp desc,
-                         CASE a.status
-                             WHEN 'Checked In' THEN 0
-                             WHEN 'Checked Out' THEN 1
-                             ELSE 2
-                         END
             """)
             result = session.execute(query, {"today": today})
             for row in result:
@@ -73,9 +78,9 @@ class AttendanceView:
             return JsonResponse(records, safe=False)
         finally:
             session.close()
-            
+
     @require_GET
-    def attendance_overview(request,erpid):
+    def attendance_overview(request, erpid):
         today = datetime.now().date()
         session = SessionLocal()
         section_query = text("""
@@ -88,7 +93,7 @@ class AttendanceView:
         row = section_result.first()
         if row:
             section_data = {"hrisid": row.hrisid, "name": row.name}
-            query=text("""
+            query = text("""
                SELECT
                     e.id AS id,
                     e.erp_id AS erp_id,
@@ -113,7 +118,8 @@ class AttendanceView:
                              ELSE 2
                          END
             """)
-            result = session.execute(query, {"today": today, "section_name": row.name})
+            result = session.execute(
+                query, {"today": today, "section_name": row.name})
             records = []
             for row in result:
                 records.append({
@@ -135,24 +141,31 @@ class AttendanceView:
             section_data = None
         return JsonResponse({"section": section_data}, safe=False)
 
-    
 
     @csrf_exempt
     @require_POST
     def attendance_individual(request):
-        data=json.loads(request.body)
+        data = json.loads(request.body)
         erpid = data.get('erpid')
         if not erpid:
             return JsonResponse({"error": "erpid is required"}, status=400)
-        
+
         fromdate = data.get('fromdate')
         todate = data.get('todate')
-        
+
         session = SessionLocal()
         records = []
         try:
             query = text("""
+                WITH date_range AS (
+                    SELECT 
+                        DATEADD(DAY, v.number, :fromdate) AS the_date
+                    FROM master..spt_values v
+                    WHERE v.type = 'P'
+                        AND DATEADD(DAY, v.number, :fromdate) <= :todate
+                )
                 SELECT
+                    dr.the_date,
                     e.id AS id,
                     e.erp_id AS erp_id,
                     e.name AS name,
@@ -164,12 +177,16 @@ class AttendanceView:
                     a.status AS status,
                     a.lateintime AS lateintime,
                     a.punch AS punch
-                FROM employees e
+                FROM date_range dr
+                JOIN employees e ON 1=1
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) BETWEEN :fromdate AND :todate
+                LEFT JOIN attendance a 
+                    ON e.hris_id = a.user_id 
+                    AND CAST(a.timestamp AS DATE) = dr.the_date
                 WHERE e.erp_id = :erpid
-                ORDER BY e.id, 
+                ORDER BY dr.the_date,
+                         e.id,
                          CASE 
                              WHEN a.status = 'Checked In' THEN 0
                              WHEN a.status = 'Checked Out' THEN 1
@@ -177,8 +194,36 @@ class AttendanceView:
                          END,
                          a.timestamp
             """)
-            result = session.execute(query, {"fromdate": fromdate, "todate": todate, "erpid": erpid})
-            for row in result:
+
+            result = session.execute(
+                query, {"fromdate": fromdate, "todate": todate, "erpid": erpid})
+            rows = result.fetchall()  # Ensure results are consumed before issuing new queries
+            flag='Absent'
+            for row in rows:
+                leave_result = session.execute(text("""
+                        SELECT leave_type FROM leaves
+                        WHERE erp_id = :erp_id
+                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                    """), {"erp_id": row.erp_id, "att_date": row.the_date}).first()
+                
+                if row.uid is not None:
+                    flag = 'Present'
+                elif row.the_date:
+                    # Check for leave on that specific date
+                    if leave_result:
+                        flag = leave_result.leave_type
+                    else:
+                        # Check for holiday on that date
+                        holiday_result = session.execute(text("""
+                            SELECT name FROM public_holidays
+                            WHERE CAST(date AS DATE) = :att_date
+                        """), {"att_date": row.the_date}).first()
+
+                        if holiday_result:
+                            flag = holiday_result.name
+                        else:
+                            flag = 'Absent'
 
                 records.append({
                     'id': row.id,
@@ -188,12 +233,13 @@ class AttendanceView:
                     'section': row.section,
                     'uid': row.uid,
                     'user_id': row.user_id,
-                    'timestamp': '-' if row.timestamp is None else row.timestamp,
+                    'timestamp': row.the_date if row.timestamp is None else row.timestamp,
                     'late':  row.lateintime,
+                    'flag': flag,
                     'status': '-' if row.status is None else row.status,
-                    'flag': 'Present' if row.uid is not None else 'Absent',
                     'punch': row.punch
                 })
+
             return JsonResponse(records, safe=False)
         finally:
             session.close()
@@ -242,7 +288,7 @@ class AttendanceView:
             """)
             result = session.execute(
                 query, {"fromdate": fromdate, "todate": todate})
-            print('baseer',result)
+            print('baseer', result)
             for row in result:
 
                 records.append({
