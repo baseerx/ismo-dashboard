@@ -31,36 +31,58 @@ class AttendanceView:
         records = []
         try:
             query = text("""
-            SELECT
-    e.id AS id,
-    e.erp_id AS erp_id,
-    e.name AS name,
-    d.title AS designation,
-    s.name AS section,
-    a.uid AS uid,
-    e.hris_id AS user_id,
-    a.timestamp AS timestamp,
-    a.status AS status,
-    a.lateintime AS lateintime,
-    a.punch AS punch
-FROM employees e
-LEFT JOIN sections s ON s.id = e.section_id
-LEFT JOIN designations d ON d.id = e.designation_id
-LEFT JOIN attendance a 
-    ON e.hris_id = a.user_id 
-    AND CAST(a.timestamp AS DATE) = :today
-ORDER BY 
-    a.timestamp DESC,
-    CASE a.status
-        WHEN 'Checked In' THEN 0
-        WHEN 'Checked Out' THEN 1
-        ELSE 2
-    END;
-
+                SELECT
+                    e.id AS id,
+                    e.erp_id AS erp_id,
+                    e.name AS name,
+                    d.title AS designation,
+                    s.name AS section,
+                    a.uid AS uid,
+                    e.hris_id AS user_id,
+                    a.timestamp AS timestamp,
+                    a.status AS status,
+                    a.lateintime AS lateintime
+                FROM employees e
+                LEFT JOIN sections s ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN attendance a 
+                    ON e.hris_id = a.user_id 
+                    AND CAST(a.timestamp AS DATE) = :today
+                ORDER BY 
+                    a.timestamp DESC,
+                    CASE a.status
+                        WHEN 'Checked In' THEN 0
+                        WHEN 'Checked Out' THEN 1
+                        ELSE 2
+                    END;
             """)
-            result = session.execute(query, {"today": today})
+            result = session.execute(query, {"today": today}).fetchall()
             for row in result:
-
+                flag = 'Absent'
+                if row.uid is not None:
+                    flag = 'Present'
+                else:
+                    
+                    # Check leave
+                    leave_result = session.execute(text("""
+                        SELECT leave_type FROM leaves
+                        WHERE erp_id = :erp_id
+                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                    """), {"erp_id": row.erp_id, "att_date": today}).first()
+                    
+                    if leave_result:
+                        flag = leave_result.leave_type
+                    else:
+                        # Check holiday
+                        holiday_result = session.execute(text("""
+                            SELECT name FROM public_holidays
+                            WHERE CAST(date AS DATE) = :att_date
+                        """), {"att_date": today}).first()
+                        if holiday_result:
+                            flag = holiday_result.name
+                        else:
+                            flag = 'Absent'
                 records.append({
                     'id': row.id,
                     'erp_id': row.erp_id,
@@ -72,8 +94,7 @@ ORDER BY
                     'timestamp': '-' if row.timestamp is None else row.timestamp,
                     'late': '-' if row.uid is None else row.lateintime,
                     'status': '-' if row.status is None else row.status,
-                    'flag': 'Present' if row.uid is not None else 'Absent',
-                    'punch': row.punch
+                    'flag': flag
                 })
             return JsonResponse(records, safe=False)
         finally:
@@ -104,13 +125,14 @@ ORDER BY
                     e.hris_id AS user_id,
                     a.timestamp AS timestamp,
                     a.status AS status,
-                    a.lateintime AS lateintime,
-                    a.punch AS punch
+                    a.lateintime AS lateintime
+                 
                 FROM employees e
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN attendance a ON e.hris_id = a.user_id WHERE CAST(a.timestamp AS DATE) = :today and e.section_id = (SELECT id FROM sections WHERE name = :section_name)
-
+                LEFT JOIN attendance a ON e.hris_id = a.user_id 
+                    AND CAST(a.timestamp AS DATE) = :today
+                WHERE e.section_id = (SELECT id FROM sections WHERE name = :section_name)
                 ORDER BY a.timestamp desc,
                          CASE a.status
                              WHEN 'Checked In' THEN 0
@@ -118,10 +140,33 @@ ORDER BY
                              ELSE 2
                          END
             """)
+            
             result = session.execute(
-                query, {"today": today, "section_name": row.name})
+                query, {"today": today, "section_name": row.name}).fetchall()
             records = []
             for row in result:
+                # Integrate leave and holiday check for each employee for today
+                flag = 'Absent'
+                leave_result = session.execute(text("""
+                        SELECT leave_type FROM leaves
+                        WHERE erp_id = :erp_id
+                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                    """), {"erp_id": row.erp_id, "att_date": today}).first()
+                if row.uid is not None:
+                    flag = 'Present'
+                else:
+                    if leave_result:
+                        flag = leave_result.leave_type
+                    else:
+                        holiday_result = session.execute(text("""
+                            SELECT name FROM public_holidays
+                            WHERE CAST(date AS DATE) = :att_date
+                        """), {"att_date": today}).first()
+                        if holiday_result:
+                            flag = holiday_result.name
+                        else:
+                            flag = 'Absent'
                 records.append({
                     'id': row.id,
                     'erp_id': row.erp_id,
@@ -133,9 +178,7 @@ ORDER BY
                     'timestamp': '-' if row.timestamp is None else row.timestamp,
                     'late': '-' if row.uid is None else row.lateintime,
                     'status': '-' if row.status is None else row.status,
-                    'flag': 'Present' if row.uid is not None else 'Absent',
-                    'punch': row.punch
-                })
+                    'flag': flag                })
             return JsonResponse(records, safe=False)
         else:
             section_data = None

@@ -2,6 +2,10 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from urllib.parse import quote_plus
+# import logging
+# Enable detailed SQL logging (optional but helpful during development)
+# logging.basicConfig()
+# logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
 
 # Safely encode password that contains special characters like @
 username = "sa"
@@ -18,5 +22,6 @@ DATABASE_URL = (
 )
 
 # Create engine and session
+# engine = create_engine(DATABASE_URL,echo=True)
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

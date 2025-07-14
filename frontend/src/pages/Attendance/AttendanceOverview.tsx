@@ -21,7 +21,6 @@ type AttendanceRow = {
   late: string;
   status: string;
   flag: string;
-  punch: string;
 };
 
 export default function AttendanceOverview() {
@@ -48,8 +47,7 @@ export default function AttendanceOverview() {
           timestamp: item.timestamp == null ? "-" : item.timestamp,
           late: item.late,
           status: item.status == null ? "-" : item.status,
-          flag: item.uid != null ? "Present" : "Absent",
-          punch: item.punch == 0 ? 'IN' : 'OUT',
+          flag: item.flag,
         };
         if (picked.timestamp && typeof picked.timestamp === "string") {
           picked.timestamp = picked.timestamp.replace("T", " ");
@@ -112,10 +110,6 @@ export default function AttendanceOverview() {
             ? "bg-gray-50"
             : "",
       },
-    },
-    {
-      accessorKey: "punch",
-      header: "Punch",
     },
   ];
 

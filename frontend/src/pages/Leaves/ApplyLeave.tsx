@@ -34,11 +34,14 @@ export default function IndividualAttendance() {
   const [options, setOptions] = useState<{ label: string; value: string }[]>(
     []
   );
-  const leavetype  = [
+  const leavetype = [
     "Sick Leave",
     "Casual Leave",
     "Annual Leave",
     "Maternity Leave",
+    "External Meeting",
+    "Official Leave",
+    "Umrah Leave",
     "Hajj Leave",
     "Recreational Leave",
     "Compensatory Leave",
@@ -46,11 +49,11 @@ export default function IndividualAttendance() {
     "Study Leave",
     "Marriage Leave",
     "Paternity Leave",
-    ];
-    
+  ];
+
   useEffect(() => {
-      fetchEmployeesOptions();
-      getEmployeesLeaves();
+    fetchEmployeesOptions();
+    getEmployeesLeaves();
   }, []);
 
   const [data, setData] = useState<AttendanceRow>({
@@ -72,76 +75,77 @@ export default function IndividualAttendance() {
     end_date: "",
   });
 
-    const getEmployeesLeaves = async () => {
-        try {
-            const response = await axios.get("/leaves/get/");
-            
-            const cleanedData: AttendanceRow[] = response.data.leaves.map((item: any) => {
-                const picked = _.pick(item, [
-                    "id",
-                    "employee_name",
-                    "employee_id",
-                    "erp_id",
-                    "leave_type",
-                    "start_date",
-                    "end_date",
-                    "reason",
-                    "status",
-                    "created_at",
-                ]);
-                return picked;
-            });
-            setLeaves(cleanedData);
-        } catch (error) {
-            console.error("Error fetching employee leaves:", error);
-            toast.error("Failed to load employee leaves");
+  const getEmployeesLeaves = async () => {
+    try {
+      const response = await axios.get("/leaves/get/");
+
+      const cleanedData: AttendanceRow[] = response.data.leaves.map(
+        (item: any) => {
+          const picked = _.pick(item, [
+            "id",
+            "employee_name",
+            "employee_id",
+            "erp_id",
+            "leave_type",
+            "start_date",
+            "end_date",
+            "reason",
+            "status",
+            "created_at",
+          ]);
+          return picked;
         }
-    };
-    const columns: ColumnDef<AttendanceRow>[] = [
-        {
-        header: "ERP ID",
-        accessorKey: "erp_id",
-        },
-        {
-        header: "Name",
-        accessorKey: "employee_name",
-        },
-        {
-        header: "Employee ID",
-        accessorKey: "employee_id",
-        },
-        {
-        header: "Leave Type",
-        accessorKey: "leave_type",
-        },
-        {
-        header: "Start Date",
-        accessorKey: "start_date",
-        },
-        {
-        header: "End Date",
-        accessorKey: "end_date",
-        },
-        {
-        header: "Reason",
-        accessorKey: "reason",
-        },
-        {
-        header: "Status",
-            accessorKey: "status",
-          cell: ({ getValue }) => {
-    const value = getValue<string>();
-    const color =
-      value?.toLowerCase() === "rejected"
-        ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
-        : value?.toLowerCase() === "approved"
-        ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
-        : "";
-              return <span className={color}>{value}</span>;
-    
-          },
-        },
-    ];
+      );
+      setLeaves(cleanedData);
+    } catch (error) {
+      console.error("Error fetching employee leaves:", error);
+      toast.error("Failed to load employee leaves");
+    }
+  };
+  const columns: ColumnDef<AttendanceRow>[] = [
+    {
+      header: "ERP ID",
+      accessorKey: "erp_id",
+    },
+    {
+      header: "Name",
+      accessorKey: "employee_name",
+    },
+    {
+      header: "Employee ID",
+      accessorKey: "employee_id",
+    },
+    {
+      header: "Leave Type",
+      accessorKey: "leave_type",
+    },
+    {
+      header: "Start Date",
+      accessorKey: "start_date",
+    },
+    {
+      header: "End Date",
+      accessorKey: "end_date",
+    },
+    {
+      header: "Reason",
+      accessorKey: "reason",
+    },
+    {
+      header: "Status",
+      accessorKey: "status",
+      cell: ({ getValue }) => {
+        const value = getValue<string>();
+        const color =
+          value?.toLowerCase() === "rejected"
+            ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
+            : value?.toLowerCase() === "approved"
+            ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
+            : "";
+        return <span className={color}>{value}</span>;
+      },
+    },
+  ];
   const fetchEmployeesOptions = async () => {
     try {
       const response = await axios.get("/users/employees/");
@@ -178,8 +182,8 @@ export default function IndividualAttendance() {
         return;
       }
 
-        const response = await axios.post("/leaves/apply/", data);
-       
+      const response = await axios.post("/leaves/apply/", data);
+      console.log("Leave application response:", response.data);
       setData({
         erp_id: 0,
         employee_id: 0,
@@ -330,11 +334,7 @@ export default function IndividualAttendance() {
               Search
             </Button>
           </div>
-          <EnhancedDataTable<AttendanceRow>
-            data={leaves}
-            columns={columns}
-        
-          />
+          <EnhancedDataTable<AttendanceRow> data={leaves} columns={columns} />
         </ComponentCard>
       </div>
     </>

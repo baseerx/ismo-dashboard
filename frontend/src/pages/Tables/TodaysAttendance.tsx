@@ -4,6 +4,7 @@ import PageMeta from "../../components/common/PageMeta";
 import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
 import axios from "../../api/axios"; // Adjust the import path as necessary
 import { useState, useEffect } from "react";
+import { ToastContainer, toast } from "react-toastify";
 import moment from "moment";
 import _ from "lodash";
 
@@ -28,6 +29,14 @@ export default function TodaysAttendance() {
 
   const fetchAttendanceData = async () => {
     try {
+      const loadingToastId = "attendance-loading";
+      toast.loading(
+        <span className="text-sm font-semibold">
+          Loading/Fetching attendance data...
+        </span>,
+        { toastId: loadingToastId }
+      );
+
       const response = await axios.get("/attendance/today");
 
       // Ensure response.data is an array and format timestamp
@@ -45,6 +54,7 @@ export default function TodaysAttendance() {
         }
         return picked;
       });
+      toast.dismiss(loadingToastId);
       setAttendanceData(cleanedData);
     } catch (error) {
       console.error("Error fetching attendance data:", error);
@@ -112,6 +122,7 @@ export default function TodaysAttendance() {
             columns={columns}
           />
         </ComponentCard>
+        <ToastContainer position="bottom-right" />
       </div>
     </>
   );

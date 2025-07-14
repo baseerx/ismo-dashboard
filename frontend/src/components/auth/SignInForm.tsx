@@ -30,8 +30,10 @@ export default function SignInForm() {
             if (response.status === 200) {
                 const userData = response.data;
                 // console.log("Login response:", userData);
+                toast.loading("Logging in...");
                 login(userData);
                 toast.success("Login successful");
+                toast.dismiss();
                 // Redirect to dashboard or perform any other action
                 navigate("/dashboard");
             }
