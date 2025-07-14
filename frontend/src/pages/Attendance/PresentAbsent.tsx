@@ -27,8 +27,9 @@ type AttendanceRow = {
 
 export default function SectionAttendanceReport() {
     const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
+    
     const [options, setOptions] = useState<{ value: string; label: string }[]>([]);
-    const [status, setStatus] = useState<{ value: string; label: string }[]>([
+    const [status] = useState<{ value: string; label: string }[]>([
         { value: "present", label: "Present" },
         { value: "absent", label: "Absent" },
     ]);
