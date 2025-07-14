@@ -63,6 +63,11 @@ const navItems: NavItem[] = [
         path: "/attendance/individual",
         pro: false,
       },
+      {
+        name: "Total Present/Absent",
+        path: "/attendance/status",
+        pro: false,
+      },
     ],
   },
   {

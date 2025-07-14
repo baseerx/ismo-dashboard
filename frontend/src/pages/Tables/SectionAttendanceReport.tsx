@@ -146,10 +146,10 @@ const columns: ColumnDef<AttendanceRow>[] = [
   return (
     <>
       <PageMeta
-        title="ISMO - Attendance History"
-        description="ISMO Admin Dashboard - Attendance History"
+        title="ISMO - Section Attendance Report"
+        description="ISMO Admin Dashboard - Section Attendance Report"
       />
-      <PageBreadcrumb pageTitle="Attendance History" />
+      <PageBreadcrumb pageTitle="Section Attendance Report" />
       <div className="space-y-6">
         <ComponentCard title={`Attendance on ${date}`}>
           <ToastContainer position="bottom-right" />

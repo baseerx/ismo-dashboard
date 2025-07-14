@@ -331,7 +331,7 @@ export default function IndividualAttendance() {
                 applyLeave(data);
               }}
             >
-              Search
+              Apply
             </Button>
           </div>
           <EnhancedDataTable<AttendanceRow> data={leaves} columns={columns} />

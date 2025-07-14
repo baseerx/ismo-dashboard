@@ -438,3 +438,117 @@ class AttendanceView:
             return JsonResponse(records, safe=False)
         finally:
             session.close()
+    
+    @csrf_exempt
+    @require_POST
+    def attendance_status(request):
+        data = json.loads(request.body.decode('utf-8'))
+        section = data.get('section')
+        status = data.get('status')
+        date = data.get('date')
+
+        session = SessionLocal()
+        records = []
+        try:
+            # Determine which status to filter by
+            if status.lower() == 'present':
+                # Present: attendance entry exists for the date and section
+                query = text("""
+                    SELECT
+                        e.id AS id,
+                        a.uid AS uid,
+                        e.erp_id AS erp_id,
+                        e.name AS name,
+                        d.title AS designation,
+                        s.name AS section,
+                        a.timestamp AS timestamp,
+                        a.status AS status,
+                        a.lateintime AS lateintime
+                    FROM employees e
+                    LEFT JOIN sections s ON s.id = e.section_id
+                    LEFT JOIN designations d ON d.id = e.designation_id
+                    LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) = :date
+                    WHERE s.id = :section
+                       AND a.uid IS NOT NULL
+                       AND a.status IN ('Checked In', 'Checked Out', 'Early Checked Out')
+                    ORDER BY
+                        e.name,
+                        CAST(a.timestamp AS DATE),
+                        CASE 
+                            WHEN a.status = 'Checked In' THEN 0
+                            WHEN a.status = 'Early Checked Out' THEN 1
+                            WHEN a.status = 'Checked Out' THEN 2
+                            ELSE 3
+                        END,
+                        a.timestamp;
+                """)
+            elif status.lower() == 'absent':
+                # Absent: no attendance entry for the date and section
+                query = text("""
+                    SELECT
+                        e.id AS id,
+                        NULL AS uid,
+                        e.erp_id AS erp_id,
+                        e.name AS name,
+                        d.title AS designation,
+                        s.name AS section,
+                        NULL AS timestamp,
+                        NULL AS status,
+                        NULL AS lateintime                   
+                    FROM employees e
+                    LEFT JOIN sections s ON s.id = e.section_id
+                    LEFT JOIN designations d ON d.id = e.designation_id
+                    LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) = :date
+                    WHERE s.id = :section
+                      AND a.uid IS NULL
+                    ORDER BY
+                        e.name
+                """)
+            else:
+                # Default: show all with attendance entry for the date and section
+                query = text("""
+                    SELECT
+                        e.id AS id,
+                        a.uid AS uid,
+                        e.erp_id AS erp_id,
+                        e.name AS name,
+                        d.title AS designation,
+                        s.name AS section,
+                        a.timestamp AS timestamp,
+                        a.status AS status,
+                        a.lateintime AS lateintime
+                    FROM employees e
+                    LEFT JOIN sections s ON s.id = e.section_id
+                    LEFT JOIN designations d ON d.id = e.designation_id
+                    LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) = :date
+                    WHERE s.id = :section
+                       AND a.status IN ('Checked In', 'Checked Out', 'Early Checked Out')
+                    ORDER BY
+                        e.name,
+                        CAST(a.timestamp AS DATE),
+                        CASE 
+                            WHEN a.status = 'Checked In' THEN 0
+                            WHEN a.status = 'Early Checked Out' THEN 1
+                            WHEN a.status = 'Checked Out' THEN 2
+                            ELSE 3
+                        END,
+                        a.timestamp;
+                """)
+            result = session.execute(
+                query, {"section": section, "date": date})
+            for row in result:
+
+                records.append({
+                    'id': row.id,
+                    'erp_id': row.erp_id,
+                    'name': row.name,
+                    'designation': row.designation,
+                    'section': row.section,
+                    'timestamp': '-' if row.timestamp is None else row.timestamp,
+                    'late': '-' if row.timestamp is None else row.lateintime,
+                    'flag': 'Present' if row.uid is not None else 'Absent',
+                    'status': '-' if row.status is None else row.status
+                })
+            return JsonResponse(records, safe=False)
+        finally:
+            session.close()

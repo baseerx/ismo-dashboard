@@ -32,6 +32,7 @@ import SubMenu from "./pages/Menus/SubMenu";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import Home from "./pages/Dashboard/Home";
 import AttendanceOverview from "./pages/Attendance/AttendanceOverview";
+import PresentAbsent from "./pages/Attendance/PresentAbsent";
 
 export default function App() {
   return (
@@ -58,6 +59,10 @@ export default function App() {
               <Route
                 path="/attendance/history"
                 element={<AttendanceHistory />}
+              />
+              <Route
+                path="/attendance/status"
+                element={<PresentAbsent />}
               />
               <Route
                 path="/attendance/individual"

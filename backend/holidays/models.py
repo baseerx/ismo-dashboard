@@ -1,7 +1,7 @@
 from django.db import models
 
 class Holiday(models.Model):
-    name = models.CharField(max_length=255, unique=True)
+    name = models.CharField(max_length=255)
     date = models.DateField()
     description = models.TextField(blank=True, null=True)
 
