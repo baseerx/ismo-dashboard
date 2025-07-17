@@ -19,7 +19,7 @@ type AttendanceRow = {
     checkout_time: string;
     checkin_time: string;
     timestamp: string;
-    late: string;
+    status: string;
 
 };
 
@@ -66,7 +66,7 @@ export default function DetailedReport() {
                 ? moment(item.checkin_time).format('YYYY-MM-DD HH:mm:ss')
                 : "-",
             timestamp: moment(item.timestamp).format('DD-MM-YYYY'),
-            late: item.late,
+            status: item.checkin_time !== '-' ? item.late : "-",
           };
         if (picked.timestamp && typeof picked.timestamp === "string") {
           picked.timestamp = picked.timestamp.replace("T", " ");
@@ -114,8 +114,8 @@ const columns: ColumnDef<AttendanceRow>[] = [
   },
 
   {
-    accessorKey: "late",
-    header: "Late Status",
+    accessorKey: "status",
+    header: "Status",
   },
 ];
 

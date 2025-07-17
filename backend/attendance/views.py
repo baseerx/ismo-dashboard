@@ -473,8 +473,15 @@ class AttendanceView:
         records = []
         try:
             query = text("""
+                WITH date_range AS (
+                    SELECT 
+                        DATEADD(DAY, v.number, :fromdate) AS the_date
+                    FROM master..spt_values v
+                    WHERE v.type = 'P'
+                        AND DATEADD(DAY, v.number, :fromdate) <= :todate
+                )
                 SELECT
-                            CAST(a.timestamp AS DATE) AS the_date,
+                    dr.the_date,
                     e.erp_id AS erp_id,
                     e.name AS name,
                     d.title AS designation,
@@ -482,15 +489,17 @@ class AttendanceView:
                     s.name AS section,
                     MAX(CASE WHEN a.status = 'Checked In' THEN a.timestamp END) AS checkin_time,
                     MAX(CASE WHEN a.status IN ('Checked Out', 'Early Checked Out') THEN a.timestamp END) AS checkout_time
-                FROM attendance a
-                JOIN employees e ON e.hris_id = a.user_id
+                FROM date_range dr
+                JOIN employees e ON 1=1
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN grades g ON g.id = e.grade_id
+                LEFT JOIN attendance a 
+                    ON e.hris_id = a.user_id 
+                    AND CAST(a.timestamp AS DATE) = dr.the_date
                 WHERE e.flag = 1
-                  AND CAST(a.timestamp AS DATE) BETWEEN :fromdate AND :todate
                 GROUP BY 
-                    CAST(a.timestamp AS DATE),
+                    dr.the_date,
                     e.id,
                     e.erp_id,
                     e.name,
