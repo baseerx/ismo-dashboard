@@ -20,8 +20,7 @@ type AttendanceRow = {
     section: string;
     timestamp: string;
     grade: string;
-    status: string;
-    late: string;
+ 
     punch?: string;
     flag?: string;
 };
@@ -76,8 +75,8 @@ const capitalizeFirstLetter = (val:string) => {
                 timestamp: data.status === 'present'
                     ? moment(item.timestamp).format("YYYY-MM-DD HH:mm:ss")
                     : data.date,
-                late: item.lateintime,
-                status: item.status,
+      
+           
                 punch: item.uid,
                 flag: capitalizeFirstLetter(data.status),
             }));
@@ -94,30 +93,8 @@ const capitalizeFirstLetter = (val:string) => {
         { accessorKey: "section", header: "Section" },
         { accessorKey: "grade", header: "Grade" },
         { accessorKey: "timestamp", header: "Timestamp" },
-        { accessorKey: "flag", header: "Present/Absent" },
-        {
-            accessorKey: "late",
-            header: "Late/On Time",
-            cell: ({ getValue }) => {
-                const value = getValue<string>();
-                const color =
-                    value?.toLowerCase() === "late"
-                        ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
-                        : value?.toLowerCase() === "on time"
-                        ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
-                        : "";
-                return <span className={color}>{value}</span>;
-            },
-            meta: {
-                getTdClassName: (value: string) =>
-                    value?.toLowerCase() === "late"
-                        ? "bg-gray-50"
-                        : value?.toLowerCase() === "on time"
-                        ? "bg-gray-50"
-                        : "",
-            },
-        },
-        { accessorKey: "status", header: "Status" },
+        { accessorKey: "flag", header: "Present/Absent" }
+      
  
     ];
 

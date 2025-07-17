@@ -9,4 +9,5 @@ urlpatterns = [
     path('sections/', AttendanceView.attendance_section),
     path('status/', AttendanceView.attendance_status),
     path('individual/', AttendanceView.attendance_individual),
+    path('detailed/', AttendanceView.attendance_detailed),
 ]

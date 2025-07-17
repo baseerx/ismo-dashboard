@@ -35,6 +35,7 @@ import AttendanceOverview from "./pages/Attendance/AttendanceOverview";
 import PresentAbsent from "./pages/Attendance/PresentAbsent";
 import OfficialWork from "./pages/Leaves/OfficialWork";
 import ChangePassword from "./pages/UserManagement/ChangePassword";
+import DetailedReport from "./pages/Attendance/DetailedReport";
 export default function App() {
   return (
     <>
@@ -61,6 +62,10 @@ export default function App() {
               <Route
                 path="/attendance/history"
                 element={<AttendanceHistory />}
+              />
+              <Route
+                path="/attendance/detailed-report"
+                element={<DetailedReport />}
               />
               <Route
                 path="/attendance/status"

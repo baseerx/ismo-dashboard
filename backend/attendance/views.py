@@ -461,6 +461,96 @@ class AttendanceView:
             return JsonResponse(records, safe=False)
         finally:
             session.close()
+            
+    @csrf_exempt
+    @require_POST
+    def attendance_detailed(request):
+        data = json.loads(request.body)
+        fromdate = data.get('fromdate')
+        todate = data.get('todate')
+
+        session = SessionLocal()
+        records = []
+        try:
+            query = text("""
+                SELECT
+                            CAST(a.timestamp AS DATE) AS the_date,
+                    e.erp_id AS erp_id,
+                    e.name AS name,
+                    d.title AS designation,
+                    g.name AS grade,
+                    s.name AS section,
+                    MAX(CASE WHEN a.status = 'Checked In' THEN a.timestamp END) AS checkin_time,
+                    MAX(CASE WHEN a.status IN ('Checked Out', 'Early Checked Out') THEN a.timestamp END) AS checkout_time
+                FROM attendance a
+                JOIN employees e ON e.hris_id = a.user_id
+                LEFT JOIN sections s ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN grades g ON g.id = e.grade_id
+                WHERE e.flag = 1
+                  AND CAST(a.timestamp AS DATE) BETWEEN :fromdate AND :todate
+                GROUP BY 
+                    CAST(a.timestamp AS DATE),
+                    e.id,
+                    e.erp_id,
+                    e.name,
+                    d.title,
+                    g.name,
+                    s.name,
+                    e.hris_id
+                ORDER BY g.name DESC
+            """)
+
+            result = session.execute(
+                query, {"fromdate": fromdate, "todate": todate})
+            rows = result.fetchall()
+            for row in rows:
+                flag = 'Absent'
+           
+                leave_result = session.execute(text("""
+                        SELECT leave_type FROM leaves
+                        WHERE erp_id = :erp_id
+                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                    """), {"erp_id": row.erp_id, "att_date": row.the_date}).first()
+                official_work = session.execute(text("""
+                                        SELECT leave_type FROM official_work_leaves
+                                        WHERE erp_id = :erp_id
+                                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                                    """), {"erp_id": row.erp_id, "att_date": row.the_date}).first()
+
+                if row.the_date is not None:
+                    flag = 'Present'
+                elif row.the_date:
+                    if leave_result:
+                        flag = leave_result.leave_type
+                    elif official_work:
+                        flag = official_work.leave_type
+                    else:
+                        holiday_result = session.execute(text("""
+                            SELECT name FROM public_holidays
+                            WHERE CAST(date AS DATE) = :att_date
+                        """), {"att_date": row.the_date}).first()
+                        if holiday_result:
+                            flag = holiday_result.name
+                        else:
+                            flag = 'Absent'
+
+                records.append({
+                    'erp_id': row.erp_id,
+                    'name': row.name,
+                    'designation': row.designation,
+                    'grade': row.grade,
+                    'section': row.section,
+                    'checkout_time': row.checkout_time if row.checkout_time is not None else '-',
+                    'checkin_time': row.checkin_time if row.checkin_time is not None else '-',
+                    'timestamp': row.the_date,
+                    'late': '-' if flag=='Absent' else flag, 
+                })
+            return JsonResponse(records, safe=False)
+        finally:
+            session.close()
 
     @csrf_exempt
     @require_POST
@@ -630,9 +720,9 @@ class AttendanceView:
                     'grade': row.grade,
                     'section': row.section,
                     'timestamp': '-' if row.timestamp is None else row.timestamp,
-                    'late': '-' if row.timestamp is None else row.lateintime,
+                 
                     'flag': 'Present' if row.uid is not None else 'Absent',
-                    'status': '-' if row.status is None else row.status
+                    
                 })
             return JsonResponse(records, safe=False)
         finally:
