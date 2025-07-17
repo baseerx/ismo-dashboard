@@ -33,7 +33,8 @@ import ProtectedRoute from "./components/auth/ProtectedRoute";
 import Home from "./pages/Dashboard/Home";
 import AttendanceOverview from "./pages/Attendance/AttendanceOverview";
 import PresentAbsent from "./pages/Attendance/PresentAbsent";
-
+import OfficialWork from "./pages/Leaves/OfficialWork";
+import ChangePassword from "./pages/UserManagement/ChangePassword";
 export default function App() {
   return (
     <>
@@ -46,6 +47,7 @@ export default function App() {
               <Route path="/dashboard" index element={<Home />} />
 
               {/* Others Page */}
+              <Route path="/change-password" element={<ChangePassword />} />
               <Route path="/profile" element={<UserProfiles />} />
               <Route path="/calendar" element={<Calendar />} />
               <Route path="/blank" element={<Blank />} />
@@ -63,6 +65,10 @@ export default function App() {
               <Route
                 path="/attendance/status"
                 element={<PresentAbsent />}
+              />
+              <Route
+                path="/leaves/official-work"
+                element={<OfficialWork />}
               />
               <Route
                 path="/attendance/individual"

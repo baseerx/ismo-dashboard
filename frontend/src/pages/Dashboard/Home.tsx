@@ -4,6 +4,7 @@ import { UserIcon } from "../../icons";
 import { useEffect, useState } from "react";
 import axios from "../../api/axios";
 import PieChart from "../Charts/PieChart"
+import { Link } from "react-router-dom";
 export default function Home() {
     const [data, setData] = useState<any>({});
     const getEmployeesInfo = async() => {
@@ -67,12 +68,17 @@ export default function Home() {
               : "0%"
           }
         />
-          </div>
-
-          <div className="col-span-1 lg:col-span-2">
-            <PieChart present={data.present_today} absent={data.absent_today} total={data.total_employees} />
-          </div>
-
+      </div>
+      <h2 className="text-lg font-semibold my-5 animate-pulse bg-gray-500 rounded-2xl px-2 py-2 shadow-2xl shadow-red-300 z-10 text-white float-right">
+        <Link to="/attendance/overview">View Attendance</Link>
+      </h2>
+      <div className="col-span-1 lg:col-span-2">
+        <PieChart
+          present={data.present_today}
+          absent={data.absent_today}
+          total={data.total_employees}
+        />
+      </div>
     </>
   );
 }

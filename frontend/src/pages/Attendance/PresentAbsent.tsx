@@ -19,6 +19,7 @@ type AttendanceRow = {
     designation: string;
     section: string;
     timestamp: string;
+    grade: string;
     status: string;
     late: string;
     punch?: string;
@@ -58,6 +59,10 @@ export default function SectionAttendanceReport() {
         fetchAttendanceData();
     }
 
+const capitalizeFirstLetter = (val:string) => {
+  if (!val) return "";
+  return val.charAt(0).toUpperCase() + val.slice(1);
+}
 
     const fetchAttendanceData = async () => {
         try {
@@ -66,12 +71,15 @@ export default function SectionAttendanceReport() {
                 erp_id: item.erp_id,
                 name: item.name,
                 designation: item.designation,
+                grade: item.grade,
                 section: item.section,
-                timestamp: data.date,
+                timestamp: data.status === 'present'
+                    ? moment(item.timestamp).format("YYYY-MM-DD HH:mm:ss")
+                    : data.date,
                 late: item.lateintime,
                 status: item.status,
                 punch: item.uid,
-                flag: item.status === "Checked In" ? "Present" : "Absent",
+                flag: capitalizeFirstLetter(data.status),
             }));
             setAttendanceData(cleanedData);
         } catch (error) {
@@ -84,6 +92,7 @@ export default function SectionAttendanceReport() {
         { accessorKey: "name", header: "Name" },
         { accessorKey: "designation", header: "Designation" },
         { accessorKey: "section", header: "Section" },
+        { accessorKey: "grade", header: "Grade" },
         { accessorKey: "timestamp", header: "Timestamp" },
         { accessorKey: "flag", header: "Present/Absent" },
         {

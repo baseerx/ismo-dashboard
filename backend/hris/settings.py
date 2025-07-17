@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'submenu',  # Your submenu app
     'assignrights',
     'addtouser',
+    'officialwork',
     'rest_framework',  # If you're using Django REST Framework
 ]
 

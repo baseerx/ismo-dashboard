@@ -22,6 +22,7 @@ type AttendanceRow = {
     late: string;
     status: string;
     punch: string;
+    grade: string;
 };
 
 export default function SectionAttendanceReport() {
@@ -70,7 +71,8 @@ const fetchAttendanceData = async () => {
             return {
               erp_id: item.erp_id,
               name: item.name,
-              designation: item.designation,
+                designation: item.designation,
+                grade: item.grade,
               section: item.section,
               timestamp: item.timestamp!='-'?moment(item.timestamp).format("YYYY-MM-DD HH:mm:ss"): "-",
               late: item.late,
@@ -102,6 +104,10 @@ const columns: ColumnDef<AttendanceRow>[] = [
   {
     accessorKey: "section",
     header: "Section",
+    },
+  {
+    accessorKey: "grade",
+    header: "Grade",
   },
   {
     accessorKey: "timestamp",
@@ -136,11 +142,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
   {
     accessorKey: "status",
     header: "Status",
-  },
-  {
-    accessorKey: "punch",
-    header: "Punch",
-  },
+  }
 ];
 
   return (

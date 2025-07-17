@@ -6,7 +6,7 @@ import axios from "../../api/axios"; // Adjust the import path as necessary
 import { useState, useEffect } from "react";
 import moment from "moment";
 import _ from "lodash";
-
+import { toast, ToastContainer } from "react-toastify";
 import { ColumnDef } from "@tanstack/react-table";
 
 type AttendanceRow = {
@@ -32,7 +32,11 @@ export default function AttendanceOverview() {
 
   const fetchAttendanceData = async () => {
     const user = JSON.parse(localStorage.getItem("user") || "{}");
-    try {
+      try {
+          const attendanceId = "section-attendance";
+          toast.loading("Loading Attendance Data", {
+            toastId: attendanceId,
+          });
       const response = await axios.get(`/attendance/overview/${user?.erpid}`);
       //   // Ensure response.data is an array and format timestamp
       const cleanedData: AttendanceRow[] = response.data.map((item: any) => {
@@ -41,7 +45,8 @@ export default function AttendanceOverview() {
           erp_id: item.erp_id,
           name: item.name,
           designation: item.designation,
-          section: item.section,
+            section: item.section,
+            grade: item.grade,
           uid: item.uid,
           user_id: item.user_id,
           timestamp: item.timestamp == null ? "-" : item.timestamp,
@@ -54,6 +59,7 @@ export default function AttendanceOverview() {
         }
         return picked;
       });
+          toast.dismiss(attendanceId);
       setAttendanceData(cleanedData);
     } catch (error) {
       console.error("Error fetching attendance data:", error);
@@ -76,6 +82,10 @@ export default function AttendanceOverview() {
     {
       accessorKey: "section",
       header: "Section",
+    },
+    {
+      accessorKey: "grade",
+      header: "Grade",
     },
     {
       accessorKey: "status",
@@ -130,6 +140,7 @@ export default function AttendanceOverview() {
           />
         </ComponentCard>
       </div>
+      <ToastContainer position="bottom-right" />
     </>
   );
 }

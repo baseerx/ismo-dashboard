@@ -149,6 +149,28 @@ class UsersView:
             return JsonResponse({'success': True}, status=200)
         except User.DoesNotExist:
             return JsonResponse({'success': False, 'error': 'User not found'}, status=404)
+
+    @csrf_exempt
+    @require_POST
+    def change_password(request):
+        data = json.loads(request.body.decode('utf-8'))
+        user_id = data.get('user_id')
+        old_password = data.get('old_password')
+        new_password1 = data.get('new_password1')
+        new_password2 = data.get('new_password2')
+        if not user_id or not old_password or not new_password1 or not new_password2:
+            return JsonResponse({'success': False, 'error': 'All fields are required'}, status=400)
+        try:
+            user = User.objects.get(pk=user_id)
+            if not user.check_password(old_password):
+                return JsonResponse({'success': False, 'error': 'Old password is incorrect'}, status=400)
+            if new_password1 != new_password2:
+                return JsonResponse({'success': False, 'error': 'New passwords do not match'}, status=400)
+            user.set_password(new_password1)
+            user.save()
+            return JsonResponse({'success': True, 'message': 'Password changed successfully'}, status=200)
+        except User.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'User not found'}, status=404)  
  
 class EmployeesView:
     def get(request):
@@ -163,7 +185,7 @@ class EmployeesView:
     def employees_summary(request):
         today = date.today()
 
-        total_employees = Employees.objects.count()
+        total_employees = Employees.objects.filter(flag=1).count()
 
         # Get unique user_ids from attendance where timestamp is today
         present_user_ids = Attendance.objects.filter(
@@ -180,3 +202,6 @@ class EmployeesView:
         }
 
         return JsonResponse(summary)
+    
+    
+        

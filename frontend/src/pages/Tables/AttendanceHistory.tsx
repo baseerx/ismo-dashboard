@@ -15,7 +15,7 @@ type AttendanceRow = {
   name: string;
   status: string;
   timestamp: string;
-
+  grade: string;
   flag: string;
   late: string;
 };
@@ -30,14 +30,17 @@ export default function DataTable() {
   useEffect(() => {
     if (fromdate <= todate) {
         fetchAttendanceData();
-        toast.success(`Attendance data fetched from ${fromdate} to ${todate}`);
     } else {
       toast.error("from date cannot be greater than to date");
     }
   }, [todate, fromdate]);
 
   const fetchAttendanceData = async () => {
-    try {
+      try {
+                toast.loading(
+                  `Fetching attendance data from ${fromdate} to ${todate}`,{toastId: "attendance-fetch-success"}
+                );
+
       const response = await axios.post("/attendance/history/", {
         fromdate: fromdate,
         todate: todate,
@@ -48,7 +51,10 @@ export default function DataTable() {
           const picked = _.pick(item, [
             "erp_id",
           "name",
-          "status",
+              "section",
+              "designation",
+              "status",
+          "grade",
           "timestamp",
           "flag",
           "late",
@@ -58,6 +64,7 @@ export default function DataTable() {
         }
         return picked;
       });
+          toast.dismiss("attendance-fetch-success");
       setAttendanceData(cleanedData);
     } catch (error) {
       console.error("Error fetching attendance data:", error);
@@ -72,6 +79,18 @@ export default function DataTable() {
     {
       accessorKey: "name",
       header: "Name",
+    },
+    {
+      accessorKey: "section",
+      header: "Section",
+    },
+    {
+      accessorKey: "designation",
+      header: "Designation",
+    },
+    {
+      accessorKey: "grade",
+      header: "Grade",
     },
     {
       accessorKey: "status",
@@ -91,7 +110,7 @@ export default function DataTable() {
       cell: ({ getValue }) => {
         const value = getValue<string>();
         const color =
-          value?.toLowerCase() === "late"
+          value?.toLowerCase() === "late" || value?.toLowerCase() === "early"
             ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
             : value?.toLowerCase() === "on time"
             ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"

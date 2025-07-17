@@ -14,6 +14,7 @@ class Employees(models.Model):
     grade_id = models.IntegerField()
     designation_id = models.IntegerField()
     position = models.CharField(max_length=100)
+    flag=models.IntegerField(default=0)
 
     class Meta:
         db_table = 'employees'
