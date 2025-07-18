@@ -23,7 +23,7 @@ type AttendanceRow = {
 
 };
 
-export default function DetailedReport() {
+export default function TeamLevel() {
   const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
   const [fromdate, setFromdate] = useState<String>(
     moment().format("YYYY-MM-DD")
@@ -43,10 +43,11 @@ export default function DetailedReport() {
                 toast.loading(
                   `Fetching attendance data from ${fromdate} to ${todate}`,{toastId: "attendance-fetch-success"}
                 );
-
-      const response = await axios.post("/attendance/detailed/", {
+          const user = JSON.parse(localStorage.getItem("user") || "{}");
+      const response = await axios.post("/attendance/team-level/", {
         fromdate: fromdate,
-        todate: todate,
+          todate: todate,
+        erp_id: user.erpid,
       });
 
       // Ensure response.data is an array and format timestamp
@@ -65,7 +66,7 @@ export default function DetailedReport() {
               item.checkin_time && item.checkin_time !== '-'
                 ? moment(item.checkin_time).format('YYYY-MM-DD HH:mm:ss')
                 : "-",
-            timestamp: moment(item.timestamp).format('DD-MM-YYYY'),
+            timestamp: item.timestamp !== '-' ? moment(item.timestamp).format('DD-MM-YYYY') : "-",
             status: item.checkin_time !== '-' ? item.late : "-",
           };
         if (picked.timestamp && typeof picked.timestamp === "string") {
@@ -122,10 +123,10 @@ const columns: ColumnDef<AttendanceRow>[] = [
   return (
     <>
       <PageMeta
-        title="ISMO - Detailed Attendance Report"
-        description="ISMO Admin Dashboard - Detailed Attendance Report"
+        title="ISMO - Team Level Attendance Report"
+        description="ISMO Admin Dashboard - Team Level Attendance Report"
       />
-      <PageBreadcrumb pageTitle="Detailed Attendance Report" />
+      <PageBreadcrumb pageTitle="Team Level Attendance Report" />
       <div className="space-y-6">
         <ComponentCard title={`Attendance on ${fromdate}`}>
           <ToastContainer position="bottom-right" />

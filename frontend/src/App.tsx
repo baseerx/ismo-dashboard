@@ -36,6 +36,7 @@ import PresentAbsent from "./pages/Attendance/PresentAbsent";
 import OfficialWork from "./pages/Leaves/OfficialWork";
 import ChangePassword from "./pages/UserManagement/ChangePassword";
 import DetailedReport from "./pages/Attendance/DetailedReport";
+import TeamLevel from "./pages/Attendance/TeamLevel";
 export default function App() {
   return (
     <>
@@ -70,6 +71,10 @@ export default function App() {
               <Route
                 path="/attendance/status"
                 element={<PresentAbsent />}
+              />
+              <Route
+                path="/attendance/team-level"
+                element={<TeamLevel />}
               />
               <Route
                 path="/leaves/official-work"

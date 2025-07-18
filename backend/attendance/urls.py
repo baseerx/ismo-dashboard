@@ -1,4 +1,4 @@
-from django.urls import path, include
+from django.urls import path
 from .views import AttendanceView
 
 urlpatterns = [
@@ -10,4 +10,5 @@ urlpatterns = [
     path('status/', AttendanceView.attendance_status),
     path('individual/', AttendanceView.attendance_individual),
     path('detailed/', AttendanceView.attendance_detailed),
+    path('team-level/', AttendanceView.attendance_team_level),
 ]
