@@ -2,17 +2,20 @@ from django.shortcuts import render
 from .models import Attendance  # Assuming you have an Attendance model defined
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_POST
-from datetime import date, datetime,time
+from datetime import date, datetime, time, timedelta
 from sqlalchemy import text
 from django.views.decorators.csrf import csrf_exempt
+from dotenv import load_dotenv
+import os
 import json
+import requests  # Ensure you have requests installed in your environment
 # Assuming you have a SessionLocal defined for database access
 from db import SessionLocal
 # Create your views here.
 from leaves.models import LeaveModel
 from holidays.models import Holiday
 
-
+load_dotenv()  # Load environment variables from .env file
 class AttendanceView:
     @require_GET  # Ensure this view only responds to GET requests
     def get(request):
@@ -165,7 +168,7 @@ class AttendanceView:
                     else:
                         late_status = 'On time'
                 else:
-                    late_status = 'Early'
+                    late_status = '-'
                 # Integrate leave and holiday check for each employee for today
                 flag = 'Absent'
                 leave_result = session.execute(text("""
@@ -820,5 +823,95 @@ class AttendanceView:
                     
                 })
             return JsonResponse(records, safe=False)
+        finally:
+            session.close()
+
+    @require_GET
+    def getshifts(request):
+        session=SessionLocal()
+        data=[]
+        query=text("""
+        SELECT MIN(id) AS id, MIN(Shift_Id) AS shift_id, Shift_Name AS name
+FROM dbo.shift_user_map
+GROUP BY Shift_Name;
+
+        """)
+        results=session.execute(query).fetchall()
+        session.close()
+        for row in results:
+            data.append({
+                'id': row.id,
+                'shift_id': row.shift_id,
+                'name': row.name
+            })
+        return JsonResponse(data, safe=False)
+    
+    @csrf_exempt
+    @require_POST
+    def shift_details(request):
+        data = json.loads(request.body)
+        shiftid = data.get('shiftid')
+        date_str = data.get('date')  # format expected: 'YYYY-MM-DD'
+
+        url = os.environ.get('SDXP_URL')
+        if not url:
+            return JsonResponse({"error": "SDXP_URL not set in environment variables"}, status=500)
+
+        # Fetch shift details from external API
+        response = requests.post(
+            f'{url}/ShiftRoster/GetShiftDetails', json={"shiftid": shiftid, "date": date_str})
+        shift_details = response.json()
+
+        session = SessionLocal()
+        try:
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+            query = text("""
+                SELECT 
+                    s.Shift_Id,
+                    e.erp_id,
+                    e.name,
+                    d.title,
+                    g.name AS grade,
+                    sec.name AS section,
+                    COALESCE(a.status, '-') AS status,
+                    a.timestamp,
+                    s.Shift_Name
+                FROM employees e 
+                JOIN shift_user_map s ON s.ErpID = e.erp_id
+                LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) = :att_date
+                JOIN sections sec ON e.section_id = sec.id
+                JOIN designations d ON e.designation_id = d.id
+                JOIN grades g ON e.grade_id = g.id
+               
+                WHERE e.flag = 1 AND s.Shift_Id = :shiftid
+            """)
+            attendance_records = session.execute(
+                query, {"shiftid": shiftid, "att_date": date_obj}).fetchall()
+
+            attendance_records = [
+                {
+                    'shift_id': row.Shift_Id,
+                    'erp_id': row.erp_id,
+                    'name': row.name,
+                    'designation': row.title,
+                    'grade': row.grade,
+                    'section': row.section,
+                    'shiftname': row.Shift_Name,
+                    'status': row.status,
+                    'timestamp': row.timestamp.strftime("%Y-%m-%d %H:%M:%S") if row.timestamp else None,
+                    'lateintime': (
+                        'On Time' if row.status == 'Checked In' and row.timestamp and shift_details and shift_details[0]['Start_Time']
+                        and row.timestamp.time() <= datetime.strptime(shift_details[0]['Start_Time'], "%I:%M %p").time()
+                        else 'Late' if row.status == 'Checked In' and row.timestamp and shift_details and shift_details[0]['Start_Time']
+                        else 'Early' if row.status == 'Checked Out' and row.timestamp and shift_details and shift_details[0]['End_Time']
+                        and row.timestamp.time() < datetime.strptime(shift_details[0]['End_Time'], "%I:%M %p").time()
+                        else 'On Time' if row.status == 'Checked Out' and row.timestamp and shift_details and shift_details[0]['End_Time']
+                        else None
+                    ),
+                    'flag': 'Absent' if row.timestamp is None else 'Present'
+                } for row in attendance_records
+            ]
+
+            return JsonResponse({'attendance': attendance_records}, safe=False, status=200)
         finally:
             session.close()

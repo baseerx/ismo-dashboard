@@ -24,6 +24,7 @@
     "apexcharts": "^4.1.0",
     "axios": "^1.10.0",
     "clsx": "^2.1.1",
+    "dotenv": "^17.2.0",
     "flatpickr": "^4.6.13",
     "jspdf": "^3.0.1",
     "jspdf-autotable": "^5.0.2",
