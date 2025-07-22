@@ -102,7 +102,7 @@ class AttendanceView:
                     'uid': row.uid,
                     'user_id': row.user_id,
                     'timestamp': '-' if row.timestamp is None else row.timestamp,
-                    'late': '-' if row.uid is None else row.lateintime,
+                    'late': 'early' if row.status == 'Early Checked Out' else '-' if row.timestamp is None else row.lateintime,
                     'status': '-' if row.status is None else row.status,
                     'flag': flag
                 })
@@ -848,9 +848,9 @@ GROUP BY Shift_Name;
     
     @csrf_exempt
     @require_POST
-    @staticmethod
     def shift_details(request):
         try:
+           
             data = json.loads(request.body.decode('utf-8'))
         except Exception:
             return JsonResponse({"error": "Invalid JSON body"}, status=400)
@@ -867,9 +867,9 @@ GROUP BY Shift_Name;
                 f'{url}/ShiftRoster/GetShiftDetails', json={"shiftid": shiftid, "date": date_str}, timeout=5)
             response.raise_for_status()
             shift_details = response.json()
+  
         except requests.RequestException as e:
             return JsonResponse({"error": f"Failed to fetch shift details: {str(e)}"}, status=502)
-
         session = SessionLocal()
         try:
             date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -931,10 +931,50 @@ GROUP BY Shift_Name;
                         else 'On Time' if row.status == 'Checked Out' and row.timestamp and shift_details and shift_details[0].get('End_Time')
                         else '-'
                     ),
-                    'flag': 'Absent' if row.timestamp is None else 'Present'
+                    'flag': (
+                        'Present' if row.timestamp is not None
+                        else (
+                            session.execute(text("""
+                    SELECT leave_type FROM leaves
+                    WHERE erp_id = :erp_id
+                    AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                    AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                """), {"erp_id": row.erp_id, "att_date": date_obj}).first().leave_type
+                            if session.execute(text("""
+                    SELECT leave_type FROM leaves
+                    WHERE erp_id = :erp_id
+                    AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                    AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                """), {"erp_id": row.erp_id, "att_date": date_obj}).first()
+                            else (
+                                session.execute(text("""
+                        SELECT leave_type FROM official_work_leaves
+                        WHERE erp_id = :erp_id
+                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                    """), {"erp_id": row.erp_id, "att_date": date_obj}).first().leave_type
+                                if session.execute(text("""
+                        SELECT leave_type FROM official_work_leaves
+                        WHERE erp_id = :erp_id
+                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                    """), {"erp_id": row.erp_id, "att_date": date_obj}).first()
+                                else (
+                                    session.execute(text("""
+                            SELECT name FROM public_holidays
+                            WHERE CAST(date AS DATE) = :att_date
+                        """), {"att_date": date_obj}).first().name
+                                    if session.execute(text("""
+                            SELECT name FROM public_holidays
+                            WHERE CAST(date AS DATE) = :att_date
+                        """), {"att_date": date_obj}).first()
+                                    else 'Absent'
+                                )
+                            )
+                        )
+                    )
                 } for row in attendance_records
             ]
-
             return JsonResponse({'attendance': attendance_records}, safe=False, status=200)
         finally:
             session.close()
