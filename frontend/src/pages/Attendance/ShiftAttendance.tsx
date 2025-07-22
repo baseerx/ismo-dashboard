@@ -22,6 +22,8 @@ type AttendanceRow = {
     timestamp: string;
     grade: string;
     punch?: string;
+    checkin_time?: string;
+    checkout_time?: string;
     flag?: string;
     lateintime?: string;
     shift_id?: string;
@@ -68,7 +70,7 @@ export default function ShiftAttendance() {
                       `Fetching attendance data for shift on ${data.date}`,{toastId: "attendance-fetch-success"}
                     );
           const response = await axios.post(`/attendance/shift-details/`,{ shiftid: data.shift,date: data.date });
-                   
+                   console.log(response.data);
             const cleanedData: AttendanceRow[] = response.data.attendance.map((item: any) => ({
                         erp_id: item.erp_id,
                         name: item.name,
@@ -77,6 +79,12 @@ export default function ShiftAttendance() {
                         section: item.section,
                         timestamp: item.timestamp
                             ? moment(item.timestamp).format('YYYY-MM-DD HH:mm:ss')
+                    : "-",
+                        checkin_time: item.checkin_time
+                            ? moment(item.checkin_time).format('YYYY-MM-DD HH:mm:ss')
+                            : "-",
+                        checkout_time: item.checkout_time
+                            ? moment(item.checkout_time).format('YYYY-MM-DD HH:mm:ss')
                             : "-",
                         flag: item.flag,
                         shift_id: item.shift_id,
@@ -99,7 +107,8 @@ const columns: ColumnDef<AttendanceRow>[] = [
   { accessorKey: "designation", header: "Designation" },
   { accessorKey: "section", header: "Section" },
   { accessorKey: "grade", header: "Grade" },
-  { accessorKey: "timestamp", header: "Timestamp" },
+    { accessorKey: "checkin_time", header: "Check-in Time" },
+    { accessorKey: "checkout_time", header: "Check-out Time" },
   {
     accessorKey: "flag",
     header: "Present/Absent",

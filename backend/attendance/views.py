@@ -848,8 +848,12 @@ GROUP BY Shift_Name;
     
     @csrf_exempt
     @require_POST
+    @staticmethod
     def shift_details(request):
-        data = json.loads(request.body)
+        try:
+            data = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            return JsonResponse({"error": "Invalid JSON body"}, status=400)
         shiftid = data.get('shiftid')
         date_str = data.get('date')  # format expected: 'YYYY-MM-DD'
 
@@ -858,9 +862,13 @@ GROUP BY Shift_Name;
             return JsonResponse({"error": "SDXP_URL not set in environment variables"}, status=500)
 
         # Fetch shift details from external API
-        response = requests.post(
-            f'{url}/ShiftRoster/GetShiftDetails', json={"shiftid": shiftid, "date": date_str})
-        shift_details = response.json()
+        try:
+            response = requests.post(
+                f'{url}/ShiftRoster/GetShiftDetails', json={"shiftid": shiftid, "date": date_str}, timeout=5)
+            response.raise_for_status()
+            shift_details = response.json()
+        except requests.RequestException as e:
+            return JsonResponse({"error": f"Failed to fetch shift details: {str(e)}"}, status=502)
 
         session = SessionLocal()
         try:
@@ -870,24 +878,37 @@ GROUP BY Shift_Name;
                     s.Shift_Id,
                     e.erp_id,
                     e.name,
-                    d.title,
+                    d.title AS title,
+                         a.timestamp,
                     g.name AS grade,
                     sec.name AS section,
-                    COALESCE(a.status, '-') AS status,
-                    a.timestamp,
-                    s.Shift_Name
+                         a.status,
+                    s.Shift_Name,
+                    MAX(CASE WHEN a.status = 'Checked In' THEN a.timestamp END) AS checkin_time,
+                    MAX(CASE WHEN a.status IN ('Checked Out', 'Early Checked Out') THEN a.timestamp END) AS checkout_time
                 FROM employees e 
                 JOIN shift_user_map s ON s.ErpID = e.erp_id
-                LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) = :att_date
+                LEFT JOIN attendance a ON e.hris_id = a.user_id 
+                    AND CAST(a.timestamp AS DATE) = :att_date
                 JOIN sections sec ON e.section_id = sec.id
                 JOIN designations d ON e.designation_id = d.id
                 JOIN grades g ON e.grade_id = g.id
-               
-                WHERE e.flag = 1 AND s.Shift_Id = :shiftid
+                WHERE e.flag = 1 
+                    AND s.Shift_Id = :shiftid
+                GROUP BY 
+                    s.Shift_Id,
+                    e.erp_id,
+                    e.name,
+                    d.title,
+                    g.name,
+                    sec.name,
+                    s.Shift_Name,
+                    a.status,
+                    a.timestamp
+                ORDER BY g.name DESC
             """)
             attendance_records = session.execute(
                 query, {"shiftid": shiftid, "att_date": date_obj}).fetchall()
-
             attendance_records = [
                 {
                     'shift_id': row.Shift_Id,
@@ -897,16 +918,18 @@ GROUP BY Shift_Name;
                     'grade': row.grade,
                     'section': row.section,
                     'shiftname': row.Shift_Name,
-                    'status': row.status,
+                    'checkin_time': row.checkin_time.strftime("%Y-%m-%d %H:%M:%S") if row.checkin_time else None,
+                    'checkout_time': row.checkout_time.strftime("%Y-%m-%d %H:%M:%S") if row.checkout_time else None,
+                    'status': '-' if row.status is None else row.status,
                     'timestamp': row.timestamp.strftime("%Y-%m-%d %H:%M:%S") if row.timestamp else None,
                     'lateintime': (
-                        'On Time' if row.status == 'Checked In' and row.timestamp and shift_details and shift_details[0]['Start_Time']
+                        'On Time' if row.status == 'Checked In' and row.timestamp and shift_details and shift_details[0].get('Start_Time')
                         and row.timestamp.time() <= datetime.strptime(shift_details[0]['Start_Time'], "%I:%M %p").time()
-                        else 'Late' if row.status == 'Checked In' and row.timestamp and shift_details and shift_details[0]['Start_Time']
-                        else 'Early' if row.status == 'Checked Out' and row.timestamp and shift_details and shift_details[0]['End_Time']
+                        else 'Late' if row.status == 'Checked In' and row.timestamp and shift_details and shift_details[0].get('Start_Time')
+                        else 'Early' if row.status == 'Checked Out' and row.timestamp and shift_details and shift_details[0].get('End_Time')
                         and row.timestamp.time() < datetime.strptime(shift_details[0]['End_Time'], "%I:%M %p").time()
-                        else 'On Time' if row.status == 'Checked Out' and row.timestamp and shift_details and shift_details[0]['End_Time']
-                        else None
+                        else 'On Time' if row.status == 'Checked Out' and row.timestamp and shift_details and shift_details[0].get('End_Time')
+                        else '-'
                     ),
                     'flag': 'Absent' if row.timestamp is None else 'Present'
                 } for row in attendance_records
