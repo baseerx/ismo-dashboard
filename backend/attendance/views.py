@@ -978,3 +978,168 @@ GROUP BY Shift_Name;
             return JsonResponse({'attendance': attendance_records}, safe=False, status=200)
         finally:
             session.close()
+   
+
+    @csrf_exempt
+    @require_POST
+    def shift_history(request):
+        """
+        Retrieve shift history and attendance details for a given shift and date range.
+        
+        Args:
+            request: HTTP POST request with JSON body containing:
+                - shiftid (str): ID of the shift
+                - fromdate (str): Start date in YYYY-MM-DD format
+                - todate (str): End date in YYYY-MM-DD format
+        
+        Returns:
+            JsonResponse: Attendance records with details like check-in/out times, status, and flags.
+        """
+        try:
+            data = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            return JsonResponse({"error": "Invalid JSON body"}, status=400)
+
+        shiftid = data.get('shiftid')
+        fromdate_str = data.get('fromdate')
+        todate_str = data.get('todate')
+
+        if not all([shiftid, fromdate_str, todate_str]):
+            return JsonResponse({"error": "Missing required fields: shiftid, fromdate, todate"}, status=400)
+
+        try:
+            from_date_obj = datetime.strptime(fromdate_str, "%Y-%m-%d").date()
+            to_date_obj = datetime.strptime(todate_str, "%Y-%m-%d").date()
+        except ValueError:
+            return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
+
+        url = os.environ.get('SDXP_URL')
+        if not url:
+            return JsonResponse({"error": "SDXP_URL not set in environment variables"}, status=500)
+
+        # Fetch shift details
+        try:
+            response = requests.post(
+                f'{url}/ShiftRoster/ShiftDetailed',
+                json={"shiftid": shiftid,
+                    "fromdate": fromdate_str, "todate": todate_str}
+            )
+            response.raise_for_status()
+            shift_details = response.json()
+            if not shift_details or 'Start_Time' not in shift_details[0] or 'End_Time' not in shift_details[0]:
+                return JsonResponse({"error": "Invalid shift details from API"}, status=502)
+        except requests.RequestException as e:
+            print(f"Failed to fetch shift details: {str(e)}")
+            return JsonResponse({"error": f"Failed to fetch shift details: {str(e)}"}, status=502)
+
+        session = SessionLocal()
+        try:
+            # Main query
+            query = text("""
+                SELECT 
+                    s.Shift_Id,
+                    e.erp_id,
+                    e.name,
+                    d.title AS title,
+                    CAST(a.timestamp AS DATE) AS attendance_date,
+                    g.name AS grade,
+                    sec.name AS section,
+                    a.status,
+                    s.Shift_Name,
+                    MAX(CASE WHEN a.status = 'Checked In' THEN a.timestamp END) AS checkin_time,
+                    MAX(CASE WHEN a.status IN ('Checked Out', 'Early Checked Out') THEN a.timestamp END) AS checkout_time
+                FROM employees e 
+                JOIN shift_user_map s ON s.ErpID = e.erp_id
+                LEFT JOIN attendance a ON e.hris_id = a.user_id 
+                    AND CAST(a.timestamp AS DATE) BETWEEN :fromdate AND :todate
+                JOIN sections sec ON e.section_id = sec.id
+                JOIN designations d ON e.designation_id = d.id
+                JOIN grades g ON e.grade_id = g.id
+                WHERE e.flag = 1 
+                    AND s.Shift_Id = :shiftid
+                GROUP BY 
+                    s.Shift_Id,
+                    e.erp_id,
+                    e.name,
+                    d.title,
+                    g.name,
+                    a.status,
+                    sec.name,
+                    s.Shift_Name,
+                    CAST(a.timestamp AS DATE)
+                ORDER BY g.name DESC, attendance_date;
+            """)
+            attendance_records = session.execute(
+                query, {"shiftid": shiftid,
+                        "fromdate": from_date_obj, "todate": to_date_obj}
+            ).fetchall()
+
+            def get_late_status(row, shift_start, shift_end):
+                if not row.checkin_time and not row.checkout_time:
+                    return '-'
+                try:
+                    start_time = datetime.strptime(shift_start, "%I:%M %p").time()
+                    end_time = datetime.strptime(shift_end, "%I:%M %p").time()
+                    if row.status == 'Checked In' and row.checkin_time:
+                        checkin_time = row.checkin_time.time()
+                        return 'On Time' if checkin_time <= (datetime.strptime(shift_start, "%I:%M %p") + timedelta(minutes=30)).time() else 'Late'
+                    if row.status in ('Checked Out', 'Early Checked Out') and row.checkout_time:
+                        checkout_time = row.checkout_time.time()
+                        return 'Early' if checkout_time < end_time else 'On Time'
+                    return '-'
+                except ValueError:
+                    print(
+                        f"Invalid time format in shift details: Start_Time={shift_start}, End_Time={shift_end}")
+                    return '-'
+
+            def get_flag(row, session):
+                if row.attendance_date:
+                    return 'Present'
+                leave = session.execute(text("""
+                    SELECT leave_type FROM leaves
+                    WHERE erp_id = :erp_id
+                    AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                    AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                """), {"erp_id": row.erp_id, "att_date": row.attendance_date}).first()
+                if leave:
+                    return leave.leave_type
+                official_leave = session.execute(text("""
+                    SELECT leave_type FROM official_work_leaves
+                    WHERE erp_id = :erp_id
+                    AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                    AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                """), {"erp_id": row.erp_id, "att_date": row.attendance_date}).first()
+                if official_leave:
+                    return official_leave.leave_type
+                holiday = session.execute(text("""
+                    SELECT name FROM public_holidays
+                    WHERE CAST(date AS DATE) = :att_date
+                """), {"att_date": row.attendance_date}).first()
+                return holiday.name if holiday else 'Absent'
+
+            shift_start = shift_details[0].get('Start_Time')
+            shift_end = shift_details[0].get('End_Time')
+
+            attendance_records = [
+                {
+                    'shift_id': row.Shift_Id,
+                    'erp_id': row.erp_id,
+                    'name': row.name,
+                    'designation': row.title,
+                    'grade': row.grade,
+                    'section': row.section,
+                    'shiftname': row.Shift_Name,
+                    'checkin_time': row.checkin_time.strftime("%Y-%m-%d %H:%M:%S") if row.checkin_time else None,
+                    'checkout_time': row.checkout_time.strftime("%Y-%m-%d %H:%M:%S") if row.checkout_time else None,
+                    'status': '-' if row.status is None else row.status,
+                    'timestamp': row.attendance_date.strftime("%Y-%m-%d") if row.attendance_date else None,
+                    'lateintime': get_late_status(row, shift_start, shift_end),
+                    'flag': get_flag(row, session),
+                } for row in attendance_records
+            ]
+            return JsonResponse({'attendance': attendance_records}, safe=False, status=200)
+        except Exception as e:
+            print(f"Database query failed: {str(e)}")
+            return JsonResponse({"error": f"Database query failed: {str(e)}"}, status=500)
+        finally:
+            session.close()

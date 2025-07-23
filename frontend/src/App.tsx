@@ -38,6 +38,7 @@ import ChangePassword from "./pages/UserManagement/ChangePassword";
 import DetailedReport from "./pages/Attendance/DetailedReport";
 import TeamLevel from "./pages/Attendance/TeamLevel";
 import ShiftAttendance from "./pages/Attendance/ShiftAttendance";
+import ShiftHistory from "./pages/Attendance/ShiftHistory";
 export default function App() {
   return (
     <>
@@ -72,6 +73,10 @@ export default function App() {
               <Route
                 path="/attendance/shifts"
                 element={<ShiftAttendance />}
+              />
+              <Route
+                path="/attendance/shift-history"
+                element={<ShiftHistory />}
               />
               <Route
                 path="/attendance/status"
