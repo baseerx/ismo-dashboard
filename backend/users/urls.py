@@ -7,6 +7,7 @@ urlpatterns = [
     # Include the employees app URLs
     path('info/', EmployeesView.employees_summary),
     path('create_user/', UsersView.create_user),  # Include the create user URL
+    path('signup_user/', UsersView.signup_user),  # Include the signup user URL
     path('login/',UsersView.login_user),  # Include the login URL
     path('change-password/',UsersView.change_password),  # Include the change password URL
     path('get_auth_users/', UsersView.auth_users),  # Include the login URL

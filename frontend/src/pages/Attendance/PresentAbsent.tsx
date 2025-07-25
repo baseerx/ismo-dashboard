@@ -93,9 +93,20 @@ const capitalizeFirstLetter = (val:string) => {
         { accessorKey: "section", header: "Section" },
         { accessorKey: "grade", header: "Grade" },
         { accessorKey: "timestamp", header: "Timestamp" },
-        { accessorKey: "flag", header: "Present/Absent" }
-      
- 
+        {
+            accessorKey: "flag",
+            header: "Present/Absent",
+            cell: ({ getValue }) => {
+                const value = getValue<string>();
+                const color =
+                    value?.toLowerCase() === "absent"
+                        ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
+                        : value?.toLowerCase() === "present"
+                        ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
+                        : "";
+                return <span className={color}>{value}</span>;
+            },
+        },
     ];
 
     return (

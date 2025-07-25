@@ -12,6 +12,8 @@ from django.contrib.auth import authenticate
 from django.conf import settings
 import jwt
 from addtouser.models import CustomUser
+# Assuming you have an AssignRights model defined
+from assignrights.models import AssignRightsModel
 from datetime import date
 from addtouser.models import CustomUser  # Import CustomUser from another app named 'addtousers'
 from attendance.models import Attendance  # Import LeaveModel from another app named 'attendance'
@@ -69,6 +71,76 @@ class UsersView:
         profile_tbl=CustomUser.objects.create(
             authid=user.pk,
             erpid=erpid)
+        if profile_tbl is not None:
+            return JsonResponse({'success': True, 'user_id': user.pk, 'profile_id': profile_tbl.pk})
+        else:
+            user.delete()
+            return JsonResponse({'success': False, 'error': 'Failed to create user profile'}, status=500)
+    
+    @csrf_exempt
+    @require_POST
+    def signup_user(request):
+        data=json.loads(request.body.decode('utf-8'))
+        
+        username = data.get('username', '')
+        first_name = data.get('first_name', '')
+        last_name = data.get('last_name', '')
+        erpid = data.get('erpid', '')
+        email = data.get('email', '')
+        password = data.get('password', '')
+        verify_password = data.get('verify_password', '')
+        is_superuser = str(data.get('is_superuser', 'false')).lower() == 'true'
+        date_joined_str = data.get('date_joined', '')
+        date_joined = parse_date(
+            date_joined_str) if date_joined_str else datetime.date.today()
+        
+        if password != verify_password:
+            return JsonResponse({'success': False, 'error': 'Passwords do not match'}, status=400)
+
+        if not username or not password:
+            return JsonResponse({'success': False, 'error': 'Username and password are required'}, status=400)
+      
+        if User.objects.filter(username=username).exists():
+            return JsonResponse({'success': False, 'error': 'Username already exists'}, status=400)
+      
+        user = User.objects.create(
+            password=make_password(password),
+            last_login=None,
+            is_superuser=is_superuser,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            is_staff=1,
+            is_active=1,
+            date_joined=date_joined
+        )
+        
+        profile_tbl=CustomUser.objects.create(
+            authid=user.pk,
+            erpid=erpid)
+        
+        AssignRightsModel.objects.create(
+            user_id=user.pk,
+            main_menu=5,  # Assuming 5 is the main menu ID for 'Users'
+            sub_menu=3   # Assuming 3 is the sub menu ID for 'Create User'
+        )
+        AssignRightsModel.objects.create(
+            user_id=user.pk,
+            main_menu=8,  # Assuming 5 is the main menu ID for 'Users'
+            sub_menu=18   # Assuming 3 is the sub menu ID for 'Create User'
+        )
+        AssignRightsModel.objects.create(
+            user_id=user.pk,
+            main_menu=9,  # Assuming 5 is the main menu ID for 'Users'
+            sub_menu=12   # Assuming 3 is the sub menu ID for 'Create User'
+        )
+        AssignRightsModel.objects.create(
+            user_id=user.pk,
+            main_menu=9,  # Assuming 5 is the main menu ID for 'Users'
+            sub_menu=16   # Assuming 3 is the sub menu ID for 'Create User'
+        )
+        
         if profile_tbl is not None:
             return JsonResponse({'success': True, 'user_id': user.pk, 'profile_id': profile_tbl.pk})
         else:

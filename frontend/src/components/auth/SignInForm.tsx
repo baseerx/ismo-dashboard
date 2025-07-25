@@ -8,7 +8,7 @@ import Button from "../ui/button/Button";
 import { ToastContainer,toast } from "react-toastify";
 import axios from '../../api/axios';
 import { useAuth } from "../../context/AuthContext";
-
+import { Link } from "react-router-dom";
 export default function SignInForm() {
     const [isChecked, setIsChecked] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
@@ -137,7 +137,7 @@ export default function SignInForm() {
               </div>
             </form>
 
-            {/* <div className="mt-5">
+            <div className="mt-5">
               <p className="text-sm font-normal text-center text-gray-700 dark:text-gray-400 sm:text-start">
                 Don&apos;t have an account? {""}
                 <Link
@@ -147,7 +147,7 @@ export default function SignInForm() {
                   Sign Up
                 </Link>
               </p>
-            </div> */}
+            </div> 
             <ToastContainer position="bottom-right" />
           </div>
         </div>
