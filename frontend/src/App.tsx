@@ -45,6 +45,7 @@ import RccUpdateAttendance from "./pages/Attendance/RccUpdateAttendance";
 import NccUpdateAttendance from "./pages/Attendance/NccUpdateAttendance";
 import LeaveHistory from "./pages/Leaves/LeaveHistory";
 import IndividualLeaveReport from "./pages/Leaves/IndividualLeaveReport";
+import SectionLeaveReport from "./pages/Leaves/SectionLeave";
 export default function App() {
   return (
     <>
@@ -100,6 +101,10 @@ export default function App() {
               <Route
                 path="/leaves/official-work"
                 element={<OfficialWork />}
+              />
+              <Route
+                path="/leaves/section-leave-report"
+                element={<SectionLeaveReport />}
               />
               <Route
                 path="/leaves/leave-history"

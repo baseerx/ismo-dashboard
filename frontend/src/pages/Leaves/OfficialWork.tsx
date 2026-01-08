@@ -65,7 +65,14 @@ export default function OfficialWork() {
     approved_by: "",
     end_date: "",
   });
-  const approvedby = ["ED (HR)", "ED (MO)", "ED (SO)"];
+  const approvedby = [
+    "CEO ISMO",
+    "ED (HR) ISMO",
+    "ED (MO) ISMO",
+    "ED (SO) ISMO",
+    "SECTION HEAD",
+  ];
+
   const handleApproveLeave = async (id: string) => {
     const [leaveId, action] = id.split("-");
     try {
@@ -116,7 +123,8 @@ export default function OfficialWork() {
       console.error("Error fetching employee leaves:", error);
       toast.error("Failed to load employee leaves");
     }
-  };
+    };
+    
   const columns: ColumnDef<AttendanceRow>[] = [
     {
       header: "ERP ID",

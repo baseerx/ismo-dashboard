@@ -274,6 +274,106 @@ def individual_report(request):
     sessions.close()
     return JsonResponse({"attendance": result}, status=200)
 
+
+@csrf_exempt
+@require_POST
+def section_leave_report(request):
+    data = json.loads(request.body.decode("utf-8"))
+
+    section_id = data.get("section")          # REQUIRED
+    leave_type = data.get("leave_type")       # REQUIRED
+    start_date = data.get("start_date")       # REQUIRED
+    end_date = data.get("end_date")           # REQUIRED
+
+    if not all([section_id, leave_type, start_date, end_date]):
+        return JsonResponse(
+            {"error": "section, leave_type, start_date, end_date are required"},
+            status=400
+        )
+
+    start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+    session = SessionLocal()
+
+    # ----------------------------------------------------
+    # FETCH ALL ACTIVE EMPLOYEES OF SECTION
+    # ----------------------------------------------------
+    employees_query = text("""
+        SELECT
+            e.id AS employee_id,
+            e.erp_id,
+            e.name AS employee_name,
+            s.name AS section_name
+        FROM employees e
+        JOIN sections s ON e.section_id = s.id
+        WHERE e.flag = 1
+          AND e.section_id = :section_id
+    """)
+
+    employees = session.execute(
+        employees_query,
+        {"section_id": section_id}
+    ).fetchall()
+
+    result = []
+
+    # ----------------------------------------------------
+    # LOOP THROUGH EMPLOYEES
+    # ----------------------------------------------------
+    for emp in employees:
+        leave_count = 0
+
+        # -----------------------------------------------
+        # FETCH APPROVED LEAVES (TYPE + DATE RANGE)
+        # -----------------------------------------------
+        leaves_query = text("""
+            SELECT start_date, end_date
+            FROM leaves
+            WHERE erp_id = :erp_id
+              AND status = 'approved'
+              AND leave_type = :leave_type
+              AND start_date <= :end_date
+              AND end_date >= :start_date
+        """)
+
+        leaves = session.execute(
+            leaves_query,
+            {
+                "erp_id": emp.erp_id,
+                "leave_type": leave_type,
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+        ).fetchall()
+
+        # -----------------------------------------------
+        # CALCULATE OVERLAPPING DAYS
+        # -----------------------------------------------
+        for leave in leaves:
+            actual_start = max(leave.start_date, start_date)
+            actual_end = min(leave.end_date, end_date)
+            leave_count += (actual_end - actual_start).days + 1
+
+        # -----------------------------------------------
+        # APPEND RESULT
+        # -----------------------------------------------
+        result.append({
+            "employee_id": emp.employee_id,
+            "erp_id": emp.erp_id,
+            "employee_name": emp.employee_name,
+            "section": emp.section_name,
+            "leave_type": leave_type,
+            "leave_count": leave_count,
+            "start_date": start_date.strftime("%Y-%m-%d"),
+            "end_date": end_date.strftime("%Y-%m-%d"),
+        })
+
+    session.close()
+
+    return JsonResponse({"attendance": result}, status=200)
+
+
 @csrf_exempt
 @require_POST
 def create_leave_request(request):

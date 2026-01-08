@@ -54,8 +54,16 @@ export default function IndividualAttendance() {
     "Marriage Leave",
     "Paternity Leave",
     "Earned Leave",
+    ];
+    
+  const approvedby = [
+    "CEO ISMO",
+    "ED (HR) ISMO",
+    "ED (MO) ISMO",
+      "ED (SO) ISMO",
+    "SECTION HEAD",
   ];
-  const approvedby = ["ED (HR)", "ED (MO)", "ED (SO)"];
+
 
   useEffect(() => {
     fetchEmployeesOptions();
