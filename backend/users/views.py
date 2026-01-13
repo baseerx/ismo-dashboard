@@ -138,11 +138,11 @@ class UsersView:
             main_menu=5,  # Assuming 5 is the main menu ID for 'Users'
             sub_menu=3   # Assuming 3 is the sub menu ID for 'Create User'
         )
-        AssignRightsModel.objects.create(
-            user_id=user.pk,
-            main_menu=8,  # Assuming 5 is the main menu ID for 'Users'
-            sub_menu=18   # Assuming 3 is the sub menu ID for 'Create User'
-        )
+        # AssignRightsModel.objects.create(
+        #     user_id=user.pk,
+        #     main_menu=8,  # Assuming 5 is the main menu ID for 'Users'
+        #     sub_menu=18   # Assuming 3 is the sub menu ID for 'Create User'
+        # )
         AssignRightsModel.objects.create(
             user_id=user.pk,
             main_menu=9,  # Assuming 5 is the main menu ID for 'Users'

@@ -644,6 +644,101 @@ class AttendanceView:
             return JsonResponse(records, safe=False)
         finally:
             session.close()
+    
+    
+    @csrf_exempt
+    @require_POST
+    def attendance_individual_user(request):
+        data = json.loads(request.body)
+        fromdate = data.get('fromdate')
+        todate = data.get('todate')
+        erp_id = data.get('erp_id')
+
+        session = SessionLocal()
+        records = []
+        try:
+            query = text("""
+                SELECT
+                    e.erp_id AS erp_id,
+                    e.name AS name,
+                    d.title AS designation,
+                    g.name AS grade,
+                    s.name AS section,
+                    MAX(CASE WHEN a.status = 'Checked In' THEN a.lateintime END) AS lateintime,
+                    CAST(a.timestamp AS DATE) AS timestamp,
+                    MIN(CASE WHEN a.status = 'Checked In' THEN a.timestamp END) AS checkin_time,
+                    MAX(CASE WHEN a.status IN ('Checked Out', 'Early Checked Out') THEN a.timestamp END) AS checkout_time
+                FROM employees e
+                LEFT JOIN sections s ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN grades g ON g.id = e.grade_id
+                LEFT JOIN attendance a 
+                    ON e.hris_id = a.user_id 
+                    AND CAST(a.timestamp AS DATE) BETWEEN :fromdate AND :todate
+                WHERE e.flag = 1 
+                    AND e.erp_id = :erpid
+                GROUP BY 
+                    e.erp_id, 
+                    e.name, 
+                    d.title, 
+                    g.name, 
+                    s.name, 
+                    CAST(a.timestamp AS DATE)
+                ORDER BY timestamp
+            """)
+
+            result = session.execute(
+                query, {"fromdate": fromdate, "todate": todate, "erpid": erp_id})
+            rows = result.fetchall()
+          
+            for row in rows:
+                flag = 'Absent'
+                att_date = row.timestamp if row.timestamp else None
+                leave_result = session.execute(text("""
+                        SELECT leave_type FROM leaves
+                        WHERE erp_id = :erp_id
+                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                    """), {"erp_id": row.erp_id, "att_date": att_date}).first()
+                official_work = session.execute(text("""
+                                        SELECT leave_type FROM official_work_leaves
+                                        WHERE erp_id = :erp_id
+                                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                                    """), {"erp_id": row.erp_id, "att_date": att_date}).first()
+
+                if att_date is not None:
+                    flag = 'Present'
+                elif att_date:
+                    if leave_result:
+                        flag = leave_result.leave_type
+                    elif official_work:
+                        flag = official_work.leave_type
+                    else:
+                        holiday_result = session.execute(text("""
+                            SELECT name FROM public_holidays
+                            WHERE CAST(date AS DATE) = :att_date
+                        """), {"att_date": att_date}).first()
+                        if holiday_result:
+                            flag = holiday_result.name
+                        else:
+                            flag = 'Absent'
+
+                records.append({
+                    'erp_id': row.erp_id,
+                    'name': row.name,
+                    'designation': row.designation,
+                    'grade': row.grade,
+                    'section': row.section,
+                    'checkout_time': row.checkout_time if row.checkout_time is not None else '-',
+                    'checkin_time': row.checkin_time if row.checkin_time is not None else '-',
+                    'timestamp': row.timestamp if row.timestamp is not None else '-',
+                    'late': '-' if flag=='Absent' else flag,
+                    'lateintime': row.lateintime if row.lateintime is not None else '-',
+                })
+            return JsonResponse(records, safe=False)
+        finally:
+            session.close()
 
     @csrf_exempt
     @require_POST

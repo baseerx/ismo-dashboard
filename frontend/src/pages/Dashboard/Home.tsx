@@ -70,7 +70,7 @@ export default function Home() {
         />
       </div>
       <h2 className="text-lg font-semibold my-5 animate-pulse bg-gray-500 rounded-2xl px-2 py-2 shadow-2xl shadow-red-300 z-10 text-white float-right">
-        <Link to="/attendance/team-level">View Attendance</Link>
+        <Link to="/attendance/individual-user">View Attendance</Link>
       </h2>
       <div className="col-span-1 lg:col-span-2">
         <PieChart

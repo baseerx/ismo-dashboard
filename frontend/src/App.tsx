@@ -37,6 +37,7 @@ import OfficialWork from "./pages/Leaves/OfficialWork";
 import ChangePassword from "./pages/UserManagement/ChangePassword";
 import DetailedReport from "./pages/Attendance/DetailedReport";
 import TeamLevel from "./pages/Attendance/TeamLevel";
+import IndividualUser from "./pages/Attendance/IndividualUser";
 import ShiftAttendance from "./pages/Attendance/ShiftAttendance";
 import ShiftHistory from "./pages/Attendance/ShiftHistory";
 import RccShift from "./pages/Attendance/RccShift";
@@ -97,6 +98,10 @@ export default function App() {
               <Route
                 path="/attendance/team-level"
                 element={<TeamLevel />}
+              />
+              <Route
+                path="/attendance/individual-user"
+                element={<IndividualUser />}
               />
               <Route
                 path="/leaves/official-work"
