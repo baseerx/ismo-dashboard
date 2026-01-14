@@ -27,28 +27,11 @@ type AttendanceRow = {
     end_date?: string;
 };
 
-export default function IndividualLeaveReport() {
+export default function IndividualDetailLeaveReport() {
   const [IndividualLeaveReport, setIndividualLeaveReport] = useState<
     AttendanceRow[]
   >([]);
-  const leavetype = [
-    "Sick Leave",
-    "Casual Leave",
-    "Annual Leave",
-    "Maternity Leave",
-    "External Meeting",
-    "Official Work",
-    "Umrah Leave",
-    "Hajj Leave",
-    "Shift Leave",
-    "Rest & Recreational Leave",
-    "Compensatory Leave",
-    "Short Leave",
-    "Study Leave",
-    "Marriage Leave",
-    "Paternity Leave",
-    "Earned Leave",
-  ];
+
   const [employeeOptions, setEmployeeOptions] = useState<
     { label: string; value: string }[]
   >([]);
@@ -68,8 +51,8 @@ export default function IndividualLeaveReport() {
     });
   };
 const handleSubmit = async () => {
-    if (!data.section || !data.leave_type || !data.erp_id) {
-        toast.error("Please select a section, leave type, and employee");
+    if (!data.section || !data.erp_id) {
+        toast.error("Please select a section and employee");
         return;
     }
     
@@ -86,7 +69,10 @@ const handleSubmit = async () => {
     
     
     try {
-        const response = await axios.post("/leaves/individual-report/", updatedData);
+        const response = await axios.post(
+          "/leaves/individual-detail-report/",
+          updatedData
+        );
         setIndividualLeaveReport(response.data.attendance);
         toast.success("Leave applied successfully");
     } catch (error) {
@@ -113,14 +99,14 @@ const handleSubmit = async () => {
   const [data, setData] = useState<{
     erp_id: number;
     section: string;
-    leave_type: string;
+ 
     start_date: string;
     end_date: string;
    
   }>({
     erp_id: 0,
     section: "",
-    leave_type: "",
+
     start_date: "",
     end_date: "",});
 
@@ -230,24 +216,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
               />
             </div>
 
-            {/* Leave Type */}
-            <div className="w-full">
-              <Label>Leave Type</Label>
-              <Select
-                options={leavetype.map((type) => ({
-                  label: type,
-                  value: type,
-                }))}
-                placeholder="Select an option"
-                onChange={(value) =>
-                  setData({
-                    ...data,
-                    leave_type: value,
-                  })
-                }
-                className="dark:bg-dark-900"
-              />
-                      </div>
+
                       
                     <div className="w-full">
                         <Label>Year</Label>

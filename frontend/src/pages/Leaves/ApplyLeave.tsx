@@ -38,22 +38,26 @@ export default function IndividualAttendance() {
     []
   );
   const leavetype = [
-    "Sick Leave",
+    "Medical Leave",
     "Casual Leave",
     "Annual Leave",
-    "Maternity Leave",
+    "Maternity Leave First",
+    "Maternity Leave Second",
+    "Maternity Leave Third",
     "External Meeting",
     "Official Work",
     "Umrah Leave",
     "Hajj Leave",
     "Shift Leave",
-    "Rest & Recreational Leave",
+      "Rest & Recreational Leave",
+    "IDDAT Leave",
     "Compensatory Leave",
     "Short Leave",
     "Study Leave",
     "Marriage Leave",
     "Paternity Leave",
-    "Earned Leave",
+      "Earned Leave",
+    "Beareavement Leave",
     ];
     
   const approvedby = [
@@ -267,8 +271,15 @@ export default function IndividualAttendance() {
       }
 
       if (window.confirm("Are you sure you want to apply for this leave?")) {
-        const response = await axios.post("/leaves/apply/", data);
-        console.log("Leave application response:", response.data);
+          try {
+           const response = await axios.post("/leaves/apply/", data);
+              console.log("Leave application response:", response.data);
+          }
+          catch (error) {
+            console.error("Error applying for leave:", error);
+            toast.error("Failed to submit leave application, Either limit exceeded or leave limit not found");
+            return;
+          }
       } else {
         return;
       }

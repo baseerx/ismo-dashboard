@@ -47,6 +47,7 @@ import NccUpdateAttendance from "./pages/Attendance/NccUpdateAttendance";
 import LeaveHistory from "./pages/Leaves/LeaveHistory";
 import IndividualLeaveReport from "./pages/Leaves/IndividualLeaveReport";
 import SectionLeaveReport from "./pages/Leaves/SectionLeave";
+import IndividualDetailLeaveReport from "./pages/Leaves/IndividualDetailLeaveReport";
 export default function App() {
   return (
     <>
@@ -63,7 +64,10 @@ export default function App() {
               <Route path="/profile" element={<UserProfiles />} />
               <Route path="/calendar" element={<Calendar />} />
               <Route path="/blank" element={<Blank />} />
-              <Route path="/individual-leave-report" element={<IndividualLeaveReport />} />
+              <Route
+                path="/individual-leave-report"
+                element={<IndividualLeaveReport />}
+              />
 
               {/* Forms */}
               <Route path="/form-elements" element={<FormElements />} />
@@ -79,42 +83,28 @@ export default function App() {
                 path="/attendance/detailed-report"
                 element={<DetailedReport />}
               />
-              <Route
-                path="/attendance/shifts"
-                element={<ShiftAttendance />}
-              />
+              <Route path="/attendance/shifts" element={<ShiftAttendance />} />
               <Route
                 path="/attendance/shift-history"
                 element={<ShiftHistory />}
               />
-              <Route
-                path="/attendance/rcc-shift"
-                element={<RccShift />}
-              />
-              <Route
-                path="/attendance/status"
-                element={<PresentAbsent />}
-              />
-              <Route
-                path="/attendance/team-level"
-                element={<TeamLevel />}
-              />
+              <Route path="/attendance/rcc-shift" element={<RccShift />} />
+              <Route path="/attendance/status" element={<PresentAbsent />} />
+              <Route path="/attendance/team-level" element={<TeamLevel />} />
               <Route
                 path="/attendance/individual-user"
                 element={<IndividualUser />}
               />
+              <Route path="/leaves/official-work" element={<OfficialWork />} />
               <Route
-                path="/leaves/official-work"
-                element={<OfficialWork />}
+                path="/leaves/individual-leave-detail"
+                element={<IndividualDetailLeaveReport />}
               />
               <Route
                 path="/leaves/section-leave-report"
                 element={<SectionLeaveReport />}
               />
-              <Route
-                path="/leaves/leave-history"
-                element={<LeaveHistory />}
-              />
+              <Route path="/leaves/leave-history" element={<LeaveHistory />} />
               <Route
                 path="/attendance/individual"
                 element={<IndividualAttendance />}
@@ -127,7 +117,7 @@ export default function App() {
                 path="/attendance/ncc-update"
                 element={<NccUpdateAttendance />}
               />
-       
+
               <Route
                 path="/attendance/section"
                 element={<SectionAttendanceReport />}

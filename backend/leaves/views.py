@@ -149,12 +149,20 @@ def get_leaves_count(request):
 @require_POST
 def individual_report(request):
     data = json.loads(request.body.decode("utf-8"))
-
+    
     erpid = data.get("erp_id", 0)
     section = data.get("section")
     leave_type = data.get("leave_type")   # REQUIRED
     start_date = data.get("start_date")
     end_date = data.get("end_date")
+   
+    
+    # Validate required fields
+    if not all([section, leave_type, start_date, end_date]):
+        return JsonResponse(
+            {"error": "section, leave_type, start_date, and end_date are required"},
+            status=400
+        )
 
     # Convert dates to Python date objects
     start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
@@ -166,7 +174,7 @@ def individual_report(request):
     # FETCH EMPLOYEES
     # ----------------------------------------------------
     if erpid == 0:
-        query = text("""
+        query = text(""" 
             SELECT
                 e.id AS employee_id,
                 e.erp_id,
@@ -179,7 +187,7 @@ def individual_report(request):
         """)
         employees = sessions.execute(query, {"section": section}).fetchall()
     else:
-        query = text("""
+        query = text(""" 
             SELECT
                 e.id AS employee_id,
                 e.erp_id,
@@ -206,11 +214,11 @@ def individual_report(request):
         # ------------------------------------------------
         # FILTERED LEAVES (by type + date range)
         # ------------------------------------------------
-        leaves_query = text("""
+        leaves_query = text(""" 
             SELECT start_date, end_date
             FROM leaves
             WHERE erp_id = :erp_id
-              AND status = 'approved'
+              AND status IN ('approved', 'pending')
               AND leave_type = :leave_type
               AND start_date <= :end_date
               AND end_date >= :start_date
@@ -230,32 +238,31 @@ def individual_report(request):
             actual_start = max(leave.start_date, start_date)
             actual_end = min(leave.end_date, end_date)
             leave_count += (actual_end - actual_start).days + 1
-
+       
+        if leave_type.lower() == "casual leave":
+            print("Checking for RR leaves for emp:", emp.erp_id)
+            has_rr_leave = LeaveModel.objects.filter(
+                erp_id=emp.erp_id,
+                leave_type="Rest & Recreational Leave",
+                start_date__lte=end_date,
+                end_date__gte=start_date,
+                status__in=["approved", "pending"]
+            ).exists()
+            
+            if has_rr_leave:
+                leave_count += 10
         # ------------------------------------------------
-        # OFFICIAL WORK LEAVES (OPTIONAL – remove if not needed)
+        # GET TOTAL LEAVES COUNT
         # ------------------------------------------------
-        official_query = text("""
-            SELECT start_date, end_date
-            FROM official_work_leaves
-            WHERE erp_id = :erp_id
-              AND status = 'approved'
-              AND start_date <= :end_date
-              AND end_date >= :start_date
+        total_leaves_query = text(""" 
+            SELECT total_leaves
+            FROM leave_type_counts
+            WHERE leave_type = :leave_type
         """)
+        total_leaves_row = sessions.execute(total_leaves_query, {"leave_type": leave_type}).fetchone()
+        total_leaves = total_leaves_row[0] if total_leaves_row is not None else None
 
-        official_leaves = sessions.execute(
-            official_query,
-            {
-                "erp_id": emp.erp_id,
-                "start_date": start_date,
-                "end_date": end_date,
-            },
-        ).fetchall()
-
-        for leave in official_leaves:
-            actual_start = max(leave.start_date, start_date)
-            actual_end = min(leave.end_date, end_date)
-            leave_count += (actual_end - actual_start).days + 1
+        remaining_leaves = total_leaves - leave_count if total_leaves is not None else None
 
         # ------------------------------------------------
         # RESPONSE
@@ -267,6 +274,139 @@ def individual_report(request):
             "section": emp.section_name,
             "leave_type": leave_type,
             "leave_count": leave_count,
+            "remaining_leaves": remaining_leaves,
+            "start_date": start_date.strftime("%d-%m-%Y"),
+            "end_date": end_date.strftime("%d-%m-%Y"),
+        })
+
+    sessions.close()
+    return JsonResponse({"attendance": result}, status=200)
+
+@csrf_exempt
+@require_POST
+def individual_detail_report(request):
+    data = json.loads(request.body.decode("utf-8"))
+    
+    erpid = data.get("erp_id", 0)
+    section = data.get("section")
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+   
+    # Validate required fields
+    if not all([section, start_date, end_date]):
+        return JsonResponse(
+            {"error": "section, start_date, and end_date are required"},
+            status=400
+        )
+
+    # Convert dates to Python date objects
+    start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+    sessions = SessionLocal()
+
+    # Fetch employee
+    if erpid == 0:
+        query = text(""" 
+            SELECT e.id, e.erp_id, e.name, s.name
+            FROM employees e
+            LEFT JOIN sections s ON e.section_id = s.id
+            WHERE e.flag = 1 AND e.section_id = :section
+        """)
+        emp = sessions.execute(query, {"section": section}).fetchone()
+    else:
+        query = text(""" 
+            SELECT e.id, e.erp_id, e.name, s.name
+            FROM employees e
+            LEFT JOIN sections s ON e.section_id = s.id
+            WHERE e.flag = 1 AND e.section_id = :section AND e.erp_id = :erp_id
+        """)
+        emp = sessions.execute(query, {"section": section, "erp_id": erpid}).fetchone()
+
+    if not emp:
+        sessions.close()
+        return JsonResponse({"error": "Employee not found"}, status=404)
+
+    # Get all leave types for this employee in date range
+    leaves_query = text(""" 
+        SELECT DISTINCT leave_type
+        FROM leaves
+        WHERE erp_id = :erp_id
+          AND status IN ('approved', 'pending')
+          AND start_date <= :end_date
+          AND end_date >= :start_date
+    """)
+    leave_types = sessions.execute(
+        leaves_query,
+        {"erp_id": emp[1], "start_date": start_date, "end_date": end_date}
+    ).fetchall()
+
+    result = []
+
+    # Process each leave type
+    for lt_row in leave_types:
+        leave_type = lt_row[0]
+        leave_count = 0
+
+        # Fetch leaves for this type
+        filtered_leaves_query = text(""" 
+            SELECT start_date, end_date
+            FROM leaves
+            WHERE erp_id = :erp_id
+              AND status IN ('approved', 'pending')
+              AND leave_type = :leave_type
+              AND start_date <= :end_date
+              AND end_date >= :start_date
+        """)
+
+        leaves = sessions.execute(
+            filtered_leaves_query,
+            {
+                "erp_id": emp[1],
+                "leave_type": leave_type,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        ).fetchall()
+
+        for leave in leaves:
+            actual_start = max(leave[0], start_date)
+            actual_end = min(leave[1], end_date)
+            leave_count += (actual_end - actual_start).days + 1
+
+        # Add 10 days to casual leave if RR leave exists
+        if leave_type.lower() == "casual leave":
+            has_rr_leave = LeaveModel.objects.filter(
+                erp_id=emp[1],
+                leave_type="Rest & Recreational Leave",
+                start_date__lte=end_date,
+                end_date__gte=start_date,
+                status__in=["approved", "pending"]
+            ).exists()
+            
+            if has_rr_leave:
+                leave_count += 10
+
+        # Get total leaves for this type
+        total_leaves_query = text(""" 
+            SELECT total_leaves
+            FROM leave_type_counts
+            WHERE leave_type = :leave_type
+        """)
+        total_leaves_row = sessions.execute(
+            total_leaves_query, {"leave_type": leave_type}
+        ).fetchone()
+        total_leaves = total_leaves_row[0] if total_leaves_row else None
+        remaining_leaves = total_leaves - leave_count if total_leaves else None
+
+        result.append({
+            "employee_id": emp[0],
+            "erp_id": emp[1],
+            "employee_name": emp[2],
+            "section": emp[3],
+            "leave_type": leave_type,
+            "leave_count": leave_count,
+            "remaining_leaves": remaining_leaves,
             "start_date": start_date.strftime("%d-%m-%Y"),
             "end_date": end_date.strftime("%d-%m-%Y"),
         })
@@ -279,7 +419,7 @@ def individual_report(request):
 @require_POST
 def section_leave_report(request):
     data = json.loads(request.body.decode("utf-8"))
-
+    print(data)
     section_id = data.get("section")          # REQUIRED
     leave_type = data.get("leave_type")       # REQUIRED
     start_date = data.get("start_date")       # REQUIRED

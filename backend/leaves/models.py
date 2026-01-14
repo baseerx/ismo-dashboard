@@ -16,3 +16,10 @@ class LeaveModel(models.Model):
 
     class Meta:
         db_table = 'leaves'
+
+class LeaveTypeCountModel(models.Model):
+    leave_type = models.CharField(max_length=50, null=True, blank=True)
+    total_leaves = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = 'leave_type_counts'
