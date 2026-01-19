@@ -58,8 +58,8 @@ const handleSubmit = async () => {
     
     const startYear = parseInt(year);
     const endYear = startYear + 1;
-    const startDate = `${startYear}-06-01`;
-    const endDate = `${endYear}-07-31`;
+    const startDate = `${startYear}-07-01`;
+    const endDate = `${endYear}-06-30`;
     
     const updatedData = {
         ...data,

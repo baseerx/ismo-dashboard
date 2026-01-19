@@ -27,28 +27,11 @@ type AttendanceRow = {
     end_date?: string;
 };
 
-export default function IndividualLeaveReport() {
+export default function EachLeaveDetail() {
   const [IndividualLeaveReport, setIndividualLeaveReport] = useState<
     AttendanceRow[]
   >([]);
-  const leavetype = [
-    "Medical Leave",
-    "Casual Leave",
-    "Annual Leave",
-    "Maternity Leave",
-    "External Meeting",
-    "Official Work",
-    "Umrah Leave",
-    "Hajj Leave",
-    "Shift Leave",
-    "Rest & Recreational Leave",
-    "Compensatory Leave",
-    "Short Leave",
-    "Study Leave",
-    "Marriage Leave",
-    "Paternity Leave",
-    "Earned Leave",
-  ];
+
   const [employeeOptions, setEmployeeOptions] = useState<
     { label: string; value: string }[]
   >([]);
@@ -68,8 +51,8 @@ export default function IndividualLeaveReport() {
     });
   };
 const handleSubmit = async () => {
-    if (!data.section || !data.leave_type || !data.erp_id) {
-        toast.error("Please select a section, leave type, and employee");
+    if (!data.section || !data.erp_id) {
+        toast.error("Please select a section and employee");
         return;
     }
     
@@ -77,23 +60,25 @@ const handleSubmit = async () => {
     const endYear = startYear + 1;
     const startDate = `${startYear}-07-01`;
     const endDate = `${endYear}-06-30`;
-
+    
     const updatedData = {
         ...data,
         start_date: startDate,
         end_date: endDate,
     };
     
-    console.log("Submitting data:", updatedData);
-    
     
     try {
-        const response = await axios.post("/leaves/individual-report/", updatedData);
+        const response = await axios.post(
+          "/leaves/leavetype-detail-report/",
+          updatedData
+        );
         setIndividualLeaveReport(response.data.attendance);
-        toast.success("Leave applied successfully");
+        
+        toast.success("Report fetched successfully");
     } catch (error) {
         console.error("Error applying leave:", error);
-        toast.error("Failed to apply leave");
+        toast.error("Failed to fetch report data");
     }
 };
 
@@ -115,17 +100,36 @@ const handleSubmit = async () => {
   const [data, setData] = useState<{
     erp_id: number;
     section: string;
-    leave_type: string;
+    leavetype?: string;
     start_date: string;
     end_date: string;
    
   }>({
     erp_id: 0,
     section: "",
-    leave_type: "",
+    leavetype: "",
     start_date: "",
     end_date: "",});
 
+  const leavetype = [
+    "Medical Leave",
+    "Casual Leave",
+    "Annual Leave",
+    "Maternity Leave",
+    "External Meeting",
+    "Official Work",
+    "Umrah Leave",
+    "Hajj Leave",
+    "Shift Leave",
+    "Rest & Recreational Leave",
+    "Compensatory Leave",
+    "Short Leave",
+    "Study Leave",
+    "Marriage Leave",
+    "Paternity Leave",
+    "Earned Leave",
+  ];
+    
 const columns: ColumnDef<AttendanceRow>[] = [
     {
         header: "ERP ID",
@@ -161,16 +165,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
             return <span className={color}>{value ?? 0}</span>;
         },
     },
-    {
-        header: "Remaining Leaves",
-        accessorKey: "remaining_leaves",
-        cell: ({ getValue }) => {
-            const value = getValue<number>();
-            const color =
-                "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-500";
-            return <span className={color}>{value ?? 0}</span>;
-        },
-    },
+
 ];
 
   const fetchEmployeesOptions = async () => {
@@ -190,12 +185,12 @@ const columns: ColumnDef<AttendanceRow>[] = [
   return (
     <>
       <PageMeta
-        title="ISMO - Attendance History"
-        description="ISMO Admin Dashboard - Attendance History"
+        title="ISMO - Leave Type Detail Report"
+        description="ISMO Admin Dashboard - Leave Type Detail Report"
       />
-      <PageBreadcrumb pageTitle="Attendance History" />
+      <PageBreadcrumb pageTitle="Leave Type Detail Report" />
       <div className="space-y-6">
-        <ComponentCard title={`Individual Leave Report`}>
+        <ComponentCard title={`Leave Type Detail Report`}>
           <ToastContainer position="bottom-right" />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 mb-4 gap-1 justify-center items-center">
@@ -232,8 +227,8 @@ const columns: ColumnDef<AttendanceRow>[] = [
               />
             </div>
 
-            {/* Leave Type */}
-            <div className="w-full">
+
+                               <div className="w-full">
               <Label>Leave Type</Label>
               <Select
                 options={leavetype.map((type) => ({
@@ -244,13 +239,12 @@ const columns: ColumnDef<AttendanceRow>[] = [
                 onChange={(value) =>
                   setData({
                     ...data,
-                    leave_type: value,
+                    leavetype: value,
                   })
                 }
                 className="dark:bg-dark-900"
               />
                       </div>
-                      
                     <div className="w-full">
                         <Label>Year</Label>
                         <Select

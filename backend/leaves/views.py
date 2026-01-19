@@ -1,12 +1,12 @@
 from django.shortcuts import render
 from django.http import JsonResponse
-from .models import LeaveModel
+from .models import LeaveModel, LeaveTypeCountModel
 from django.views.decorators.http import require_GET,require_POST
 from django.views.decorators.csrf import csrf_exempt
 import json
 from sqlalchemy import text
 from db import SessionLocal
-from datetime import datetime
+from datetime import datetime,date
 # Create your views here.
 
 @require_GET
@@ -417,6 +417,98 @@ def individual_detail_report(request):
 
 @csrf_exempt
 @require_POST
+def leavetype_detail_report(request):
+    data = json.loads(request.body.decode("utf-8"))
+    
+    erp_id = data.get("erp_id", 0)
+    section = data.get("section")
+    leave_type = data.get("leavetype")
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    print(data)
+    # Validate required fields
+    if not all([section, leave_type, start_date, end_date]):
+        return JsonResponse(
+            {"error": "section, leave_type, start_date, and end_date are required"},
+            status=400
+        )
+
+    # Convert dates to Python date objects
+    start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+    sessions = SessionLocal()
+
+    # Fetch employees
+    if erp_id == 0:
+        query = text(""" 
+            SELECT e.id, e.erp_id, e.name, s.name
+            FROM employees e
+            LEFT JOIN sections s ON e.section_id = s.id
+            WHERE e.flag = 1 AND e.section_id = :section
+        """)
+        employees = sessions.execute(query, {"section": section}).fetchall()
+    else:
+        query = text(""" 
+            SELECT e.id, e.erp_id, e.name, s.name
+            FROM employees e
+            LEFT JOIN sections s ON e.section_id = s.id
+            WHERE e.flag = 1 AND e.section_id = :section AND e.erp_id = :erp_id
+        """)
+        employees = sessions.execute(query, {"section": section, "erp_id": erp_id}).fetchall()
+
+    if not employees:
+        sessions.close()
+        return JsonResponse({"error": "Employee not found"}, status=404)
+
+    result = []
+
+    # Process each employee
+    for emp in employees:
+        # Get all leaves of specific type for this employee in date range
+        leaves_query = text(""" 
+            SELECT id, start_date, end_date, reason, status
+            FROM leaves
+            WHERE erp_id = :erp_id
+              AND leave_type = :leave_type
+              AND status IN ('approved', 'pending')
+              AND start_date <= :end_date
+              AND end_date >= :start_date
+            ORDER BY start_date ASC
+        """)
+        
+        leaves = sessions.execute(
+            leaves_query,
+            {
+                "erp_id": emp[1], 
+                "leave_type": leave_type,
+                "start_date": start_date, 
+                "end_date": end_date
+            }
+        ).fetchall()
+
+        # Process each leave record
+        for leave in leaves:
+            actual_start = max(leave[1], start_date)
+            actual_end = min(leave[2], end_date)
+            leave_count = (actual_end - actual_start).days + 1
+
+            result.append({
+                "erp_id": emp[1],
+                "employee_name": emp[2],
+                "section": emp[3],
+                "start_date": leave[1].strftime("%Y-%m-%d"),
+                "end_date": leave[2].strftime("%Y-%m-%d"),
+                "leave_type": leave_type,
+                "leave_count": leave_count
+            })
+
+    sessions.close()
+    return JsonResponse({"attendance": result}, status=200)
+
+
+@csrf_exempt
+@require_POST
 def section_leave_report(request):
     data = json.loads(request.body.decode("utf-8"))
     print(data)
@@ -517,21 +609,165 @@ def section_leave_report(request):
 @csrf_exempt
 @require_POST
 def create_leave_request(request):
-    data = json.loads(request.body.decode('utf-8'))
-   
-    leave = LeaveModel.objects.create(
-        erp_id=data.get("erp_id", 0),
-        employee_id=data.get("employee_id", 0),
-        head_erpid=data.get("head", 0),
-        leave_type=data.get("leave_type", ""),
-        reason=data.get("reason", ""),
-        status=data.get("status", ""),
-        approved_by=data.get("approved_by", ""),
-        start_date=data.get("start_date"),
-        end_date=data.get("end_date"),
-    )
-    
-    return JsonResponse({"message": "Leave request created successfully", "id": leave.pk})
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+
+        erp_id = data.get("erp_id")
+        employee_id = data.get("employee_id")
+        leave_type = data.get("leave_type")
+        start_date = data.get("start_date")
+        end_date = data.get("end_date")
+
+        # --------------------------------------------------
+        # REQUIRED FIELDS CHECK
+        # --------------------------------------------------
+        if not all([erp_id, employee_id, leave_type, start_date, end_date]):
+            return JsonResponse(
+                {"error": "erp_id, employee_id, leave_type, start_date and end_date are required"},
+                status=400
+            )
+
+        # --------------------------------------------------
+        # DATE PARSING
+        # --------------------------------------------------
+        try:
+            start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            return JsonResponse(
+                {"error": "Invalid date format. Use YYYY-MM-DD"},
+                status=400
+            )
+
+        if start_date > end_date:
+            return JsonResponse(
+                {"error": "start_date cannot be greater than end_date"},
+                status=400
+            )
+
+        requested_days = (end_date - start_date).days + 1
+
+        # --------------------------------------------------
+        # FINANCIAL YEAR CALCULATION
+        # FY = 1 July (year) → 30 June (next year)
+        # --------------------------------------------------
+        fy_start = date(start_date.year, 7, 1)
+        fy_end = date(start_date.year + 1, 6, 30)
+
+        # Ensure leave does not cross financial year
+        if end_date > fy_end:
+            return JsonResponse(
+                {
+                    "error": "Leave request cannot exceed financial year",
+                    "financial_year_start": fy_start,
+                    "financial_year_end": fy_end,
+                },
+                status=400
+            )
+
+        # --------------------------------------------------
+        # FETCH TOTAL ALLOWED LEAVES
+        # --------------------------------------------------
+        leave_limit = LeaveTypeCountModel.objects.filter(
+            leave_type=leave_type
+        ).first()
+
+        if not leave_limit:
+            return JsonResponse(
+                {"error": f"No leave balance defined for {leave_type}"},
+                status=400
+            )
+
+        total_allowed = leave_limit.total_leaves
+
+        # --------------------------------------------------
+        # CALCULATE USED LEAVES (WITHIN FINANCIAL YEAR)
+        # --------------------------------------------------
+        used_leaves = LeaveModel.objects.filter(
+            erp_id=erp_id,
+            leave_type=leave_type,
+            status__in=["approved", "pending"],
+            start_date__lte=fy_end,
+            end_date__gte=fy_start,
+        )
+
+        used_days = 0
+        for leave in used_leaves:
+            if leave.start_date and leave.end_date:
+                actual_start = max(leave.start_date, fy_start)
+                actual_end = min(leave.end_date, fy_end)
+                used_days += (actual_end - actual_start).days + 1
+
+        # --------------------------------------------------
+        # CASUAL LEAVE RULE (RR = +10 DAYS)
+        # --------------------------------------------------
+        if leave_type.lower() == "casual leave":
+            has_rr_leave = LeaveModel.objects.filter(
+                erp_id=erp_id,
+                leave_type="Rest & Recreational Leave",
+                status__in=["approved", "pending"],
+                start_date__lte=fy_end,
+                end_date__gte=fy_start,
+            ).exists()
+
+            if has_rr_leave:
+                used_days += 10
+
+        # --------------------------------------------------
+        # FINAL BALANCE CHECK (FY-BASED)
+        # --------------------------------------------------
+        remaining_leaves = total_allowed - used_days
+
+        if remaining_leaves <= 0 and leave_type.lower() != "short leave":
+            return JsonResponse(
+                {
+                    "error": "No leaves available in account for current financial year",
+                    "financial_year": f"{fy_start} to {fy_end}",
+                    "used_leaves": used_days,
+                    "total_allowed": total_allowed,
+                },
+                status=400
+            )
+
+        if requested_days > remaining_leaves and leave_type.lower() != "short leave":
+            return JsonResponse(
+                {
+                    "error": "Insufficient leave balance for current financial year",
+                    "requested_days": requested_days,
+                    "remaining_leaves": remaining_leaves,
+                },
+                status=400
+            )
+
+        # --------------------------------------------------
+        # CREATE LEAVE REQUEST, Entry made by is erp id of logged in user
+        # --------------------------------------------------
+        leave = LeaveModel.objects.create(
+            erp_id=erp_id,
+            employee_id=employee_id,
+            head_erpid=data.get("head", 0),
+            entry_made_by=data.get("entry_made_by", 0),
+            leave_type=leave_type,
+            reason=data.get("reason", ""),
+            total_days=requested_days,
+            status=data.get("status", "pending"),
+            approved_by=data.get("approved_by", ""),
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        return JsonResponse(
+            {
+                "message": "Leave request created successfully",
+                "leave_id": leave.pk,
+                "financial_year": f"{fy_start} to {fy_end}",
+                "remaining_leaves": remaining_leaves - requested_days,
+            },
+            status=201
+        )
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
 
 @csrf_exempt
 @require_POST

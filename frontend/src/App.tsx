@@ -48,6 +48,7 @@ import LeaveHistory from "./pages/Leaves/LeaveHistory";
 import IndividualLeaveReport from "./pages/Leaves/IndividualLeaveReport";
 import SectionLeaveReport from "./pages/Leaves/SectionLeave";
 import IndividualDetailLeaveReport from "./pages/Leaves/IndividualDetailLeaveReport";
+import EachLeaveDetail from "./pages/Leaves/EachLeaveDetail";
 export default function App() {
   return (
     <>
@@ -99,6 +100,10 @@ export default function App() {
               <Route
                 path="/leaves/individual-leave-detail"
                 element={<IndividualDetailLeaveReport />}
+              />
+              <Route
+                path="/leaves/leavetype-detail"
+                element={<EachLeaveDetail />}
               />
               <Route
                 path="/leaves/section-leave-report"

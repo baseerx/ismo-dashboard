@@ -9,8 +9,10 @@ class LeaveModel(models.Model):
     leave_type = models.CharField(max_length=50, null=True, blank=True)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
+    total_days = models.IntegerField(default=0)
     reason = models.TextField(null=True, blank=True)
     approved_by = models.TextField(null=True, blank=True)
+    entry_made_by = models.IntegerField(default=0)
     status = models.CharField(max_length=20, default='pending')  # e.g., Pending, Approved, Rejected
     created_at = models.DateTimeField(default=timezone.now)
 

@@ -18,7 +18,8 @@ import TextArea from "../../components/form/input/TextArea";
 type AttendanceRow = {
   id?: number;
   employee_id: any;
-  erp_id: any;
+    erp_id: any;
+  entry_made_by?: any;
   leave_type: string;
   start_date: string;
   end_date: string;
@@ -101,6 +102,7 @@ export default function IndividualAttendance() {
   const [data, setData] = useState<AttendanceRow>({
     erp_id: 0,
     employee_id: 0,
+    entry_made_by: user.erpid,
     leave_type: "",
     reason: "",
     status: user.grade_id >= 9 ? "approved" : "pending",
@@ -272,12 +274,12 @@ export default function IndividualAttendance() {
 
       if (window.confirm("Are you sure you want to apply for this leave?")) {
           try {
-           const response = await axios.post("/leaves/apply/", data);
-              console.log("Leave application response:", response.data);
-          }
-          catch (error) {
+            const response = await axios.post("/leaves/apply/", data);
+            console.log("Leave application response:", response.data);
+          } catch (error:any) {
+            const errorMessage = error.response?.data?.error || "Failed to submit leave application, Either limit exceeded or leave limit not found";
             console.error("Error applying for leave:", error);
-            toast.error("Failed to submit leave application, Either limit exceeded or leave limit not found");
+            toast.error(errorMessage);
             return;
           }
       } else {
