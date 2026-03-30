@@ -11,6 +11,7 @@ import Label from "../../components/form/Label";
 import Select from "../../components/form/Select";
 import Input from "../../components/form/input/InputField";
 import Radio from "../../components/form/input/Radio";
+import { useAuth } from "../../context/AuthContext";
 
 
 // ----------------------------
@@ -55,7 +56,8 @@ type Designation = { id: number; title: string };
 
 export default function AddEmployee() {
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
-
+  const { user } = useAuth();
+  console.log("Current User:", user);
   // details state
   const [sections, setSections] = useState<Section[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -103,7 +105,7 @@ export default function AddEmployee() {
   // ----------------------------
   const getEmployees = async () => {
     try {
-        const response = await axios.get("/users/get_employees/");
+      const response = await axios.get("/users/get_employees/");
       if (response.data) {
         // The API returns nested objects for section, location, grade, and designation.
         // We need to flatten them to just their IDs for the table and form.
@@ -136,8 +138,8 @@ export default function AddEmployee() {
   // ----------------------------
   const getDetails = async () => {
     try {
-        const response = await axios.get("/users/details/");
-        
+      const response = await axios.get("/users/details/");
+
       if (response.data) {
         setSections(response.data.sections || []);
         setLocations(response.data.locations || []);
@@ -160,12 +162,14 @@ export default function AddEmployee() {
   // ----------------------------
   const handleDeleteEmployee = async (employeeId: number) => {
     try {
-      await axios.post(`/users/delete_employee/${employeeId}/`);
-      toast.success("Employee deleted successfully");
-      getEmployees();
+      if (window.confirm("Are you sure you want to change the status (inactive) of this employee?")) {
+        await axios.post(`/users/delete_employee/${employeeId}/`);
+        toast.success("Employee Status changed successfully");
+        getEmployees();
+      }
     } catch (error) {
-      console.error("Error deleting employee:", error);
-      toast.error("Failed to delete employee");
+      console.error("Error changing status employee:", error);
+      toast.error("Failed to change employee status");
     }
   };
 
@@ -219,7 +223,7 @@ export default function AddEmployee() {
     } catch (error) {
       toast.error(
         "Failed to create employee:" +
-          (error instanceof Error ? error.message : "Unknown error")
+        (error instanceof Error ? error.message : "Unknown error")
       );
     }
   };
@@ -227,7 +231,7 @@ export default function AddEmployee() {
   // ----------------------------
   // Table columns
   // ----------------------------
-const columns: ColumnDef<EmployeeRow>[] = [
+  const columns: ColumnDef<EmployeeRow>[] = [
     { header: "ID", accessorKey: "id" },
     { header: "ERP ID", accessorKey: "erp_id" },
     { header: "HRIS ID", accessorKey: "hris_id" },
@@ -235,57 +239,67 @@ const columns: ColumnDef<EmployeeRow>[] = [
     { header: "CNIC", accessorKey: "cnic" },
     { header: "Gender", accessorKey: "gender" },
     {
-        header: "Section",
-        accessorKey: "section_id",
-        cell: ({ getValue }) => {
-            const id = getValue<string>();
-            return sections.find((s) => String(s.id) === id)?.name || id;
-        },
+      header: "Section",
+      accessorKey: "section_id",
+      cell: ({ getValue }) => {
+        const id = getValue<string>();
+        return sections.find((s) => String(s.id) === id)?.name || id;
+      },
     },
     {
-        header: "Location",
-        accessorKey: "location_id",
-        cell: ({ getValue }) => {
-            const id = getValue<string>();
-            return locations.find((l) => String(l.id) === id)?.name || id;
-        },
+      header: "Location",
+      accessorKey: "location_id",
+      cell: ({ getValue }) => {
+        const id = getValue<string>();
+        return locations.find((l) => String(l.id) === id)?.name || id;
+      },
     },
     {
-        header: "Grade",
-        accessorKey: "grade_id",
-        cell: ({ getValue }) => {
-            const id = getValue<string>();
-            return grades.find((g) => String(g.id) === id)?.name || id;
-        },
+      header: "Grade",
+      accessorKey: "grade_id",
+      cell: ({ getValue }) => {
+        const id = getValue<string>();
+        return grades.find((g) => String(g.id) === id)?.name || id;
+      },
     },
     {
-        header: "Designation",
-        accessorKey: "designation_id",
-        cell: ({ getValue }) => {
-            const id = getValue<string>();
-            return designations.find((d) => String(d.id) === id)?.title || id;
-        },
+      header: "Designation",
+      accessorKey: "designation_id",
+      cell: ({ getValue }) => {
+        const id = getValue<string>();
+        return designations.find((d) => String(d.id) === id)?.title || id;
+      },
     },
     { header: "Position", accessorKey: "position" },
     {
-        header: "Flag",
-        accessorKey: "flag",
-        cell: ({ getValue }) => (getValue<boolean>() ? "Active" : "Inactive"),
+      header: "Flag",
+      accessorKey: "flag",
+      cell: ({ getValue }) => (getValue<boolean>() ? "Active" : "Inactive"),
     },
     {
-        header: "Actions",
-        id: "actions",
-        cell: ({ row }) => (
-            <Button
-                size="xs"
-                variant="danger"
-                onClick={() => handleDeleteEmployee(row.original.id || 0)}
-            >
-                Delete
-            </Button>
-        ),
+      header: "Actions",
+      id: "actions",
+      cell: ({ row }) => (
+        user?.user_id === 3 && (row.original?.flag === true ?
+          <Button
+            size="xs"
+            variant="danger"
+            onClick={() => handleDeleteEmployee(row.original.id || 0)}
+          >
+            Disable
+          </Button>
+          :
+          <Button
+            size="xs"
+            variant="primary"
+            onClick={() => handleDeleteEmployee(row.original.id || 0)}
+          >
+            Enable
+          </Button>
+        )
+      ),
     },
-];
+  ];
 
   // ----------------------------
   // UI

@@ -286,15 +286,16 @@ export default function IndividualAttendance() {
         return;
       }
 
-      //   setData({
-      //     erp_id: 0,
-      //     employee_id: 0,
-      //     leave_type: "",
-      //     reason: "",
-      //     status: "",
-      //     start_date: moment().format("YYYY-MM-DD").toString(),
-      //     end_date: moment().format("YYYY-MM-DD").toString(),
-      //   });
+        setData({
+          erp_id: 0,
+          employee_id: 0,
+          leave_type: "",
+          reason: "",
+          status: "",
+          start_date: moment().format("YYYY-MM-DD").toString(),
+          end_date: moment().format("YYYY-MM-DD").toString(),
+        });
+        
       getEmployeesLeaves();
       toast.success("Leave application submitted successfully");
     } catch (error) {

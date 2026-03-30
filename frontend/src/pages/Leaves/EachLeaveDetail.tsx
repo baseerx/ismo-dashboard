@@ -15,16 +15,16 @@ import moment from "moment";
 // import DatePicker from "../../components/form/date-picker";
 
 type AttendanceRow = {
-    id?: number;
-    employee_id: any;
-    employee_name?: string;
-    section: string;
-    erp_id: any;
-    leave_type?: string;
-    leave_count?: number;
-    remaining_leaves?: number;
-    start_date?: string;
-    end_date?: string;
+  id?: number;
+  employee_id: any;
+  employee_name?: string;
+  section: string;
+  erp_id: any;
+  leave_type?: string;
+  leave_count?: number;
+  remaining_leaves?: number;
+  start_date?: string;
+  end_date?: string;
 };
 
 export default function EachLeaveDetail() {
@@ -38,7 +38,7 @@ export default function EachLeaveDetail() {
   const [sectionOptions, setSectionOptions] = useState<
     { label: string; value: string }[]
   >([]);
-   const [year, setYear] = useState<string>(moment().format("YYYY"));
+  const [year, setYear] = useState<string>(moment().format("YYYY"));
   useEffect(() => {
     fetchEmployeesOptions();
     getSectionsData();
@@ -50,37 +50,36 @@ export default function EachLeaveDetail() {
       section: value,
     });
   };
-const handleSubmit = async () => {
+  const handleSubmit = async () => {
     if (!data.section || !data.erp_id) {
-        toast.error("Please select a section and employee");
-        return;
+      toast.error("Please select a section and employee");
+      return;
     }
-    
+
     const startYear = parseInt(year);
     const endYear = startYear + 1;
     const startDate = `${startYear}-07-01`;
     const endDate = `${endYear}-06-30`;
-    
+
     const updatedData = {
-        ...data,
-        start_date: startDate,
-        end_date: endDate,
+      ...data,
+      start_date: startDate,
+      end_date: endDate,
     };
-    
-    
+
     try {
-        const response = await axios.post(
-          "/leaves/leavetype-detail-report/",
-          updatedData
-        );
-        setIndividualLeaveReport(response.data.attendance);
-        
-        toast.success("Report fetched successfully");
+      const response = await axios.post(
+        "/leaves/leavetype-detail-report/",
+        updatedData
+      );
+      setIndividualLeaveReport(response.data.attendance);
+
+      toast.success("Report fetched successfully");
     } catch (error) {
-        console.error("Error applying leave:", error);
-        toast.error("Failed to fetch report data");
+      console.error("Error applying leave:", error);
+      toast.error("Failed to fetch report data");
     }
-};
+  };
 
   const getSectionsData = async () => {
     try {
@@ -103,13 +102,13 @@ const handleSubmit = async () => {
     leavetype?: string;
     start_date: string;
     end_date: string;
-   
   }>({
     erp_id: 0,
     section: "",
     leavetype: "",
     start_date: "",
-    end_date: "",});
+    end_date: "",
+  });
 
   const leavetype = [
     "Medical Leave",
@@ -129,44 +128,43 @@ const handleSubmit = async () => {
     "Paternity Leave",
     "Earned Leave",
   ];
-    
-const columns: ColumnDef<AttendanceRow>[] = [
-    {
-        header: "ERP ID",
-        accessorKey: "erp_id",
-    },
-    {
-        header: "Name",
-        accessorKey: "employee_name",
-    },
-    {
-        header: "Section",
-        accessorKey: "section",
-    },
-    {
-        header:"Start Date",
-        accessorKey:"start_date",
-    },
-    {
-        header:"End Date",
-        accessorKey:"end_date",
-    },
-    {
-        header: "Leave Type",
-        accessorKey: "leave_type",
-    },
-    {
-        header: "Leave Count",
-        accessorKey: "leave_count",
-        cell: ({ getValue }) => {
-            const value = getValue<number>();
-            const color =
-                "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500";
-            return <span className={color}>{value ?? 0}</span>;
-        },
-    },
 
-];
+  const columns: ColumnDef<AttendanceRow>[] = [
+    {
+      header: "ERP ID",
+      accessorKey: "erp_id",
+    },
+    {
+      header: "Name",
+      accessorKey: "employee_name",
+    },
+    {
+      header: "Section",
+      accessorKey: "section",
+    },
+    {
+      header: "Start Date",
+      accessorKey: "start_date",
+    },
+    {
+      header: "End Date",
+      accessorKey: "end_date",
+    },
+    {
+      header: "Leave Type",
+      accessorKey: "leave_type",
+    },
+    {
+      header: "Leave Count",
+      accessorKey: "leave_count",
+      cell: ({ getValue }) => {
+        const value = getValue<number>();
+        const color =
+          "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500";
+        return <span className={color}>{value ?? 0}</span>;
+      },
+    },
+  ];
 
   const fetchEmployeesOptions = async () => {
     try {
@@ -227,8 +225,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
               />
             </div>
 
-
-                               <div className="w-full">
+            <div className="w-full">
               <Label>Leave Type</Label>
               <Select
                 options={leavetype.map((type) => ({
@@ -244,24 +241,22 @@ const columns: ColumnDef<AttendanceRow>[] = [
                 }
                 className="dark:bg-dark-900"
               />
-                      </div>
-                    <div className="w-full">
-                        <Label>Year</Label>
-                        <Select
-                            options={Array.from({ length: 10 }, (_, i) => {
-                                const year = new Date().getFullYear() - i;
-                                return {
-                                    label: year.toString(),
-                                    value: year.toString(),
-                                };
-                            })}
-                            placeholder="Select a year"
-                            onChange={(value) =>
-                                setYear(value)
-                            }
-                            className="dark:bg-dark-900"
-                        />
-                    </div>
+            </div>
+            <div className="w-full">
+              <Label>Year</Label>
+              <Select
+                options={Array.from({ length: 10 }, (_, i) => {
+                  const year = new Date().getFullYear() - i;
+                  return {
+                    label: year.toString(),
+                    value: year.toString(),
+                  };
+                })}
+                placeholder="Select a year"
+                onChange={(value) => setYear(value)}
+                className="dark:bg-dark-900"
+              />
+            </div>
           </div>
 
           <div className="w-full flex justify-center items-center">

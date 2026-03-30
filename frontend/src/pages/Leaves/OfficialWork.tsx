@@ -36,7 +36,7 @@ export default function OfficialWork() {
     []
   );
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const leavetype = ["Meetings", "ACT Test", "Official Tour", "Foreign Tour"];
+  const leavetype = ["Meetings", "ACT Test","Work From Home", "Official Tour", "Foreign Tour"];
 
   useEffect(() => {
     fetchEmployeesOptions();
@@ -245,16 +245,16 @@ export default function OfficialWork() {
       } else {
         return;
       }
-      //   setData({
-      //     erp_id: null,
-      //     employee_id: null,
-      //     leave_type: "",
-      //     reason: "",
-      //     status: "",
-      //     head_erpid: "",
-      //     start_date: moment().format("YYYY-MM-DD").toString(),
-      //     end_date: moment().format("YYYY-MM-DD").toString(),
-      //   });
+        setData({
+          erp_id: null,
+          employee_id: null,
+          leave_type: "",
+          reason: "",
+          status: "",
+          head_erpid: "",
+          start_date: moment().format("YYYY-MM-DD").toString(),
+          end_date: moment().format("YYYY-MM-DD").toString(),
+        });
       getEmployeesLeaves();
       toast.success("Leave application submitted successfully");
     } catch (error) {

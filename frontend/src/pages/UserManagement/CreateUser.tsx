@@ -64,7 +64,7 @@ export default function CreateUser() {
     last_name: "",
     email: "",
     password: "",
-      verify_password: "",
+    verify_password: "",
     erpid: "",
     is_staff: "",
     is_active: "",
@@ -78,87 +78,112 @@ export default function CreateUser() {
 
   const getUsers = async () => {
     try {
-        const response = await axios.get("/users/get_auth_users/");
-        if (response.data) {
-          const usersData = response.data.map((user: any) => ({
-            id: user.id,
-            username: user.username,
-            first_name: user.first_name,
-            last_name: user.last_name,
-            email: user.email,
-            is_staff: user.is_staff,
-            is_active: user.is_active,
-            is_superuser: user.is_superuser,
-          }));
-          setUsers(usersData);
-        } else {
-          setUsers([]);
-        }
-        
-  
+      const response = await axios.get("/users/get_auth_users/");
+      if (response.data) {
+        const usersData = response.data.map((user: any) => ({
+          id: user.id,
+          username: user.username,
+          first_name: user.first_name,
+          last_name: user.last_name,
+          email: user.email,
+          is_staff: user.is_staff,
+          is_active: user.is_active,
+          is_superuser: user.is_superuser,
+        }));
+        setUsers(usersData);
+      } else {
+        setUsers([]);
+      }
+
+
     } catch (error) {
       console.error("Error fetching users:", error);
       toast.error("Failed to load users");
     }
   };
-const handleDeleteUser=async (userId: number) => {
+  const handleDeleteUser = async (userId: number) => {
     try {
+      if (window.confirm("Are you sure you want to delete this user by removing record?")) {
         await axios.post(`/users/delete_user/${userId}/`);
         toast.success("User deleted successfully");
         getUsers();
+      }
     } catch (error) {
-        console.error("Error deleting user:", error);
-        toast.error("Failed to delete user");
+      console.error("Error deleting user:", error);
+      toast.error("Failed to delete user");
     }
-};
-const columns: ColumnDef<UserRow>[] = [
- 
+  };
+  const handleResetPassword = async (userId: number) => {
+    try {
+      if (window.confirm("Are you sure you want to reset the password for this user?")) {
+        await axios.post(`/users/reset_password/${userId}/`);
+        toast.success("Password reset successfully");
+        getUsers();
+      }
+    } catch (error) {
+      console.error("Error resetting password:", error);
+      toast.error("Failed to reset password");
+    }
+  };
+  const columns: ColumnDef<UserRow>[] = [
+
     {
-        header: "Username",
-        accessorKey: "username",
+      header: "Username",
+      accessorKey: "username",
     },
     {
-        header: "First Name",
-        accessorKey: "first_name",
+      header: "First Name",
+      accessorKey: "first_name",
     },
     {
-        header: "Last Name",
-        accessorKey: "last_name",
+      header: "Last Name",
+      accessorKey: "last_name",
     },
     {
-        header: "Email",
-        accessorKey: "email",
+      header: "Email",
+      accessorKey: "email",
     },
     {
-        header: "Staff",
-        accessorKey: "is_staff",
-        cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
+      header: "Staff",
+      accessorKey: "is_staff",
+      cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
     },
     {
-        header: "Active",
-        accessorKey: "is_active",
-        cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
+      header: "Active",
+      accessorKey: "is_active",
+      cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
     },
     {
-        header: "Superuser",
-        accessorKey: "is_superuser",
-        cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
+      header: "Superuser",
+      accessorKey: "is_superuser",
+      cell: ({ getValue }) => (getValue<boolean>() ? "Yes" : "No"),
     },
-    
+
     {
-        header: "Actions",
-        id: "actions",
-        cell: ({ row }) => (
-            <Button
-                size="xs"
-                variant="danger"
-                onClick={() => handleDeleteUser(row.original.id || 0)}
-            >
-                Delete
-            </Button>
-        ),
+      header: "Actions",
+      id: "actions",
+      cell: ({ row }) => (
+        <div className="flex gap-2">
+
+          <Button
+            size="xs"
+            variant="danger"
+            onClick={() => handleDeleteUser(row.original.id || 0)}
+          >
+            Delete
+          </Button>
+          <Button
+            size="xs"
+
+            variant="primary"
+            onClick={() => handleResetPassword(row.original.id || 0)}
+          >
+            Reset Password
+          </Button>
+        </div>
+      ),
     },
-];
+  ];
 
   const createUser = async (userData: UserFormData) => {
     try {
@@ -169,8 +194,8 @@ const columns: ColumnDef<UserRow>[] = [
       if (!userData.first_name) errors.first_name = "First name is required";
       if (!userData.last_name) errors.last_name = "Last name is required";
       if (!userData.email) errors.email = "Email is required";
-        if (!userData.password) errors.password = "Password is required";
-        if (!userData.erpid) errors.erpid = "ERP ID is required";
+      if (!userData.password) errors.password = "Password is required";
+      if (!userData.erpid) errors.erpid = "ERP ID is required";
       if (!userData.verify_password)
         errors.verify_password = "Password verification is required";
       if (userData.password !== userData.verify_password) {
@@ -183,28 +208,28 @@ const columns: ColumnDef<UserRow>[] = [
         toast.error("Please fix all validation errors");
         return;
       }
-      
+
       const response = await axios.post("/users/create_user/", userData);
-       console.log("User created successfully:", response.data);
-       
-          // Reset form
-          setData({
-            username: "",
-            first_name: "",
-            last_name: "",
-            email: "",
-            password: "",
-            erpid: "",
-            verify_password: "",
-            is_staff: false,
-            is_active: true,
-            is_superuser: false,
-            date_joined: moment().format("YYYY-MM-DD"),
-          });
-          setFieldError({});
-          getUsers();
-          toast.success("User created successfully");
-      
+      console.log("User created successfully:", response.data);
+
+      // Reset form
+      setData({
+        username: "",
+        first_name: "",
+        last_name: "",
+        email: "",
+        password: "",
+        erpid: "",
+        verify_password: "",
+        is_staff: false,
+        is_active: true,
+        is_superuser: false,
+        date_joined: moment().format("YYYY-MM-DD"),
+      });
+      setFieldError({});
+      getUsers();
+      toast.success("User created successfully");
+
     } catch (error) {
       toast.error("Failed to create user:" + (error instanceof Error ? error.message : "Unknown error"));
     }
@@ -306,8 +331,8 @@ const columns: ColumnDef<UserRow>[] = [
                 defaultDate={data.date_joined}
                 label="Date Joined"
                 placeholder="Select date joined"
-                              onChange={(dates, currentDateString) => {
-                    console.log("Selected date:", dates);
+                onChange={(dates, currentDateString) => {
+                  console.log("Selected date:", dates);
                   setData({ ...data, date_joined: currentDateString });
                 }}
               />
@@ -340,7 +365,7 @@ const columns: ColumnDef<UserRow>[] = [
                 hint={fielderror.erpid}
               />
             </div>
-            
+
           </div>
 
           <div className="flex justify-center items-center gap-12 my-6">
