@@ -168,7 +168,7 @@ class UsersView:
         password = data.get('password', '')
 
         try:
-            user_obj = User.objects.get(email=email)
+            user_obj = User.objects.get(email=email,is_active=1)
             username = user_obj.username
         except User.DoesNotExist:
             return JsonResponse({'success': False, 'error': 'Invalid credentials'}, status=401)
@@ -235,7 +235,25 @@ class UsersView:
 
         try:
             user = User.objects.get(pk=user_id)
+            profile = CustomUser.objects.filter(authid=user_id).first()
+            if profile:
+                profile.delete()
             user.delete()
+            return JsonResponse({'success': True}, status=200)
+        except User.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'User not found'}, status=404)
+   
+    @csrf_exempt
+    @require_POST
+    def reset_password(request, user_id):
+        if not user_id:
+            return JsonResponse({'success': False, 'error': 'User ID is required'}, status=400)
+
+        try:
+            user = User.objects.get(pk=user_id)
+            password = user.email
+            user.set_password(password)
+            user.save()
             return JsonResponse({'success': True}, status=200)
         except User.DoesNotExist:
             return JsonResponse({'success': False, 'error': 'User not found'}, status=404)
@@ -425,13 +443,23 @@ class EmployeesView:
     @csrf_exempt
     @require_POST
     def delete_employee(request, employee_id):
-        print(employee_id)
         if not employee_id:
             return JsonResponse({'success': False, 'error': 'Employee ID is required'}, status=400)
 
         try:
             employee = Employees.objects.get(pk=employee_id)
-            employee.delete()
+            authid= CustomUser.objects.filter(erpid=employee.erp_id).values_list('authid', flat=True).first()
+     
+            user= User.objects.get(pk=authid)
+    
+            if employee.flag==0:           
+                user.is_active=1
+                employee.flag=1
+            else:
+                employee.flag=0
+                user.is_active=0
+            user.save()
+            employee.save()
             return JsonResponse({'success': True}, status=200)
         except Employees.DoesNotExist:
             return JsonResponse({'success': False, 'error': 'Employee not found'}, status=404)

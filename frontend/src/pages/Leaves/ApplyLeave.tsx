@@ -18,7 +18,7 @@ import TextArea from "../../components/form/input/TextArea";
 type AttendanceRow = {
   id?: number;
   employee_id: any;
-    erp_id: any;
+  erp_id: any;
   entry_made_by?: any;
   leave_type: string;
   start_date: string;
@@ -50,22 +50,22 @@ export default function IndividualAttendance() {
     "Umrah Leave",
     "Hajj Leave",
     "Shift Leave",
-      "Rest & Recreational Leave",
+    "Rest & Recreational Leave",
     "IDDAT Leave",
     "Compensatory Leave",
     "Short Leave",
     "Study Leave",
     "Marriage Leave",
     "Paternity Leave",
-      "Earned Leave",
+    "Earned Leave",
     "Beareavement Leave",
-    ];
-    
+  ];
+
   const approvedby = [
     "CEO ISMO",
     "ED (HR) ISMO",
     "ED (MO) ISMO",
-      "ED (SO) ISMO",
+    "ED (SO) ISMO",
     "SECTION HEAD",
   ];
 
@@ -74,6 +74,7 @@ export default function IndividualAttendance() {
     fetchEmployeesOptions();
     getEmployeesLeaves();
   }, []);
+  
   const handleApproveLeave = async (id: any) => {
     const action = id.toString().split("-")[1];
     const empid = parseInt(id.toString().split("-")[0]);
@@ -196,11 +197,11 @@ export default function IndividualAttendance() {
         const value = getValue<string>();
         const color =
           value?.toLowerCase() === "pending" ||
-          value?.toLowerCase() === "rejected"
+            value?.toLowerCase() === "rejected"
             ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
             : value?.toLowerCase() === "approved"
-            ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
-            : "";
+              ? "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
+              : "";
         return <span className={color}>{value}</span>;
       },
     },
@@ -210,7 +211,7 @@ export default function IndividualAttendance() {
       id: "actions-approve",
       cell: ({ row }) =>
         row.original.status?.toLowerCase() === "pending" &&
-        row.original.head_erpid === user.erpid ? (
+          row.original.head_erpid === user.erpid ? (
           <div className="flex gap-2">
             <Button
               size="xs"
@@ -273,29 +274,29 @@ export default function IndividualAttendance() {
       }
 
       if (window.confirm("Are you sure you want to apply for this leave?")) {
-          try {
-            const response = await axios.post("/leaves/apply/", data);
-            console.log("Leave application response:", response.data);
-          } catch (error:any) {
-            const errorMessage = error.response?.data?.error || "Failed to submit leave application, Either limit exceeded or leave limit not found";
-            console.error("Error applying for leave:", error);
-            toast.error(errorMessage);
-            return;
-          }
+        try {
+          const response = await axios.post("/leaves/apply/", data);
+          console.log("Leave application response:", response.data);
+        } catch (error: any) {
+          const errorMessage = error.response?.data?.error || "Failed to submit leave application, Either limit exceeded or leave limit not found";
+          console.error("Error applying for leave:", error);
+          toast.error(errorMessage);
+          return;
+        }
       } else {
         return;
       }
 
-        setData({
-          erp_id: 0,
-          employee_id: 0,
-          leave_type: "",
-          reason: "",
-          status: "",
-          start_date: moment().format("YYYY-MM-DD").toString(),
-          end_date: moment().format("YYYY-MM-DD").toString(),
-        });
-        
+      setData({
+        erp_id: 0,
+        employee_id: 0,
+        leave_type: "",
+        reason: "",
+        status: "",
+        start_date: moment().format("YYYY-MM-DD").toString(),
+        end_date: moment().format("YYYY-MM-DD").toString(),
+      });
+
       getEmployeesLeaves();
       toast.success("Leave application submitted successfully");
     } catch (error) {

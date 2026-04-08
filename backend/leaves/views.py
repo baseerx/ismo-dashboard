@@ -425,14 +425,14 @@ def leavetype_detail_report(request):
     leave_type = data.get("leavetype")
     start_date = data.get("start_date")
     end_date = data.get("end_date")
-    print(data)
+    
     # Validate required fields
     if not all([section, leave_type, start_date, end_date]):
         return JsonResponse(
             {"error": "section, leave_type, start_date, and end_date are required"},
             status=400
         )
-
+    print(data)
     # Convert dates to Python date objects
     start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
     end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
@@ -458,6 +458,7 @@ def leavetype_detail_report(request):
         employees = sessions.execute(query, {"section": section, "erp_id": erp_id}).fetchall()
 
     if not employees:
+        print("No employees found")
         sessions.close()
         return JsonResponse({"error": "Employee not found"}, status=404)
 
@@ -486,7 +487,7 @@ def leavetype_detail_report(request):
                 "end_date": end_date
             }
         ).fetchall()
-
+        print(leaves)
         # Process each leave record
         for leave in leaves:
             actual_start = max(leave[1], start_date)
