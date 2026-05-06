@@ -384,8 +384,8 @@ class AttendanceView:
             rows = result.fetchall()
             for row in rows:
                 flag = 'Absent'
-                check_in_deadline = time(9, 0)
-                check_out_deadline = time(14, 30)
+                check_in_deadline = time(8, 30)
+                check_out_deadline = time(16, 0)
                 if row.status == 'Checked In':
                     punch_time = row.timestamp.time() if row.timestamp else None
                     if punch_time and punch_time > check_in_deadline:
@@ -775,8 +775,8 @@ class AttendanceView:
             result = session.execute(
                 query, {"section": section, "date": date})
             for row in result:
-                check_in_deadline = time(9, 0)
-                check_out_deadline = time(14, 30)
+                check_in_deadline = time(8, 30)
+                check_out_deadline = time(16, 0)
                 if row.status == 'Checked In':
                         punch_time = row.timestamp.time() if row.timestamp else None
                         if punch_time and punch_time > check_in_deadline:
