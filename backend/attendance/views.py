@@ -262,8 +262,8 @@ class AttendanceView:
             rows = result.fetchall()  # Ensure results are consumed before issuing new queries
             flag = 'Absent'
             for row in rows:
-                check_in_deadline=time(9,0)
-                check_out_deadline=time(14,30)
+                check_in_deadline=time(8,30)
+                check_out_deadline=time(16,0)
                 if row.status == 'Checked In':
                     punch_time = row.timestamp.time() if row.timestamp else None
                     if punch_time and punch_time > check_in_deadline:
@@ -296,24 +296,32 @@ class AttendanceView:
                                     """), {"erp_id": row.erp_id, "att_date": row.the_date}).first()
 
                 if row.uid is not None:
-                    flag = 'Present'
-                elif row.the_date:
-                    # Check for leave on that specific date
-                    if leave_result:
-                        flag = leave_result.leave_type
-                    elif official_work:
-                        flag = official_work.leave_type
-                    else:
-                        # Check for holiday on that date
-                        holiday_result = session.execute(text("""
-                            SELECT name FROM public_holidays
-                            WHERE CAST(date AS DATE) = :att_date
-                        """), {"att_date": row.the_date}).first()
+                       flag = 'Present'
 
-                        if holiday_result:
-                            flag = holiday_result.name
+                elif row.the_date:
+                        # Check for leave on that specific date
+                        if leave_result:
+                            flag = leave_result.leave_type
+
+                        elif official_work:
+                            flag = official_work.leave_type
+
                         else:
-                            flag = 'Absent'
+                            # Check for holiday on that date
+                            holiday_result = session.execute(text("""
+                                SELECT name FROM public_holidays
+                                WHERE CAST(date AS DATE) = :att_date
+                            """), {"att_date": row.the_date}).first()
+
+                            if holiday_result:
+                                flag = holiday_result.name
+
+                            # Weekend check (Saturday=5, Sunday=6)
+                            elif row.the_date.weekday() in [5, 6]:
+                                flag = 'Weekend'
+
+                            else:
+                                flag = 'Absent'
 
                 records.append({
                     'id': row.id,
