@@ -1,12 +1,15 @@
 import PageMeta from "../../components/common/PageMeta";
 import BasicCard from "../../components/cards/BasicCard";
 import { UserIcon } from "../../icons";
-import { useEffect, useState } from "react";
+  import { useEffect, useState } from "react";
+  import { useNavigate } from "react-router-dom";
 import axios from "../../api/axios";
 import PieChart from "../Charts/PieChart"
 import { Link } from "react-router-dom";
+
 export default function Home() {
     const [data, setData] = useState<any>({});
+    const navigate = useNavigate();
     const getEmployeesInfo = async() => {
         // Fetch employee data from API or state
         const response = await axios.get("/users/info/");
@@ -16,6 +19,8 @@ export default function Home() {
     useEffect(() => {
       getEmployeesInfo();
     }, []);
+  
+    
   return (
     <>
       <PageMeta
@@ -59,6 +64,10 @@ export default function Home() {
           title="Absent Today"
           value={data.absent_today || 0}
           icon={<UserIcon className="text-red-500 size-6 dark:text-white/90" />}
+          displayAbsentEmployees={() => {
+            // Navigate to the absent employees page
+            navigate("/attendance/total-absent");
+          }}
           badgeclr="error"
           percentage={
             data.total_employees

@@ -49,6 +49,8 @@ import IndividualLeaveReport from "./pages/Leaves/IndividualLeaveReport";
 import SectionLeaveReport from "./pages/Leaves/SectionLeave";
 import IndividualDetailLeaveReport from "./pages/Leaves/IndividualDetailLeaveReport";
 import EachLeaveDetail from "./pages/Leaves/EachLeaveDetail";
+import TotalAbsent from "./pages/Attendance/TotalAbsent";
+import DetailedAbsentReport from "./pages/Attendance/DetailedAbsentReport";
 export default function App() {
   return (
     <>
@@ -83,6 +85,14 @@ export default function App() {
               <Route
                 path="/attendance/detailed-report"
                 element={<DetailedReport />}
+              />
+              <Route
+                path="/attendance/total-absent"
+                element={<TotalAbsent />}
+              />
+              <Route
+                path="/attendance/detailed-absent-report"
+                element={<DetailedAbsentReport />}
               />
               <Route path="/attendance/shifts" element={<ShiftAttendance />} />
               <Route

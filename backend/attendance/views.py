@@ -653,7 +653,258 @@ class AttendanceView:
         finally:
             session.close()
     
+  
+    @csrf_exempt
+    @require_POST
+    def attendance_total_absent(request):
+        data = json.loads(request.body)
+        fromdate = data.get("fromdate")
+        todate = data.get("todate")
+
+        session = SessionLocal()
+        records = []
+
+        try:
+            query = text("""
+                WITH date_range AS (
+                    SELECT
+                        DATEADD(DAY, v.number, :fromdate) AS the_date
+                    FROM master..spt_values v
+                    WHERE v.type = 'P'
+                    AND DATEADD(DAY, v.number, :fromdate) <= :todate
+                )
+
+                SELECT
+                    dr.the_date AS timestamp,
+                    e.erp_id,
+                    e.name,
+                    d.title AS designation,
+                    g.name AS grade,
+                    s.name AS section
+
+                FROM date_range dr
+                CROSS JOIN employees e
+
+                LEFT JOIN sections s
+                    ON s.id = e.section_id
+
+                LEFT JOIN designations d
+                    ON d.id = e.designation_id
+
+                LEFT JOIN grades g
+                    ON g.id = e.grade_id
+
+                WHERE
+                    e.flag = 1
+
+                    AND NOT EXISTS
+                    (
+                        SELECT 1
+                        FROM attendance a
+                        WHERE a.user_id = e.hris_id
+                        AND CAST(a.timestamp AS DATE)=dr.the_date
+                    )
+
+                    AND NOT EXISTS
+                    (
+                        SELECT 1
+                        FROM leaves l
+                        WHERE l.erp_id=e.erp_id
+                        AND CAST(l.start_date AS DATE)<=dr.the_date
+                        AND CAST(l.end_date AS DATE)>=dr.the_date
+                    )
+
+                    AND NOT EXISTS
+                    (
+                        SELECT 1
+                        FROM official_work_leaves ow
+                        WHERE ow.erp_id=e.erp_id
+                        AND CAST(ow.start_date AS DATE)<=dr.the_date
+                        AND CAST(ow.end_date AS DATE)>=dr.the_date
+                    )
+
+                    AND NOT EXISTS
+                    (
+                        SELECT 1
+                        FROM public_holidays ph
+                        WHERE CAST(ph.date AS DATE)=dr.the_date
+                    )
+
+                ORDER BY
+                    dr.the_date,
+                    g.name DESC,
+                    e.erp_id
+            """)
+
+            rows = session.execute(
+                query,
+                {
+                    "fromdate": fromdate,
+                    "todate": todate,
+                },
+            ).fetchall()
+
+            for row in rows:
+                records.append({
+                    "erp_id": row.erp_id,
+                    "name": row.name,
+                    "designation": row.designation,
+                    "grade": row.grade,
+                    "section": row.section,
+                    "timestamp": row.timestamp,
+                    "late": "Absent",
+                })
+
+            return JsonResponse(records, safe=False)
+
+        finally:
+            session.close()
     
+    @csrf_exempt
+    @require_POST
+    def attendance_detailed_absent_report(request):
+        data = json.loads(request.body)
+        fromdate = data.get("fromdate")
+        todate = data.get("todate")
+
+        session = SessionLocal()
+
+        try:
+
+            query = text("""
+            WITH date_range AS
+            (
+                SELECT DATEADD(DAY, v.number, :fromdate) AS att_date
+                FROM master..spt_values v
+                WHERE v.type = 'P'
+                AND DATEADD(DAY, v.number, :fromdate) <= :todate
+            ),
+
+            employees_data AS
+            (
+                SELECT
+                    e.erp_id,
+                    e.hris_id,
+                    s.name AS section
+                FROM employees e
+                LEFT JOIN sections s
+                    ON s.id = e.section_id
+                WHERE e.flag = 1
+            ),
+
+            attendance_days AS
+            (
+                SELECT DISTINCT
+                    user_id,
+                    CAST(timestamp AS DATE) AS att_date
+                FROM attendance
+                WHERE CAST(timestamp AS DATE)
+                    BETWEEN :fromdate AND :todate
+            ),
+
+            leave_days AS
+            (
+                SELECT
+                    erp_id,
+                    CAST(start_date AS DATE) AS start_date,
+                    CAST(end_date AS DATE) AS end_date
+                FROM leaves
+            ),
+
+            official_days AS
+            (
+                SELECT
+                    erp_id,
+                    CAST(start_date AS DATE) AS start_date,
+                    CAST(end_date AS DATE) AS end_date
+                FROM official_work_leaves
+            ),
+
+            holiday_days AS
+            (
+                SELECT DISTINCT
+                    CAST(date AS DATE) AS holiday_date
+                FROM public_holidays
+            )
+
+            SELECT
+
+                dr.att_date AS attendance_date,
+
+                ed.section,
+
+                COUNT(*) AS total_employees,
+
+                SUM(
+                    CASE
+                        WHEN a.user_id IS NOT NULL
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS total_present,
+
+                SUM(
+                    CASE
+                        WHEN a.user_id IS NOT NULL THEN 0
+                        WHEN l.erp_id IS NOT NULL THEN 0
+                        WHEN ow.erp_id IS NOT NULL THEN 0
+                        WHEN h.holiday_date IS NOT NULL THEN 0
+                        ELSE 1
+                    END
+                ) AS total_absent
+
+            FROM employees_data ed
+
+            CROSS JOIN date_range dr
+
+            LEFT JOIN attendance_days a
+                ON a.user_id = ed.hris_id
+            AND a.att_date = dr.att_date
+
+            LEFT JOIN leave_days l
+                ON l.erp_id = ed.erp_id
+            AND dr.att_date BETWEEN l.start_date AND l.end_date
+
+            LEFT JOIN official_days ow
+                ON ow.erp_id = ed.erp_id
+            AND dr.att_date BETWEEN ow.start_date AND ow.end_date
+
+            LEFT JOIN holiday_days h
+                ON h.holiday_date = dr.att_date
+
+            GROUP BY
+                dr.att_date,
+                ed.section
+
+            ORDER BY
+                dr.att_date,
+                ed.section
+            """)
+
+            rows = session.execute(
+                query,
+                {
+                    "fromdate": fromdate,
+                    "todate": todate,
+                }
+            ).fetchall()
+
+            records = []
+
+            for row in rows:
+                records.append({
+                    "date": row.attendance_date,
+                    "section": row.section,
+                    "total_employees": row.total_employees,
+                    "total_present": row.total_present,
+                    "total_absent": row.total_absent,
+                })
+
+            return JsonResponse(records, safe=False)
+
+        finally:
+            session.close()
+
     @csrf_exempt
     @require_POST
     def attendance_individual_user(request):
