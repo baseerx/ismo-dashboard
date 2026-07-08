@@ -15,7 +15,6 @@ import DatePicker from "../../components/form/date-picker";
 
 type AttendanceRow = {
     id?: number;
- 
     section: string;
     erp_id: any;
     leave_type?: string;
@@ -47,7 +46,7 @@ export default function SectionLeaveReport() {
     "Paternity Leave",
     "Earned Leave",
   ];
-
+  const [loader, setLoader] = useState(false);
   const [sectionOptions, setSectionOptions] = useState<
     { label: string; value: string }[]
   >([]);
@@ -68,6 +67,7 @@ export default function SectionLeaveReport() {
       toast.error("Please select a section and leave type");
       return;
     }
+    setLoader(true);
     try {
       const response = await axios.post("/leaves/section-leave-report/", data);
       setSectionLeaveReport(response.data.attendance);
@@ -75,6 +75,8 @@ export default function SectionLeaveReport() {
     } catch (error) {
       console.error("Error applying leave:", error);
       toast.error("Failed to apply leave");
+    } finally {
+      setLoader(false);
     }
   };
 
@@ -224,8 +226,9 @@ const columns: ColumnDef<AttendanceRow>[] = [
               className="w-1/3 mt-7 ml-5"
               variant="primary"
               onClick={handleSubmit}
+              disabled={loader}
             >
-              Apply
+              Apply 
             </Button>
           </div>
 

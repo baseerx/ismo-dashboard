@@ -15,7 +15,10 @@ type AttendanceRow = {
   section: string;
   total_employees: number;
   total_present: number;
+  total_leave: number;
+  total_official_work: number;
   total_absent: number;
+  status: string;
 };
 
 export default function TeamLevel() {
@@ -27,116 +30,192 @@ export default function TeamLevel() {
 
   useEffect(() => {
     if (fromdate <= todate) {
-        fetchAttendanceData();
+      fetchAttendanceData();
     } else {
       toast.error("from date cannot be greater than to date");
     }
   }, [todate, fromdate]);
 
-const fetchAttendanceData = async () => {
-  try {
-    toast.loading(
-      `Fetching attendance data from ${fromdate} to ${todate}`,
-      { toastId: "attendance-fetch-success" }
-    );
+  const fetchAttendanceData = async () => {
+    try {
+      toast.loading(
+        `Fetching attendance data from ${fromdate} to ${todate}`,
+        { toastId: "attendance-fetch-success" }
+      );
 
-    const response = await axios.post(
-      "/attendance/detailed-absent-report/",
-      {
-        fromdate,
-        todate,
-      }
-    );
+      const response = await axios.post(
+        "/attendance/detailed-absent-report/",
+        {
+          fromdate,
+          todate,
+        }
+      );
 
-    const cleanedData: AttendanceRow[] =
-      response.data.map((item: any) => ({
+      const cleanedData: AttendanceRow[] = response.data.map((item: any) => ({
         date: moment(item.date).format("DD-MM-YYYY"),
-        section: item.section,
-        total_employees: item.total_employees,
-        total_present: item.total_present,
-        total_absent: item.total_absent,
+        section: item.section ?? "-",
+        total_employees: Number(item.total_employees),
+        total_present: Number(item.total_present),
+        total_leave: Number(item.total_leave),
+        total_official_work: Number(item.total_official_work),
+        total_absent: Number(item.total_absent),
+        status: item.status,
       }));
 
-    toast.dismiss("attendance-fetch-success");
+      toast.dismiss("attendance-fetch-success");
+      setAttendanceData(cleanedData);
 
-    setAttendanceData(cleanedData);
+    } catch (err) {
+      toast.dismiss("attendance-fetch-success");
+      console.error(err);
+      toast.error("Failed to fetch attendance report.");
+    }
+  };
 
-  } catch (err) {
-    console.log(err);
-  }
-};
-    
- 
-const columns: ColumnDef<AttendanceRow>[] = [
+  const columns: ColumnDef<AttendanceRow>[] = [
 
-{
-    accessorKey:"date",
-    header:"Date",
-},
+    {
+      accessorKey: "date",
+      header: "Date",
+    },
 
-{
-    accessorKey:"section",
-    header:"Section",
-},
+    {
+      accessorKey: "section",
+      header: "Section",
+    },
 
-{
-    accessorKey:"total_employees",
-    header:"Total Employees",
-},
+    {
+      accessorKey: "total_employees",
+      header: "Total Employees",
+    },
 
-{
-    accessorKey:"total_present",
-    header:"Present",
+    {
+      accessorKey: "total_present",
+      header: "Present",
 
-    cell:({getValue})=>{
+      cell: ({ getValue }) => {
 
-        const value=getValue<number>();
+        const value = getValue<number>();
 
-        return(
+        return (
+          <span className="inline-flex items-center justify-center px-5 py-1 rounded-full font-semibold bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500">
+            {value}
+          </span>
+        );
 
-            <span className="inline-flex items-center px-6 py-0.5 rounded-full font-semibold bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500">
+      }
 
-                {value}
+    },
 
-            </span>
+    {
+      accessorKey: "total_leave",
+      header: "Leave",
+
+      cell: ({ getValue }) => {
+
+        const value = getValue<number>();
+
+        return (
+
+          <span className="inline-flex items-center justify-center px-5 py-1 rounded-full font-semibold bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500">
+            {value}
+          </span>
 
         );
 
-    }
+      }
 
-},
+    },
 
-{
-    accessorKey:"total_absent",
-    header:"Absent",
+    {
+      accessorKey: "total_official_work",
+      header: "Official Work",
 
-    cell:({getValue})=>{
+      cell: ({ getValue }) => {
 
-        const value=getValue<number>();
+        const value = getValue<number>();
 
-        return(
+        return (
 
-            <span className="inline-flex items-center px-6 py-0.5 rounded-full font-semibold bg-danger-50 text-danger-600 dark:bg-danger-500/15 dark:text-danger-500">
-
-                {value}
-
-            </span>
+          <span className="inline-flex items-center justify-center px-5 py-1 rounded-full font-semibold bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400">
+            {value}
+          </span>
 
         );
 
+      }
+
+    },
+
+    {
+      accessorKey: "total_absent",
+      header: "Absent",
+
+      cell: ({ getValue }) => {
+
+        const value = getValue<number>();
+
+        return (
+
+          <span className="inline-flex items-center justify-center px-5 py-1 rounded-full font-semibold bg-danger-50 text-danger-600 dark:bg-danger-500/15 dark:text-danger-500">
+            {value}
+          </span>
+
+        );
+
+      }
+
+    },
+
+    {
+      accessorKey: "status",
+      header: "Summary",
+
+      cell: ({ row }) => {
+
+        const present = row.original.total_present;
+        const leave = row.original.total_leave;
+        const official = row.original.total_official_work;
+        const absent = row.original.total_absent;
+
+        return (
+
+          <div className="flex flex-wrap gap-2">
+
+            <span className="inline-flex items-center px-3 py-1 rounded-full font-semibold bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500">
+              Present : {present}
+            </span>
+
+            <span className="inline-flex items-center px-3 py-1 rounded-full font-semibold bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500">
+              Leave : {leave}
+            </span>
+
+            <span className="inline-flex items-center px-3 py-1 rounded-full font-semibold bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400">
+              Official Work : {official}
+            </span>
+
+            <span className="inline-flex items-center px-3 py-1 rounded-full font-semibold bg-danger-50 text-danger-600 dark:bg-danger-500/15 dark:text-danger-500">
+              Absent : {absent}
+            </span>
+
+          </div>
+
+        );
+
+      }
+
     }
 
-}
-
-];
+  ];
 
   return (
     <>
       <PageMeta
-        title="ISMO - Total Absent Attendance Report"
-        description="ISMO Admin Dashboard - Total Absent Attendance Report"
+        title="ISMO - Detailed Attendance Summary Report"
+        description="ISMO Admin Dashboard - Detailed Attendance Summary Report"
       />
-      <PageBreadcrumb pageTitle="Total Absent Attendance Report" />
+
+      <PageBreadcrumb pageTitle="Detailed Attendance Summary Report" />
       <div className="space-y-6">
         <ComponentCard title={`Attendance on ${fromdate}`}>
           <ToastContainer position="bottom-right" />
@@ -148,8 +227,8 @@ const columns: ColumnDef<AttendanceRow>[] = [
                 defaultDate={fromdate.toString()}
                 label="from date"
                 placeholder="Select a date"
-                              onChange={(dates, currentDateString) => {
-                    console.log(dates);
+                onChange={(dates, currentDateString) => {
+                  console.log(dates);
                   // Handle your logic
                   setFromdate(currentDateString);
                 }}
@@ -161,8 +240,8 @@ const columns: ColumnDef<AttendanceRow>[] = [
                 defaultDate={todate.toString()}
                 label="to date"
                 placeholder="Select a date"
-                              onChange={(dates, currentDateString) => {
-                console.log(dates);
+                onChange={(dates, currentDateString) => {
+                  console.log(dates);
                   // Handle your logic
                   setTodate(currentDateString);
                 }}
@@ -172,7 +251,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
 
           <EnhancedDataTable<AttendanceRow>
             data={attendancedata}
-                      columns={columns}
+            columns={columns}
             fromdate={fromdate.toString()}
             todate={todate.toString()}
           />

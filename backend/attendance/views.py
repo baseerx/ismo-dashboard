@@ -32,6 +32,7 @@ class AttendanceView:
         today = datetime.now().date()
         session = SessionLocal()
         records = []
+
         try:
             query = text("""
                 SELECT
@@ -50,63 +51,98 @@ class AttendanceView:
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN grades g ON g.id = e.grade_id
-                LEFT JOIN attendance a 
-                    ON e.hris_id = a.user_id 
+                LEFT JOIN attendance a
+                    ON e.hris_id = a.user_id
                     AND CAST(a.timestamp AS DATE) = :today
-                WHERE e.flag = 1  
-                ORDER BY 
-                    g.name DESC
+                WHERE e.flag = 1
+                ORDER BY g.name DESC
             """)
+
             result = session.execute(query, {"today": today}).fetchall()
+
             for row in result:
-                flag = 'Absent'
+
+                flag = "Absent"
+
                 if row.uid is not None:
-                    flag = 'Present'
+                    flag = "Present"
+
                 else:
 
-                    # Check leave
+                    # Check Leave
                     leave_result = session.execute(text("""
-                        SELECT leave_type FROM leaves
+                        SELECT leave_type
+                        FROM leaves
                         WHERE erp_id = :erp_id
                         AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
                         AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
-                    """), {"erp_id": row.erp_id, "att_date": today}).first()
+                    """), {
+                        "erp_id": row.erp_id,
+                        "att_date": today
+                    }).first()
+
+                    # Check Official Work
                     official_work = session.execute(text("""
-                                        SELECT leave_type FROM official_work_leaves
-                                        WHERE erp_id = :erp_id
-                                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
-                                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
-                                    """), {"erp_id": row.erp_id, "att_date": today}).first()
+                        SELECT leave_type
+                        FROM official_work_leaves
+                        WHERE erp_id = :erp_id
+                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                    """), {
+                        "erp_id": row.erp_id,
+                        "att_date": today
+                    }).first()
 
                     if leave_result:
                         flag = leave_result.leave_type
+
                     elif official_work:
                         flag = official_work.leave_type
+
                     else:
-                        # Check holiday
+
+                        # Check Public Holiday
                         holiday_result = session.execute(text("""
-                            SELECT name FROM public_holidays
+                            SELECT name
+                            FROM public_holidays
                             WHERE CAST(date AS DATE) = :att_date
-                        """), {"att_date": today}).first()
+                        """), {
+                            "att_date": today
+                        }).first()
+
                         if holiday_result:
                             flag = holiday_result.name
+
+                        # Saturday = 5, Sunday = 6
+                        elif today.weekday() in (5, 6):
+                            flag = "Weekend"
+
                         else:
-                            flag = 'Absent'
+                            flag = "Absent"
+
                 records.append({
-                    'id': row.id,
-                    'erp_id': row.erp_id,
-                    'name': row.name,
-                    'designation': row.designation,
-                    'grade': row.grade,
-                    'section': row.section,
-                    'uid': row.uid,
-                    'user_id': row.user_id,
-                    'timestamp': '-' if row.timestamp is None else row.timestamp,
-                    'late': 'early' if row.status == 'Early Checked Out' else '-' if row.timestamp is None else row.lateintime,
-                    'status': '-' if row.status is None else row.status,
-                    'flag': flag
+                    "id": row.id,
+                    "erp_id": row.erp_id,
+                    "name": row.name,
+                    "designation": row.designation,
+                    "grade": row.grade,
+                    "section": row.section,
+                    "uid": row.uid,
+                    "user_id": row.user_id,
+                    "timestamp": "-" if row.timestamp is None else row.timestamp,
+                    "late": (
+                        "early"
+                        if row.status == "Early Checked Out"
+                        else "-"
+                        if row.timestamp is None
+                        else row.lateintime
+                    ),
+                    "status": "-" if row.status is None else row.status,
+                    "flag": flag
                 })
+
             return JsonResponse(records, safe=False)
+
         finally:
             session.close()
 
@@ -467,10 +503,11 @@ class AttendanceView:
 
         session = SessionLocal()
         records = []
+
         try:
             query = text("""
                 WITH date_range AS (
-                    SELECT 
+                    SELECT
                         DATEADD(DAY, v.number, :fromdate) AS the_date
                     FROM master..spt_values v
                     WHERE v.type = 'P'
@@ -486,15 +523,18 @@ class AttendanceView:
                     MAX(CASE WHEN a.status = 'Checked In' THEN a.timestamp END) AS checkin_time,
                     MAX(CASE WHEN a.status IN ('Checked Out', 'Early Checked Out') THEN a.timestamp END) AS checkout_time
                 FROM date_range dr
-                JOIN employees e ON 1=1
-                LEFT JOIN sections s ON s.id = e.section_id
-                LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN grades g ON g.id = e.grade_id
-                LEFT JOIN attendance a 
-                    ON e.hris_id = a.user_id 
+                JOIN employees e ON 1 = 1
+                LEFT JOIN sections s
+                    ON s.id = e.section_id
+                LEFT JOIN designations d
+                    ON d.id = e.designation_id
+                LEFT JOIN grades g
+                    ON g.id = e.grade_id
+                LEFT JOIN attendance a
+                    ON e.hris_id = a.user_id
                     AND CAST(a.timestamp AS DATE) = dr.the_date
                 WHERE e.flag = 1
-                GROUP BY 
+                GROUP BY
                     dr.the_date,
                     e.id,
                     e.erp_id,
@@ -503,61 +543,99 @@ class AttendanceView:
                     g.name,
                     s.name,
                     e.hris_id
-                ORDER BY g.name DESC
+                ORDER BY
+                    g.name DESC,
+                    dr.the_date,
+                    e.erp_id
             """)
 
             result = session.execute(
-                query, {"fromdate": fromdate, "todate": todate})
+                query,
+                {
+                    "fromdate": fromdate,
+                    "todate": todate
+                }
+            )
+
             rows = result.fetchall()
+
             for row in rows:
-                flag = 'Absent'
-           
+
+                flag = "Absent"
+
                 leave_result = session.execute(text("""
-                        SELECT leave_type FROM leaves
-                        WHERE erp_id = :erp_id
-                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
-                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
-                    """), {"erp_id": row.erp_id, "att_date": row.the_date}).first()
+                    SELECT leave_type
+                    FROM leaves
+                    WHERE erp_id = :erp_id
+                    AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                    AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                """), {
+                    "erp_id": row.erp_id,
+                    "att_date": row.the_date
+                }).first()
+
                 official_work = session.execute(text("""
-                                        SELECT leave_type FROM official_work_leaves
-                                        WHERE erp_id = :erp_id
-                                        AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
-                                        AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
-                                    """), {"erp_id": row.erp_id, "att_date": row.the_date}).first()
-            
+                    SELECT leave_type
+                    FROM official_work_leaves
+                    WHERE erp_id = :erp_id
+                    AND CAST(start_date AS DATE) <= CAST(:att_date AS DATE)
+                    AND CAST(end_date AS DATE) >= CAST(:att_date AS DATE)
+                """), {
+                    "erp_id": row.erp_id,
+                    "att_date": row.the_date
+                }).first()
+
                 if row.checkin_time is not None:
-                    flag = 'Present'
+                    flag = "Present"
+
                 elif row.checkin_time is None and row.checkout_time is None:
+
                     if leave_result:
                         flag = leave_result.leave_type
+
                     elif official_work:
                         flag = official_work.leave_type
+
                     else:
+
                         holiday_result = session.execute(text("""
-                            SELECT name FROM public_holidays
+                            SELECT name
+                            FROM public_holidays
                             WHERE CAST(date AS DATE) = :att_date
-                        """), {"att_date": row.the_date}).first()
+                        """), {
+                            "att_date": row.the_date
+                        }).first()
+
                         if holiday_result:
                             flag = holiday_result.name
+
+                        # Saturday = 5, Sunday = 6
+                        elif row.the_date.weekday() in (5, 6):
+                            flag = "Weekend"
+
                         else:
-                            flag = 'Absent'
-                if row.erp_id==471:
-                    print(flag)
+                            flag = "Absent"
+
+                # if row.erp_id == 471:
+                #     print(row.the_date, flag)
+
                 records.append({
-                    'erp_id': row.erp_id,
-                    'name': row.name,
-                    'designation': row.designation,
-                    'grade': row.grade,
-                    'section': row.section,
-                    'checkout_time': row.checkout_time if row.checkout_time is not None else '-',
-                    'checkin_time': row.checkin_time if row.checkin_time is not None else '-',
-                    'timestamp': row.the_date,
-                    'late':  flag, 
+                    "erp_id": row.erp_id,
+                    "name": row.name,
+                    "designation": row.designation,
+                    "grade": row.grade,
+                    "section": row.section,
+                    "checkout_time": row.checkout_time if row.checkout_time is not None else "-",
+                    "checkin_time": row.checkin_time if row.checkin_time is not None else "-",
+                    "timestamp": row.the_date,
+                    "late": flag,
                 })
+
             return JsonResponse(records, safe=False)
+
         finally:
             session.close()
-    
+
     @csrf_exempt
     @require_POST
     def attendance_team_level(request):
@@ -785,7 +863,7 @@ class AttendanceView:
                 SELECT
                     e.erp_id,
                     e.hris_id,
-                    s.name AS section
+                    ISNULL(s.name, '-') AS section
                 FROM employees e
                 LEFT JOIN sections s
                     ON s.id = e.section_id
@@ -798,8 +876,8 @@ class AttendanceView:
                     user_id,
                     CAST(timestamp AS DATE) AS att_date
                 FROM attendance
-                WHERE CAST(timestamp AS DATE)
-                    BETWEEN :fromdate AND :todate
+                WHERE timestamp >= :fromdate
+                AND timestamp < DATEADD(DAY, 1, :todate)
             ),
 
             leave_days AS
@@ -809,6 +887,9 @@ class AttendanceView:
                     CAST(start_date AS DATE) AS start_date,
                     CAST(end_date AS DATE) AS end_date
                 FROM leaves
+                WHERE status='approved'
+                AND end_date >= :fromdate
+                AND start_date <= :todate
             ),
 
             official_days AS
@@ -818,13 +899,17 @@ class AttendanceView:
                     CAST(start_date AS DATE) AS start_date,
                     CAST(end_date AS DATE) AS end_date
                 FROM official_work_leaves
+                WHERE status='approved'
+                AND end_date >= :fromdate
+                AND start_date <= :todate
             ),
 
             holiday_days AS
             (
-                SELECT DISTINCT
+                SELECT
                     CAST(date AS DATE) AS holiday_date
                 FROM public_holidays
+                WHERE date BETWEEN :fromdate AND :todate
             )
 
             SELECT
@@ -845,11 +930,49 @@ class AttendanceView:
 
                 SUM(
                     CASE
-                        WHEN a.user_id IS NOT NULL THEN 0
-                        WHEN l.erp_id IS NOT NULL THEN 0
-                        WHEN ow.erp_id IS NOT NULL THEN 0
-                        WHEN h.holiday_date IS NOT NULL THEN 0
+                        WHEN l.erp_id IS NOT NULL
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS total_leave,
+
+                SUM(
+                    CASE
+                        WHEN ow.erp_id IS NOT NULL
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS total_official_work,
+
+                SUM(
+                    CASE
+
+                        -- Present
+                        WHEN a.user_id IS NOT NULL
+                        THEN 0
+
+                        -- Leave
+                        WHEN l.erp_id IS NOT NULL
+                        THEN 0
+
+                        -- Official Work
+                        WHEN ow.erp_id IS NOT NULL
+                        THEN 0
+
+                        -- Holiday
+                        WHEN h.holiday_date IS NOT NULL
+                        THEN 0
+
+                        -- Saturday
+                        WHEN DATEPART(WEEKDAY, dr.att_date) = 7
+                        THEN 0
+
+                        -- Sunday
+                        WHEN DATEPART(WEEKDAY, dr.att_date) = 1
+                        THEN 0
+
                         ELSE 1
+
                     END
                 ) AS total_absent
 
@@ -892,12 +1015,24 @@ class AttendanceView:
             records = []
 
             for row in rows:
+
                 records.append({
+
                     "date": row.attendance_date,
                     "section": row.section,
                     "total_employees": row.total_employees,
                     "total_present": row.total_present,
+                    "total_leave": row.total_leave,
+                    "total_official_work": row.total_official_work,
                     "total_absent": row.total_absent,
+
+                    "status": (
+                        f"Present: {row.total_present}, "
+                        f"Leave: {row.total_leave}, "
+                        f"Official Work: {row.total_official_work}, "
+                        f"Absent: {row.total_absent}"
+                    )
+
                 })
 
             return JsonResponse(records, safe=False)

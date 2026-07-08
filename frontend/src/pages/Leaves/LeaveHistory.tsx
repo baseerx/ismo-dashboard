@@ -36,27 +36,27 @@ export default function LeaveHistory() {
     getSectionsData();
   }, []);
 
-    const handleSelectChange = (value: string) => {
+  const handleSelectChange = (value: string) => {
     setData({
       ...data,
       section: value,
     });
   }
-    const handleSubmit = async () => {
-        if (!data.section){
+  const handleSubmit = async () => {
+    if (!data.section) {
 
-          toast.error("Please select a section");
-          return;
-        }
-        try {
-            const response = await axios.post("/leaves/history/", data);
-            setLeaveHistory(response.data.attendance);
-            toast.success("Leave applied successfully");
-        } catch (error) {
-          console.error("Error applying leave:", error);
-          toast.error("Failed to apply leave");
-        }
-      };
+      toast.error("Please select a section");
+      return;
+    }
+    try {
+      const response = await axios.post("/leaves/history/", data);
+      setLeaveHistory(response.data.attendance);
+      toast.success("Leave applied successfully");
+    } catch (error) {
+      console.error("Error applying leave:", error);
+      toast.error("Failed to apply leave");
+    }
+  };
 
   const getSectionsData = async () => {
     try {
@@ -78,36 +78,36 @@ export default function LeaveHistory() {
     section: "",
   });
 
-  
 
-const columns: ColumnDef<AttendanceRow>[] = [
+
+  const columns: ColumnDef<AttendanceRow>[] = [
     {
-        header: "ERP ID",
-        accessorKey: "erp_id",
+      header: "ERP ID",
+      accessorKey: "erp_id",
     },
     {
-        header: "Name",
-        accessorKey: "employee_name",
+      header: "Name",
+      accessorKey: "employee_name",
     },
     {
-        header: "Section",
-        accessorKey: "section",
+      header: "Section",
+      accessorKey: "section",
     },
     {
-        header: "Leave Count",
-        accessorKey: "leave_count",
-        cell: ({ getValue }) => {
-            const value = getValue<number>();
-            const color =
-                "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500";
-            return (
-                <span className={color}>
-                    {value ?? 0}
-                </span>
-            );
-        },
+      header: "Leave Count",
+      accessorKey: "leave_count",
+      cell: ({ getValue }) => {
+        const value = getValue<number>();
+        const color =
+          "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500";
+        return (
+          <span className={color}>
+            {value ?? 0}
+          </span>
+        );
+      },
     },
-];
+  ];
 
   const fetchEmployeesOptions = async () => {
     try {
