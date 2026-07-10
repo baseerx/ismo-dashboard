@@ -1137,73 +1137,170 @@ class AttendanceView:
     @csrf_exempt
     @require_POST
     def attendance_section(request):
-        data = json.loads(request.body.decode('utf-8'))
-        section = data.get('section')
-        date = data.get('date')
+        data = json.loads(request.body.decode("utf-8"))
+        section = data.get("section")
+        date = data.get("date")
 
         session = SessionLocal()
         records = []
+
         try:
+
             query = text("""
                 SELECT
                     e.id AS id,
-                    a.uid AS uid,
-                    e.erp_id AS erp_id,
-                    e.name AS name,
+                    e.erp_id,
+                    e.hris_id,
+                    e.name,
                     d.title AS designation,
                     g.name AS grade,
                     s.name AS section,
-                    a.timestamp AS timestamp,
-                    a.status AS status,
-                    a.lateintime AS lateintime,
-                    a.punch AS punch
-                FROM employees e
-                LEFT JOIN sections s ON s.id = e.section_id
-                LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN grades g ON g.id = e.grade_id
-                LEFT JOIN attendance a ON e.hris_id = a.user_id AND CAST(a.timestamp AS DATE) = :date
-                WHERE s.id = :section
-                   AND a.status IN ('Checked In', 'Checked Out', 'Early Checked Out') AND e.flag = 1
-                ORDER BY g.name DESC
-            """)
-            result = session.execute(
-                query, {"section": section, "date": date})
-            for row in result:
-                check_in_deadline = time(8, 30)
-                check_out_deadline = time(16, 0)
-                if row.status == 'Checked In':
-                        punch_time = row.timestamp.time() if row.timestamp else None
-                        if punch_time and punch_time > check_in_deadline:
-                            late_status = 'Late'
-                        else:
-                            late_status = 'On time'
+                    a.uid,
+                    a.timestamp,
+                    a.status,
+                    a.lateintime,
+                    a.punch
 
-                elif row.status == 'Checked Out':
-                        punch_time = row.timestamp.time() if row.timestamp else None
-                        if punch_time and punch_time < check_out_deadline:
-                            late_status = 'Early'
+                FROM employees e
+
+                LEFT JOIN sections s
+                    ON s.id = e.section_id
+
+                LEFT JOIN designations d
+                    ON d.id = e.designation_id
+
+                LEFT JOIN grades g
+                    ON g.id = e.grade_id
+
+                LEFT JOIN attendance a
+                    ON e.hris_id = a.user_id
+                AND CAST(a.timestamp AS DATE)=:date
+
+                WHERE
+                    e.flag = 1
+                    AND e.section_id = :section
+
+                ORDER BY
+                    g.name DESC,
+                    e.erp_id
+            """)
+
+            rows = session.execute(
+                query,
+                {
+                    "section": section,
+                    "date": date
+                }
+            ).fetchall()
+
+            check_in_deadline = time(8, 30)
+            check_out_deadline = time(16, 0)
+
+            attendance_date = datetime.strptime(date, "%Y-%m-%d").date()
+
+            for row in rows:
+
+                flag = "Absent"
+                late_status = "-"
+
+                if row.uid is not None:
+
+                    flag = "Present"
+
+                    if row.status == "Checked In":
+
+                        punch_time = row.timestamp.time()
+
+                        if punch_time > check_in_deadline:
+                            late_status = "Late"
                         else:
-                            late_status = 'On time'
+                            late_status = "On Time"
+
+                    elif row.status == "Checked Out":
+
+                        punch_time = row.timestamp.time()
+
+                        if punch_time < check_out_deadline:
+                            late_status = "Early Checkout"
+                        else:
+                            late_status = "On Time"
+
+                    elif row.status == "Early Checked Out":
+                        late_status = "Early Checkout"
+
                 else:
-                        late_status = 'Early'
-                    
+
+                    leave = session.execute(text("""
+                        SELECT TOP 1 leave_type
+                        FROM leaves
+                        WHERE erp_id=:erp_id
+                        AND status='approved'
+                        AND CAST(start_date AS DATE)<=:att_date
+                        AND CAST(end_date AS DATE)>=:att_date
+                    """), {
+                        "erp_id": row.erp_id,
+                        "att_date": attendance_date
+                    }).first()
+
+                    official = session.execute(text("""
+                        SELECT TOP 1 leave_type
+                        FROM official_work_leaves
+                        WHERE erp_id=:erp_id
+                        AND status='approved'
+                        AND CAST(start_date AS DATE)<=:att_date
+                        AND CAST(end_date AS DATE)>=:att_date
+                    """), {
+                        "erp_id": row.erp_id,
+                        "att_date": attendance_date
+                    }).first()
+
+                    holiday = session.execute(text("""
+                        SELECT TOP 1 name
+                        FROM public_holidays
+                        WHERE CAST(date AS DATE)=:att_date
+                    """), {
+                        "att_date": attendance_date
+                    }).first()
+
+                    weekday = attendance_date.weekday()
+
+                    if leave:
+                        flag = leave.leave_type
+
+                    elif official:
+                        flag = official.leave_type
+
+                    elif holiday:
+                        flag = holiday.name
+
+                    elif weekday == 5:
+                        flag = "Saturday"
+
+                    elif weekday == 6:
+                        flag = "Sunday"
+
+                    else:
+                        flag = "Absent"
+
                 records.append({
-                    'id': row.id,
-                    'erp_id': row.erp_id,
-                    'name': row.name,
-                    'designation': row.designation,
-                    'grade': row.grade,
-                    'section': row.section,
-                    'timestamp': '-' if row.timestamp is None else row.timestamp,
-                    'late': late_status,
-                    'flag': 'Present' if row.uid is not None else 'Absent',
-                    'status': '-' if row.status is None else row.status,
-                    'punch': row.punch
+                    "id": row.id,
+                    "erp_id": row.erp_id,
+                    "name": row.name,
+                    "designation": row.designation,
+                    "grade": row.grade,
+                    "section": row.section,
+                    "timestamp": "-" if row.timestamp is None else row.timestamp,
+                    "late": late_status,
+                    "flag": flag,
+                    "status": "-" if row.status is None else row.status,
+                    "punch": row.punch
                 })
+
             return JsonResponse(records, safe=False)
+
         finally:
             session.close()
-
+            
     @csrf_exempt
     @require_POST
     def attendance_status(request):
