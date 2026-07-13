@@ -98,6 +98,9 @@ def create_official_work_request(request):
 
         # --------------------------------------------------
         # WEEKEND / PUBLIC HOLIDAY CHECK
+        # Weekends are allowed when "sandwiched" inside a request
+        # (i.e. at least one working day is actually being taken off).
+        # A request made up of only weekend day(s) is rejected.
         # --------------------------------------------------
         holiday_dates = set(
             Holiday.objects.filter(
@@ -105,19 +108,23 @@ def create_official_work_request(request):
             ).values_list("date", flat=True)
         )
 
+        has_working_day = False
         day_cursor = start_date
         while day_cursor <= end_date:
-            if day_cursor.weekday() in (5, 6):  # Saturday, Sunday
-                return JsonResponse(
-                    {"error": f"Official Work cannot be applied on a weekend ({day_cursor})"},
-                    status=400
-                )
             if day_cursor in holiday_dates:
                 return JsonResponse(
                     {"error": f"Official Work cannot be applied on a public holiday ({day_cursor})"},
                     status=400
                 )
+            if day_cursor.weekday() not in (5, 6):  # not Saturday/Sunday
+                has_working_day = True
             day_cursor += timedelta(days=1)
+
+        if not has_working_day:
+            return JsonResponse(
+                {"error": "Official Work cannot be applied only for weekend day(s)"},
+                status=400
+            )
 
         # --------------------------------------------------
         # DUPLICATE / CONFLICTING OFFICIAL WORK CHECK (SAME DATES)
