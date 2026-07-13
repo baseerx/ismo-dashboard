@@ -3,9 +3,13 @@ from django.http import JsonResponse
 from .models import OfficialWorkModel
 from django.views.decorators.http import require_GET,require_POST
 from django.views.decorators.csrf import csrf_exempt
+from django.db.models import Q
 import json
 from sqlalchemy import text
 from db import SessionLocal
+from datetime import datetime, timedelta
+from leaves.models import LeaveModel
+from holidays.models import Holiday
 # Create your views here.
 
 @require_GET
@@ -57,24 +61,117 @@ def get_leave_requests(request,erpid):
 @csrf_exempt
 @require_POST
 def create_official_work_request(request):
-    data = json.loads(request.body.decode('utf-8'))
-    
-    if not data.get("employee_id"):
-        return JsonResponse({"error": "employee_id is required"}, status=400)
+    try:
+        data = json.loads(request.body.decode('utf-8'))
 
-    official_work = OfficialWorkModel.objects.create(
-        erp_id=data.get("erp_id", 0),
-        employee_id=data.get("employee_id"),
-        leave_type=data.get("leave_type", ""),  
-        reason=data.get("reason", ""),
-        status=data.get("status", ""),
-        head_erpid=data.get("head_erpid", ""),
-        approved_by=data.get("approved_by", ""),
-        start_date=data.get("start_date"),
-        end_date=data.get("end_date"),
-    )
-    
-    return JsonResponse({"message": "Leave request created successfully", "id": official_work.pk})
+        erp_id = data.get("erp_id")
+        employee_id = data.get("employee_id")
+        start_date = data.get("start_date")
+        end_date = data.get("end_date")
+
+        # --------------------------------------------------
+        # REQUIRED FIELDS CHECK
+        # --------------------------------------------------
+        if not all([erp_id, employee_id, start_date, end_date]):
+            return JsonResponse(
+                {"error": "erp_id, employee_id, start_date and end_date are required"},
+                status=400
+            )
+
+        # --------------------------------------------------
+        # DATE PARSING
+        # --------------------------------------------------
+        try:
+            start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            return JsonResponse(
+                {"error": "Invalid date format. Use YYYY-MM-DD"},
+                status=400
+            )
+
+        if start_date > end_date:
+            return JsonResponse(
+                {"error": "start_date cannot be greater than end_date"},
+                status=400
+            )
+
+        # --------------------------------------------------
+        # WEEKEND / PUBLIC HOLIDAY CHECK
+        # --------------------------------------------------
+        holiday_dates = set(
+            Holiday.objects.filter(
+                date__gte=start_date, date__lte=end_date
+            ).values_list("date", flat=True)
+        )
+
+        day_cursor = start_date
+        while day_cursor <= end_date:
+            if day_cursor.weekday() in (5, 6):  # Saturday, Sunday
+                return JsonResponse(
+                    {"error": f"Official Work cannot be applied on a weekend ({day_cursor})"},
+                    status=400
+                )
+            if day_cursor in holiday_dates:
+                return JsonResponse(
+                    {"error": f"Official Work cannot be applied on a public holiday ({day_cursor})"},
+                    status=400
+                )
+            day_cursor += timedelta(days=1)
+
+        # --------------------------------------------------
+        # DUPLICATE / CONFLICTING OFFICIAL WORK CHECK (SAME DATES)
+        # --------------------------------------------------
+        overlapping_official_work = OfficialWorkModel.objects.filter(
+            erp_id=erp_id,
+            start_date__lte=end_date,
+            end_date__gte=start_date,
+        ).exclude(
+            Q(status__iexact="rejected") | Q(status__iexact="cancelled")
+        )
+
+        if overlapping_official_work.exists():
+            return JsonResponse(
+                {"error": "An Official Work request already exists for the selected date(s)"},
+                status=400
+            )
+
+        # --------------------------------------------------
+        # LEAVE CONFLICT CHECK (SAME DATES)
+        # --------------------------------------------------
+        overlapping_leaves = LeaveModel.objects.filter(
+            erp_id=erp_id,
+            start_date__lte=end_date,
+            end_date__gte=start_date,
+        ).exclude(
+            Q(status__iexact="rejected") | Q(status__iexact="cancelled")
+        )
+
+        if overlapping_leaves.exists():
+            return JsonResponse(
+                {"error": "Cannot apply Official Work — a leave request already exists for the selected date(s)"},
+                status=400
+            )
+
+        official_work = OfficialWorkModel.objects.create(
+            erp_id=erp_id,
+            employee_id=employee_id,
+            leave_type=data.get("leave_type", ""),
+            reason=data.get("reason", ""),
+            status=data.get("status", ""),
+            head_erpid=data.get("head_erpid", ""),
+            approved_by=data.get("approved_by", ""),
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        return JsonResponse(
+            {"message": "Official Work request created successfully", "id": official_work.pk},
+            status=201
+        )
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
 
 
 @csrf_exempt

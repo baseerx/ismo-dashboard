@@ -3,13 +3,10 @@ from django.http import JsonResponse
 from .models import LeaveModel, LeaveTypeCountModel
 from django.views.decorators.http import require_GET,require_POST
 from django.views.decorators.csrf import csrf_exempt
-from django.db.models import Q
 import json
 from sqlalchemy import text
 from db import SessionLocal
-from datetime import datetime,date,timedelta
-from holidays.models import Holiday
-from officialwork.models import OfficialWorkModel
+from datetime import datetime,date
 
 # Create your views here.
 
@@ -716,73 +713,6 @@ def create_leave_request(request):
             )
 
         requested_days = (end_date - start_date).days + 1
-
-        # --------------------------------------------------
-        # WEEKEND / PUBLIC HOLIDAY CHECK
-        # --------------------------------------------------
-        holiday_dates = set(
-            Holiday.objects.filter(
-                date__gte=start_date, date__lte=end_date
-            ).values_list("date", flat=True)
-        )
-
-        day_cursor = start_date
-        while day_cursor <= end_date:
-            if day_cursor.weekday() in (5, 6):  # Saturday, Sunday
-                return JsonResponse(
-                    {"error": f"Leave cannot be applied on a weekend ({day_cursor})"},
-                    status=400
-                )
-            if day_cursor in holiday_dates:
-                return JsonResponse(
-                    {"error": f"Leave cannot be applied on a public holiday ({day_cursor})"},
-                    status=400
-                )
-            day_cursor += timedelta(days=1)
-
-        # --------------------------------------------------
-        # DUPLICATE / CONFLICTING LEAVE CHECK (SAME DATES)
-        # --------------------------------------------------
-        overlapping_leaves = LeaveModel.objects.filter(
-            erp_id=erp_id,
-            start_date__lte=end_date,
-            end_date__gte=start_date,
-        ).exclude(
-            Q(status__iexact="rejected") | Q(status__iexact="cancelled")
-        )
-
-        for existing in overlapping_leaves:
-            if existing.leave_type == leave_type:
-                return JsonResponse(
-                    {"error": f"A '{leave_type}' request already exists for the selected date(s)"},
-                    status=400
-                )
-            return JsonResponse(
-                {
-                    "error": (
-                        f"Cannot apply for '{leave_type}' — a different leave type "
-                        f"('{existing.leave_type}') already exists for the selected date(s)"
-                    )
-                },
-                status=400
-            )
-
-        # --------------------------------------------------
-        # OFFICIAL WORK CONFLICT CHECK (SAME DATES)
-        # --------------------------------------------------
-        overlapping_official_work = OfficialWorkModel.objects.filter(
-            erp_id=erp_id,
-            start_date__lte=end_date,
-            end_date__gte=start_date,
-        ).exclude(
-            Q(status__iexact="rejected") | Q(status__iexact="cancelled")
-        )
-
-        if overlapping_official_work.exists():
-            return JsonResponse(
-                {"error": "Cannot apply leave — Official Work already exists for the selected date(s)"},
-                status=400
-            )
 
         # --------------------------------------------------
         # FINANCIAL YEAR CALCULATION
