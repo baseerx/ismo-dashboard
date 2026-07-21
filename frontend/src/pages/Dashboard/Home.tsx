@@ -241,7 +241,17 @@ export default function Home() {
           title="Absent Today"
           value={att.absent}
           icon={<AlertIcon className="text-error-500 size-6 dark:text-white/90" />}
-          onClick={() => navigate("/attendance/total-absent")}
+          onClick={() =>
+            scope === "section" && stats.section_id != null
+              ? navigate("/attendance/status", {
+                  state: {
+                    section: String(stats.section_id),
+                    status: "absent",
+                    date: stats.today,
+                  },
+                })
+              : navigate("/attendance/total-absent")
+          }
           subtext="Click to view details"
         />
         <StatTile

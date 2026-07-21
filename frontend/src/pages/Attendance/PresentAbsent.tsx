@@ -11,6 +11,7 @@ import DatePicker from "../../components/form/date-picker";
 import Label from "../../components/form/Label";
 import Select from "../../components/form/Select";
 import Button from "../../components/ui/button/Button";
+import { useLocation } from "react-router-dom";
 type AttendanceRow = {
     id: string;
     uid: string;
@@ -26,8 +27,11 @@ type AttendanceRow = {
 };
 
 export default function SectionAttendanceReport() {
+    const location = useLocation();
+    const preset = (location.state as { section?: string; status?: string; date?: string } | null) || null;
+
     const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
-    
+
     const [options, setOptions] = useState<{ value: string; label: string }[]>([]);
     const [status] = useState<{ value: string; label: string }[]>([
         { value: "present", label: "Present" },
@@ -35,12 +39,21 @@ export default function SectionAttendanceReport() {
     ]);
 
     const [data, setData] = useState<{ date: string; status: string; section: string }>({
-        date: moment().format("YYYY-MM-DD"),
-        status: "present",
-        section: "",
+        date: preset?.date || moment().format("YYYY-MM-DD"),
+        status: preset?.status || "present",
+        section: preset?.section ? String(preset.section) : "",
     });
     useEffect(() => {
         getSectionsData();
+    }, []);
+
+    // When arriving from the dashboard with a preselected section/status,
+    // run the report automatically using those values.
+    useEffect(() => {
+        if (preset?.section) {
+            fetchAttendanceData();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const getSectionsData = async () => {
@@ -136,6 +149,7 @@ const capitalizeFirstLetter = (val:string) => {
                 <Select
                   options={options}
                   placeholder="Select a section"
+                  defaultValue={data.section}
                   onChange={(value) => {
                     setData((prev) => ({ ...prev, section: value }));
                   }}
@@ -147,6 +161,7 @@ const capitalizeFirstLetter = (val:string) => {
                 <Select
                   options={status}
                   placeholder="Select a status"
+                  defaultValue={data.status}
                   onChange={(value) => {
                     setData((prev) => ({ ...prev, status: value }));
                   }}

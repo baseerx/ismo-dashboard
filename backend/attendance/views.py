@@ -1136,6 +1136,188 @@ class AttendanceView:
 
     @csrf_exempt
     @require_POST
+    def attendance_section_monthly(request):
+        """
+        Monthly attendance for every employee of the requesting user's section.
+        Returns one row per (employee, day) with the day's first check-in and
+        last check-out, so the frontend can pivot it into a day-wise grid.
+        """
+        data = json.loads(request.body.decode("utf-8"))
+        erp_id = data.get("erp_id")
+        fromdate = data.get("fromdate")
+        todate = data.get("todate")
+
+        if not erp_id or not fromdate or not todate:
+            return JsonResponse(
+                {"error": "erp_id, fromdate and todate are required"}, status=400
+            )
+
+        session = SessionLocal()
+        records = []
+        try:
+            query = text("""
+                WITH date_range AS (
+                    SELECT DATEADD(DAY, v.number, :fromdate) AS the_date
+                    FROM master..spt_values v
+                    WHERE v.type = 'P'
+                        AND DATEADD(DAY, v.number, :fromdate) <= :todate
+                ),
+                section_employees AS (
+                    SELECT
+                        e.id,
+                        e.erp_id,
+                        e.name,
+                        e.hris_id,
+                        e.section_id,
+                        e.designation_id,
+                        e.grade_id
+                    FROM employees e
+                    WHERE e.flag = 1
+                        AND e.section_id = (SELECT section_id FROM employees WHERE erp_id = :erpid)
+                ),
+                att AS (
+                    -- Pre-aggregate the month's punches once, filtered by a sargable
+                    -- timestamp range and to this section's employees only.
+                    SELECT
+                        a.user_id,
+                        CAST(a.timestamp AS DATE) AS att_date,
+                        MIN(CASE WHEN a.status = 'Checked In' THEN a.timestamp END) AS checkin_time,
+                        MAX(CASE WHEN a.status IN ('Checked Out', 'Early Checked Out') THEN a.timestamp END) AS checkout_time
+                    FROM attendance a
+                    WHERE a.timestamp >= :fromdate
+                        AND a.timestamp < DATEADD(DAY, 1, :todate)
+                        AND a.user_id IN (SELECT hris_id FROM section_employees)
+                    GROUP BY a.user_id, CAST(a.timestamp AS DATE)
+                ),
+                leave_days AS (
+                    SELECT erp_id, leave_type,
+                           CAST(start_date AS DATE) AS start_date,
+                           CAST(end_date AS DATE) AS end_date
+                    FROM leaves
+                    WHERE status = 'approved'
+                        AND end_date >= :fromdate
+                        AND start_date <= :todate
+                ),
+                official_days AS (
+                    SELECT erp_id, leave_type,
+                           CAST(start_date AS DATE) AS start_date,
+                           CAST(end_date AS DATE) AS end_date
+                    FROM official_work_leaves
+                    WHERE status = 'approved'
+                        AND end_date >= :fromdate
+                        AND start_date <= :todate
+                ),
+                holiday_days AS (
+                    SELECT CAST(date AS DATE) AS holiday_date, name
+                    FROM public_holidays
+                    WHERE date >= :fromdate AND date <= :todate
+                )
+                SELECT
+                    dr.the_date,
+                    se.erp_id AS erp_id,
+                    se.name AS name,
+                    d.title AS designation,
+                    g.name AS grade,
+                    s.name AS section,
+                    att.checkin_time,
+                    att.checkout_time,
+                    MAX(l.leave_type) AS leave_type,
+                    MAX(ow.leave_type) AS official_type,
+                    MAX(h.name) AS holiday_name
+                FROM date_range dr
+                CROSS JOIN section_employees se
+                LEFT JOIN sections s ON s.id = se.section_id
+                LEFT JOIN designations d ON d.id = se.designation_id
+                LEFT JOIN grades g ON g.id = se.grade_id
+                LEFT JOIN att
+                    ON att.user_id = se.hris_id
+                    AND att.att_date = dr.the_date
+                LEFT JOIN leave_days l
+                    ON l.erp_id = se.erp_id
+                    AND dr.the_date BETWEEN l.start_date AND l.end_date
+                LEFT JOIN official_days ow
+                    ON ow.erp_id = se.erp_id
+                    AND dr.the_date BETWEEN ow.start_date AND ow.end_date
+                LEFT JOIN holiday_days h
+                    ON h.holiday_date = dr.the_date
+                GROUP BY
+                    dr.the_date,
+                    se.id,
+                    se.erp_id,
+                    se.name,
+                    d.title,
+                    g.name,
+                    s.name,
+                    att.checkin_time,
+                    att.checkout_time
+                ORDER BY
+                    g.name DESC,
+                    se.name,
+                    dr.the_date
+            """)
+
+            rows = session.execute(
+                query,
+                {"fromdate": fromdate, "todate": todate, "erpid": erp_id}
+            ).fetchall()
+
+            check_in_deadline = time(8, 30)
+            check_out_deadline = time(16, 0)
+            today = datetime.now().date()
+
+            for row in rows:
+                checkin = row.checkin_time
+                checkout = row.checkout_time
+
+                late_status = "-"
+                early_status = "-"
+                if checkin is not None:
+                    late_status = "Late" if checkin.time() > check_in_deadline else "On Time"
+                if checkout is not None:
+                    early_status = "Early" if checkout.time() < check_out_deadline else "On Time"
+
+                # Day status precedence:
+                # present > leave > official work > holiday > weekend > future (not reached) > absent
+                the_date = row.the_date.date() if isinstance(row.the_date, datetime) else row.the_date
+                weekday = the_date.weekday() if the_date else None
+                if checkin is not None or checkout is not None:
+                    flag, flag_type = "Present", "present"
+                elif row.leave_type:
+                    flag, flag_type = row.leave_type, "leave"
+                elif row.official_type:
+                    flag, flag_type = row.official_type, "official"
+                elif row.holiday_name:
+                    flag, flag_type = row.holiday_name, "holiday"
+                elif weekday in (5, 6):
+                    flag, flag_type = "Weekend", "weekend"
+                elif the_date and the_date > today:
+                    # The day hasn't happened yet — no attendance to report.
+                    flag, flag_type = "-", "future"
+                else:
+                    flag, flag_type = "Absent", "absent"
+
+                records.append({
+                    "erp_id": row.erp_id,
+                    "name": row.name,
+                    "designation": row.designation,
+                    "grade": row.grade,
+                    "section": row.section,
+                    "date": row.the_date.strftime("%Y-%m-%d") if row.the_date else None,
+                    "checkin_time": checkin.strftime("%Y-%m-%d %H:%M:%S") if checkin is not None else "-",
+                    "checkout_time": checkout.strftime("%Y-%m-%d %H:%M:%S") if checkout is not None else "-",
+                    "late_status": late_status,
+                    "early_status": early_status,
+                    "flag": flag,
+                    "flag_type": flag_type,
+                })
+
+            return JsonResponse(records, safe=False)
+
+        finally:
+            session.close()
+
+    @csrf_exempt
+    @require_POST
     def attendance_section(request):
         data = json.loads(request.body.decode("utf-8"))
         section = data.get("section")
