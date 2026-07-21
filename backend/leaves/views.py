@@ -10,8 +10,43 @@ from db import SessionLocal
 from datetime import datetime,date,timedelta
 from holidays.models import Holiday
 from officialwork.models import OfficialWorkModel
+from users.models import Employees
+from addtouser.models import CustomUser
+from django.contrib.auth.models import User
 
 # Create your views here.
+
+# Leave types restricted to a specific employee gender ("M"/"F")
+GENDER_RESTRICTED_LEAVE_TYPES = {
+    "maternity leave first": "F",
+    "maternity leave second": "F",
+    "maternity leave third": "F",
+    "iddat leave": "F",
+    "paternity leave": "M",
+}
+
+# Leave types that require a minimum number of years of service
+MIN_SERVICE_YEARS_LEAVE_TYPES = {
+    "hajj leave": 3,
+}
+
+
+def get_employee_years_of_service(erp_id):
+    """Returns years of service for an employee (based on their account's
+    date_joined), or None if it cannot be determined."""
+    authid = CustomUser.objects.filter(erpid=erp_id).values_list(
+        "authid", flat=True
+    ).first()
+    if not authid:
+        return None
+
+    date_joined = User.objects.filter(pk=authid).values_list(
+        "date_joined", flat=True
+    ).first()
+    if not date_joined:
+        return None
+
+    return (date.today() - date_joined.date()).days / 365.25
 
 @require_GET
 def get_leave_requests(request,erpid):
@@ -678,6 +713,77 @@ def section_leave_report(request):
 
 @csrf_exempt
 @require_POST
+def get_leave_balance(request):
+    data = json.loads(request.body.decode("utf-8"))
+
+    erp_id = data.get("erp_id")
+    leave_type = data.get("leave_type")
+
+    if not erp_id or not leave_type:
+        return JsonResponse(
+            {"error": "erp_id and leave_type are required"},
+            status=400
+        )
+
+    # -------------------------------------------------------
+    # Pakistan Financial Year
+    # 1 July  -> 30 June
+    # -------------------------------------------------------
+    today = date.today()
+
+    if today.month >= 7:
+        fy_start = date(today.year, 7, 1)
+        fy_end = date(today.year + 1, 6, 30)
+    else:
+        fy_start = date(today.year - 1, 7, 1)
+        fy_end = date(today.year, 6, 30)
+
+    leave_limit = LeaveTypeCountModel.objects.filter(leave_type=leave_type).first()
+    total_allowed = leave_limit.total_leaves if leave_limit else None
+
+    used_leaves = LeaveModel.objects.filter(
+        erp_id=erp_id,
+        leave_type=leave_type,
+        status__in=["approved", "pending"],
+        start_date__lte=fy_end,
+        end_date__gte=fy_start,
+    )
+
+    used_days = 0
+    for leave in used_leaves:
+        if leave.start_date and leave.end_date:
+            actual_start = max(leave.start_date, fy_start)
+            actual_end = min(leave.end_date, fy_end)
+            used_days += (actual_end - actual_start).days + 1
+
+    if leave_type.lower() == "casual leave":
+        has_rr_leave = LeaveModel.objects.filter(
+            erp_id=erp_id,
+            leave_type="Rest & Recreational Leave",
+            status__in=["approved", "pending"],
+            start_date__lte=fy_end,
+            end_date__gte=fy_start,
+        ).exists()
+
+        if has_rr_leave:
+            used_days += 10
+
+    remaining_leaves = total_allowed - used_days if total_allowed is not None else None
+
+    return JsonResponse(
+        {
+            "leave_type": leave_type,
+            "total_allowed": total_allowed,
+            "used_days": used_days,
+            "remaining_leaves": remaining_leaves,
+            "financial_year": f"{fy_start.strftime('%d-%b-%Y')} to {fy_end.strftime('%d-%b-%Y')}",
+        },
+        status=200
+    )
+
+
+@csrf_exempt
+@require_POST
 def create_leave_request(request):
     try:
         data = json.loads(request.body.decode("utf-8"))
@@ -714,6 +820,40 @@ def create_leave_request(request):
                 {"error": "start_date cannot be greater than end_date"},
                 status=400
             )
+
+        # --------------------------------------------------
+        # GENDER RESTRICTION CHECK
+        # --------------------------------------------------
+        required_gender = GENDER_RESTRICTED_LEAVE_TYPES.get(leave_type.lower())
+        if required_gender:
+            employee = Employees.objects.filter(erp_id=erp_id).first()
+            if not employee or (employee.gender or "").upper() != required_gender:
+                return JsonResponse(
+                    {"error": f"'{leave_type}' is not applicable for this employee"},
+                    status=400
+                )
+
+        # --------------------------------------------------
+        # MINIMUM SERVICE LENGTH CHECK
+        # --------------------------------------------------
+        required_service_years = MIN_SERVICE_YEARS_LEAVE_TYPES.get(leave_type.lower())
+        if required_service_years:
+            years_of_service = get_employee_years_of_service(erp_id)
+            if years_of_service is None:
+                return JsonResponse(
+                    {"error": f"Unable to verify service tenure required for '{leave_type}'"},
+                    status=400
+                )
+            if years_of_service < required_service_years:
+                return JsonResponse(
+                    {
+                        "error": (
+                            f"'{leave_type}' requires at least {required_service_years} years of service "
+                            f"(current tenure: {years_of_service:.1f} years)"
+                        )
+                    },
+                    status=400
+                )
 
         requested_days = (end_date - start_date).days + 1
 

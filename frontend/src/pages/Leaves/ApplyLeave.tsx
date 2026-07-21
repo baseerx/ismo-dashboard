@@ -3,7 +3,7 @@ import ComponentCard from "../../components/common/ComponentCard";
 import PageMeta from "../../components/common/PageMeta";
 import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
 import axios from "../../api/axios"; // Adjust the import path as necessary
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import moment from "moment";
 import _ from "lodash";
 import { ToastContainer, toast } from "react-toastify";
@@ -14,6 +14,8 @@ import Button from "../../components/ui/button/Button";
 import Label from "../../components/form/Label";
 import Select from "../../components/form/Select";
 import TextArea from "../../components/form/input/TextArea";
+import Badge from "../../components/ui/badge/Badge";
+import { LeaveIcon, InfoIcon } from "../../icons";
 
 type AttendanceRow = {
   id?: number;
@@ -69,36 +71,23 @@ export default function IndividualAttendance() {
     "SECTION HEAD",
   ];
 
-
-  useEffect(() => {
-    fetchEmployeesOptions();
-    getEmployeesLeaves();
-  }, []);
-  
-  const handleApproveLeave = async (id: any) => {
-    const action = id.toString().split("-")[1];
-    const empid = parseInt(id.toString().split("-")[0]);
-
-    try {
-      if (!empid || !action) {
-        toast.error("Invalid leave request ID or action");
-        return;
-      }
-
-      if (window.confirm(`Are you sure you want to ${action} this leave?`)) {
-        const response = await axios.post("/leaves/approve/", {
-          recordid: Number(empid),
-          action: action,
-        });
-        console.log("Leave approval response:", response.data);
-        getEmployeesLeaves();
-        toast.success("Leave approved successfully");
-      }
-    } catch (error) {
-      console.error("Error approving leave:", error);
-      toast.error("Failed to approve leave");
-    }
+  // Leave types restricted to a specific employee gender ("M"/"F")
+  const genderRestrictedLeaveTypes: Record<string, "M" | "F"> = {
+    "Maternity Leave First": "F",
+    "Maternity Leave Second": "F",
+    "Maternity Leave Third": "F",
+    "IDDAT Leave": "F",
+    "Paternity Leave": "M",
   };
+
+  const [employeesData, setEmployeesData] = useState<any[]>([]);
+  const [balance, setBalance] = useState<{
+    total_allowed: number | null;
+    used_days: number;
+    remaining_leaves: number | null;
+    financial_year: string;
+  } | null>(null);
+  const initializedSelf = useRef(false);
 
   const [data, setData] = useState<AttendanceRow>({
     erp_id: 0,
@@ -123,6 +112,152 @@ export default function IndividualAttendance() {
     start_date: "",
     end_date: "",
   });
+
+  useEffect(() => {
+    fetchEmployeesOptions();
+    getEmployeesLeaves();
+  }, []);
+
+  // Auto-select the logged in user as the employee, and derive their
+  // Section Head (highest-graded employee, grade_id >= 9, in the same section)
+  useEffect(() => {
+    if (initializedSelf.current || employeesData.length === 0) return;
+
+    const self = employeesData.find(
+      (e: any) => Number(e.erp_id) === Number(user.erpid)
+    );
+    if (!self) return;
+
+    initializedSelf.current = true;
+
+    let headErpId: any = user.grade_id >= 9 ? user.erpid : "";
+    if (user.grade_id < 9) {
+      const sectionHeads = employeesData.filter(
+        (e: any) =>
+          Number(e.section_id) === Number(self.section_id) &&
+          Number(e.grade_id) >= 9 &&
+          Number(e.erp_id) !== Number(self.erp_id)
+      );
+      if (sectionHeads.length > 0) {
+        const topHead = sectionHeads.reduce((max: any, e: any) =>
+          Number(e.grade_id) > Number(max.grade_id) ? e : max
+        );
+        headErpId = topHead.erp_id;
+      }
+    }
+
+    setData((prev) => ({
+      ...prev,
+      employee_id: self.id,
+      erp_id: self.erp_id,
+      head: headErpId,
+    }));
+  }, [employeesData]);
+
+  const selectedEmployee = employeesData.find(
+    (e: any) => Number(e.erp_id) === Number(data.erp_id)
+  );
+
+  const filteredLeaveTypes = leavetype.filter((type) => {
+    const restriction = genderRestrictedLeaveTypes[type];
+    if (!restriction) return true;
+    if (!selectedEmployee) return true;
+    return (selectedEmployee.gender || "").toUpperCase() === restriction;
+  });
+
+  // Clear the selected leave type if it's not applicable to the currently
+  // selected employee's gender (e.g. employee was changed after selection)
+  useEffect(() => {
+    if (data.leave_type && !filteredLeaveTypes.includes(data.leave_type)) {
+      setData((prev) => ({ ...prev, leave_type: "" }));
+    }
+  }, [selectedEmployee?.gender]);
+
+  // Fetch leave balance whenever the selected employee/leave type changes
+  useEffect(() => {
+    if (!data.leave_type || !data.erp_id) {
+      setBalance(null);
+      return;
+    }
+
+    const fetchBalance = async () => {
+      try {
+        const response = await axios.post("/leaves/balance/", {
+          erp_id: data.erp_id,
+          leave_type: data.leave_type,
+        });
+        setBalance(response.data);
+      } catch (error) {
+        console.error("Error fetching leave balance:", error);
+        setBalance(null);
+      }
+    };
+
+    fetchBalance();
+  }, [data.leave_type, data.erp_id]);
+
+  // Severity of the remaining balance: plenty left / running low / exhausted
+  const balanceTotal = balance?.total_allowed ?? null;
+  const balanceRemaining = balance?.remaining_leaves ?? null;
+  const balanceUsedPct =
+    balanceTotal && balanceTotal > 0
+      ? Math.min(100, Math.max(0, ((balance?.used_days || 0) / balanceTotal) * 100))
+      : 0;
+
+  let balanceSeverity: "good" | "warning" | "critical" = "good";
+  if (balanceTotal !== null) {
+    if (balanceRemaining === null || balanceRemaining <= 0) {
+      balanceSeverity = "critical";
+    } else if (balanceRemaining <= balanceTotal * 0.2) {
+      balanceSeverity = "warning";
+    }
+  }
+
+  const balanceSeverityStyles = {
+    good: {
+      fill: "bg-success-500",
+      track: "bg-success-50 dark:bg-success-500/15",
+      text: "text-success-600 dark:text-success-500",
+      badge: "success" as const,
+    },
+    warning: {
+      fill: "bg-warning-500",
+      track: "bg-warning-50 dark:bg-warning-500/15",
+      text: "text-warning-600 dark:text-orange-400",
+      badge: "warning" as const,
+    },
+    critical: {
+      fill: "bg-error-500",
+      track: "bg-error-50 dark:bg-error-500/15",
+      text: "text-error-600 dark:text-error-500",
+      badge: "error" as const,
+    },
+  }[balanceSeverity];
+
+  const handleApproveLeave = async (id: any) => {
+    const action = id.toString().split("-")[1];
+    const empid = parseInt(id.toString().split("-")[0]);
+
+    try {
+      if (!empid || !action) {
+        toast.error("Invalid leave request ID or action");
+        return;
+      }
+
+      if (window.confirm(`Are you sure you want to ${action} this leave?`)) {
+        const response = await axios.post("/leaves/approve/", {
+          recordid: Number(empid),
+          action: action,
+        });
+        console.log("Leave approval response:", response.data);
+        getEmployeesLeaves();
+        toast.success("Leave approved successfully");
+      }
+    } catch (error) {
+      console.error("Error approving leave:", error);
+      toast.error("Failed to approve leave");
+    }
+  };
 
   const getEmployeesLeaves = async () => {
     try {
@@ -243,6 +378,7 @@ export default function IndividualAttendance() {
         value: employee.erp_id + "-" + employee.id, // Assuming employee.id is the unique identifier
       }));
       setOptions(employees);
+      setEmployeesData(response.data);
     } catch (error) {
       console.error("Error fetching employee options:", error);
       toast.error("Failed to load employee options");
@@ -316,6 +452,90 @@ export default function IndividualAttendance() {
         <ComponentCard title={`Leave Application Form`}>
           <ToastContainer position="bottom-right" />
 
+          {data.leave_type && (
+            <div className="mb-5 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-50 dark:bg-brand-500/15">
+                    <LeaveIcon className="size-5 text-brand-500" />
+                  </div>
+                  <div>
+                    <h4 className="font-semibold text-gray-800 dark:text-white/90">
+                      {data.leave_type}
+                    </h4>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {selectedEmployee?.name || "Selected employee"}
+                      {selectedEmployee?.erp_id
+                        ? ` (${selectedEmployee.erp_id})`
+                        : ""}
+                    </p>
+                  </div>
+                </div>
+                {balance?.financial_year && (
+                  <Badge color="light" size="sm">
+                    FY {balance.financial_year}
+                  </Badge>
+                )}
+              </div>
+
+              <div className="px-5 py-4">
+                {!balance ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400 dark:text-gray-500">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-gray-300 dark:bg-gray-600" />
+                    Loading leave balance...
+                  </div>
+                ) : balanceTotal === null ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                    <InfoIcon className="size-4 shrink-0" />
+                    No leave limit configured for this leave type.
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-3 gap-4 sm:gap-6">
+                      <div>
+                        <span className="block text-xs text-gray-500 dark:text-gray-400">
+                          Entitled
+                        </span>
+                        <span className="mt-1 block text-title-sm font-bold text-gray-800 dark:text-white/90">
+                          {balanceTotal}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block text-xs text-gray-500 dark:text-gray-400">
+                          Used
+                        </span>
+                        <span className="mt-1 block text-title-sm font-bold text-gray-800 dark:text-white/90">
+                          {balance.used_days}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block text-xs text-gray-500 dark:text-gray-400">
+                          Remaining
+                        </span>
+                        <span
+                          className={`mt-1 block text-title-sm font-bold ${balanceSeverityStyles.text}`}
+                        >
+                          {balanceRemaining !== null && balanceRemaining < 0
+                            ? `Over by ${Math.abs(balanceRemaining)}`
+                            : balanceRemaining}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div
+                      className={`mt-4 h-2 w-full overflow-hidden rounded-full ${balanceSeverityStyles.track}`}
+                    >
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${balanceSeverityStyles.fill}`}
+                        style={{ width: `${balanceUsedPct}%` }}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 mb-4 gap-1 justify-center items-center">
             <div className="w-full">
               <SearchableDropdown
@@ -347,7 +567,8 @@ export default function IndividualAttendance() {
             <div className="w-full my-3">
               <Label>Leave Type</Label>
               <Select
-                options={leavetype.map((type) => ({
+                key={selectedEmployee?.gender || "no-employee"}
+                options={filteredLeaveTypes.map((type) => ({
                   label: type,
                   value: type,
                 }))}

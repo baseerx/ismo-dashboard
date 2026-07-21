@@ -7,7 +7,7 @@ from django.db.models import Q
 import json
 from sqlalchemy import text
 from db import SessionLocal
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from leaves.models import LeaveModel
 from holidays.models import Holiday
 # Create your views here.
@@ -56,6 +56,60 @@ def get_leave_requests(request,erpid):
         })
     sessions.close()
     return JsonResponse({"leaves": data})
+
+
+@csrf_exempt
+@require_POST
+def get_official_work_balance(request):
+    data = json.loads(request.body.decode("utf-8"))
+
+    erp_id = data.get("erp_id")
+    leave_type = data.get("leave_type")
+
+    if not erp_id or not leave_type:
+        return JsonResponse(
+            {"error": "erp_id and leave_type are required"},
+            status=400
+        )
+
+    # -------------------------------------------------------
+    # Pakistan Financial Year
+    # 1 July  -> 30 June
+    # -------------------------------------------------------
+    today = date.today()
+
+    if today.month >= 7:
+        fy_start = date(today.year, 7, 1)
+        fy_end = date(today.year + 1, 6, 30)
+    else:
+        fy_start = date(today.year - 1, 7, 1)
+        fy_end = date(today.year, 6, 30)
+
+    # Official Work has no configured entitlement/limit — this is a running
+    # count of days recorded for the type, not a balance.
+    used_leaves = OfficialWorkModel.objects.filter(
+        erp_id=erp_id,
+        leave_type=leave_type,
+        status__in=["approved", "pending"],
+        start_date__lte=fy_end,
+        end_date__gte=fy_start,
+    )
+
+    used_days = 0
+    for leave in used_leaves:
+        if leave.start_date and leave.end_date:
+            actual_start = max(leave.start_date, fy_start)
+            actual_end = min(leave.end_date, fy_end)
+            used_days += (actual_end - actual_start).days + 1
+
+    return JsonResponse(
+        {
+            "leave_type": leave_type,
+            "used_days": used_days,
+            "financial_year": f"{fy_start.strftime('%d-%b-%Y')} to {fy_end.strftime('%d-%b-%Y')}",
+        },
+        status=200
+    )
 
 
 @csrf_exempt

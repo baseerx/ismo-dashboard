@@ -15,12 +15,13 @@ import jwt
 from addtouser.models import CustomUser
 # Assuming you have an AssignRights model defined
 from assignrights.models import AssignRightsModel
-from datetime import date
+from datetime import date, timedelta
 # Import CustomUser from another app named 'addtousers'
 from addtouser.models import CustomUser
 # Import LeaveModel from another app named 'attendance'
 from attendance.models import Attendance
 from sections.models import Sections
+from holidays.models import Holiday
 from sqlalchemy import text
 from db import SessionLocal
 import random
@@ -178,8 +179,13 @@ class UsersView:
         if user is not None:
             erpid = CustomUser.objects.filter(
                 authid=user.pk).values_list('erpid', flat=True).first()
-            grade = Employees.objects.filter(erp_id=erpid).values_list(
-                'grade_id', flat=True).first()
+            employee = Employees.objects.filter(erp_id=erpid).values(
+                'grade_id', 'section_id', 'name', 'gender'
+            ).first()
+            grade = employee.get('grade_id') if employee else None
+            section_id = employee.get('section_id') if employee else None
+            section_name = Sections.objects.filter(id=section_id).values_list(
+                'name', flat=True).first() if section_id else None
             if erpid is not None:
                 # return user details alongside token and success status
                 payload = {
@@ -190,6 +196,10 @@ class UsersView:
                     'last_name': user.last_name,
                     'grade_id': grade,
                     'erpid': erpid,
+                    'section_id': section_id,
+                    'section_name': section_name,
+                    'employee_name': employee.get('name') if employee else None,
+                    'gender': employee.get('gender') if employee else None,
                     'email': user.email,
                     'is_staff': user.is_staff,
                     'is_active': user.is_active,
@@ -485,6 +495,335 @@ class EmployeesView:
         }
 
         return JsonResponse(summary)
+
+    @require_GET
+    def dashboard_stats(request):
+        erp_id = request.GET.get("erp_id")
+        scope = request.GET.get("scope", "section")
+        org_wide = (scope == "org")
+
+        if not erp_id:
+            return JsonResponse({"error": "erp_id is required"}, status=400)
+
+        requester = Employees.objects.filter(erp_id=erp_id).values(
+            "section_id"
+        ).first()
+        if not requester:
+            return JsonResponse({"error": "Employee not found"}, status=404)
+
+        section_id = requester["section_id"]
+        section_name = Sections.objects.filter(id=section_id).values_list(
+            "name", flat=True
+        ).first()
+
+        today = date.today()
+
+        # Pakistan Financial Year: 1 July -> 30 June
+        if today.month >= 7:
+            fy_start = date(today.year, 7, 1)
+            fy_end = date(today.year + 1, 6, 30)
+        else:
+            fy_start = date(today.year - 1, 7, 1)
+            fy_end = date(today.year, 6, 30)
+
+        trend_start = today - timedelta(days=13)
+        month_trend_start = (today.replace(day=1) - timedelta(days=150)).replace(day=1)
+
+        today_holiday = Holiday.objects.filter(date=today).first()
+        is_holiday_today = today_holiday is not None
+        is_weekend_today = today.weekday() in (5, 6)
+
+        section_clause = "" if org_wide else "AND e.section_id = :section_id"
+        base_params = {} if org_wide else {"section_id": section_id}
+
+        session = SessionLocal()
+        try:
+            # --------------------------------------------------
+            # EMPLOYEE COUNTS (total / gender / grade breakdown)
+            # --------------------------------------------------
+            emp_row = session.execute(text(f"""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN e.gender = 'M' THEN 1 ELSE 0 END) AS male,
+                    SUM(CASE WHEN e.gender = 'F' THEN 1 ELSE 0 END) AS female
+                FROM employees e
+                WHERE e.flag = 1 {section_clause}
+            """), base_params).first()
+
+            grade_rows = session.execute(text(f"""
+                SELECT g.name AS grade, COUNT(*) AS count
+                FROM employees e
+                JOIN grades g ON g.id = e.grade_id
+                WHERE e.flag = 1 {section_clause}
+                GROUP BY g.name
+                ORDER BY count DESC
+            """), base_params).fetchall()
+
+            # --------------------------------------------------
+            # ATTENDANCE TODAY (grouped by section for the org view)
+            # --------------------------------------------------
+            att_today_rows = session.execute(text(f"""
+                WITH employees_data AS (
+                    SELECT e.erp_id, e.hris_id, s.id AS section_id, ISNULL(s.name, '-') AS section
+                    FROM employees e
+                    LEFT JOIN sections s ON s.id = e.section_id
+                    WHERE e.flag = 1 {section_clause}
+                ),
+                attendance_today AS (
+                    SELECT DISTINCT user_id FROM attendance WHERE CAST(timestamp AS DATE) = :today
+                ),
+                leave_today AS (
+                    SELECT erp_id FROM leaves
+                    WHERE status = 'approved'
+                    AND CAST(start_date AS DATE) <= :today AND CAST(end_date AS DATE) >= :today
+                ),
+                official_today AS (
+                    SELECT erp_id FROM official_work_leaves
+                    WHERE status = 'approved'
+                    AND CAST(start_date AS DATE) <= :today AND CAST(end_date AS DATE) >= :today
+                )
+                SELECT
+                    ed.section_id, ed.section,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN a.user_id IS NOT NULL THEN 1 ELSE 0 END) AS present,
+                    SUM(CASE WHEN a.user_id IS NULL AND l.erp_id IS NOT NULL THEN 1 ELSE 0 END) AS on_leave,
+                    SUM(CASE
+                            WHEN a.user_id IS NULL AND l.erp_id IS NULL AND ow.erp_id IS NOT NULL
+                            THEN 1 ELSE 0
+                        END) AS official_work,
+                    SUM(CASE
+                            WHEN a.user_id IS NOT NULL THEN 0
+                            WHEN l.erp_id IS NOT NULL THEN 0
+                            WHEN ow.erp_id IS NOT NULL THEN 0
+                            WHEN :is_holiday_today = 1 THEN 0
+                            WHEN :is_weekend_today = 1 THEN 0
+                            ELSE 1
+                        END) AS absent
+                FROM employees_data ed
+                LEFT JOIN attendance_today a ON a.user_id = ed.hris_id
+                LEFT JOIN leave_today l ON l.erp_id = ed.erp_id
+                LEFT JOIN official_today ow ON ow.erp_id = ed.erp_id
+                GROUP BY ed.section_id, ed.section
+                ORDER BY ed.section
+            """), {
+                **base_params,
+                "today": today,
+                "is_holiday_today": 1 if is_holiday_today else 0,
+                "is_weekend_today": 1 if is_weekend_today else 0,
+            }).fetchall()
+
+            # --------------------------------------------------
+            # ATTENDANCE TREND (last 14 days, present vs total)
+            # --------------------------------------------------
+            trend_rows = session.execute(text(f"""
+                WITH date_range AS (
+                    SELECT DATEADD(DAY, v.number, :trend_start) AS att_date
+                    FROM master..spt_values v
+                    WHERE v.type = 'P' AND DATEADD(DAY, v.number, :trend_start) <= :today
+                ),
+                employees_data AS (
+                    SELECT e.erp_id, e.hris_id
+                    FROM employees e
+                    WHERE e.flag = 1 {section_clause}
+                ),
+                attendance_days AS (
+                    SELECT DISTINCT user_id, CAST(timestamp AS DATE) AS att_date
+                    FROM attendance
+                    WHERE timestamp >= :trend_start AND timestamp < DATEADD(DAY, 1, :today)
+                )
+                SELECT
+                    dr.att_date,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN a.user_id IS NOT NULL THEN 1 ELSE 0 END) AS present
+                FROM employees_data ed
+                CROSS JOIN date_range dr
+                LEFT JOIN attendance_days a
+                    ON a.user_id = ed.hris_id AND a.att_date = dr.att_date
+                GROUP BY dr.att_date
+                ORDER BY dr.att_date
+            """), {**base_params, "trend_start": trend_start, "today": today}).fetchall()
+
+            # --------------------------------------------------
+            # LEAVE STATS
+            # --------------------------------------------------
+            leave_pending = session.execute(text(f"""
+                SELECT COUNT(*) AS pending
+                FROM leaves l
+                JOIN employees e ON e.erp_id = l.erp_id
+                WHERE l.status = 'pending' {section_clause}
+            """), base_params).scalar()
+
+            leave_by_type_rows = session.execute(text(f"""
+                SELECT l.leave_type, COUNT(*) AS requests, SUM(l.total_days) AS days
+                FROM leaves l
+                JOIN employees e ON e.erp_id = l.erp_id
+                WHERE l.status IN ('approved', 'pending')
+                AND l.start_date <= :fy_end AND l.end_date >= :fy_start
+                {section_clause}
+                GROUP BY l.leave_type
+                ORDER BY days DESC
+            """), {**base_params, "fy_start": fy_start, "fy_end": fy_end}).fetchall()
+
+            leave_monthly_rows = session.execute(text(f"""
+                SELECT YEAR(l.start_date) AS yr, MONTH(l.start_date) AS mo, SUM(l.total_days) AS days
+                FROM leaves l
+                JOIN employees e ON e.erp_id = l.erp_id
+                WHERE l.status IN ('approved', 'pending')
+                AND l.start_date >= :month_trend_start
+                {section_clause}
+                GROUP BY YEAR(l.start_date), MONTH(l.start_date)
+                ORDER BY yr, mo
+            """), {**base_params, "month_trend_start": month_trend_start}).fetchall()
+
+            # --------------------------------------------------
+            # OFFICIAL WORK STATS
+            # --------------------------------------------------
+            official_pending = session.execute(text(f"""
+                SELECT COUNT(*) AS pending
+                FROM official_work_leaves ow
+                JOIN employees e ON e.erp_id = ow.erp_id
+                WHERE ow.status = 'pending' {section_clause}
+            """), base_params).scalar()
+
+            official_by_type_rows = session.execute(text(f"""
+                SELECT ow.leave_type, COUNT(*) AS requests
+                FROM official_work_leaves ow
+                JOIN employees e ON e.erp_id = ow.erp_id
+                WHERE ow.status IN ('approved', 'pending')
+                AND ow.start_date <= :fy_end AND ow.end_date >= :fy_start
+                {section_clause}
+                GROUP BY ow.leave_type
+                ORDER BY requests DESC
+            """), {**base_params, "fy_start": fy_start, "fy_end": fy_end}).fetchall()
+
+            official_monthly_rows = session.execute(text(f"""
+                SELECT YEAR(ow.start_date) AS yr, MONTH(ow.start_date) AS mo, COUNT(*) AS requests
+                FROM official_work_leaves ow
+                JOIN employees e ON e.erp_id = ow.erp_id
+                WHERE ow.status IN ('approved', 'pending')
+                AND ow.start_date >= :month_trend_start
+                {section_clause}
+                GROUP BY YEAR(ow.start_date), MONTH(ow.start_date)
+                ORDER BY yr, mo
+            """), {**base_params, "month_trend_start": month_trend_start}).fetchall()
+
+            # --------------------------------------------------
+            # ORG-WIDE SECTION BREAKDOWN (admin only)
+            # --------------------------------------------------
+            by_section = []
+            if org_wide:
+                section_emp_rows = session.execute(text("""
+                    SELECT s.id AS section_id, s.name AS section_name,
+                        COUNT(e.id) AS total_employees
+                    FROM sections s
+                    LEFT JOIN employees e ON e.section_id = s.id AND e.flag = 1
+                    GROUP BY s.id, s.name
+                    ORDER BY s.name
+                """)).fetchall()
+
+                pending_leave_by_section = {
+                    row.section_id: row.pending for row in session.execute(text("""
+                        SELECT e.section_id, COUNT(*) AS pending
+                        FROM leaves l
+                        JOIN employees e ON e.erp_id = l.erp_id
+                        WHERE l.status = 'pending'
+                        GROUP BY e.section_id
+                    """)).fetchall()
+                }
+
+                pending_official_by_section = {
+                    row.section_id: row.pending for row in session.execute(text("""
+                        SELECT e.section_id, COUNT(*) AS pending
+                        FROM official_work_leaves ow
+                        JOIN employees e ON e.erp_id = ow.erp_id
+                        WHERE ow.status = 'pending'
+                        GROUP BY e.section_id
+                    """)).fetchall()
+                }
+
+                attendance_by_section = {row.section_id: row for row in att_today_rows}
+
+                for row in section_emp_rows:
+                    att_row = attendance_by_section.get(row.section_id)
+                    by_section.append({
+                        "section_id": row.section_id,
+                        "section_name": row.section_name,
+                        "total_employees": row.total_employees,
+                        "present_today": att_row.present if att_row else 0,
+                        "on_leave_today": att_row.on_leave if att_row else 0,
+                        "official_work_today": att_row.official_work if att_row else 0,
+                        "absent_today": att_row.absent if att_row else 0,
+                        "pending_leaves": pending_leave_by_section.get(row.section_id, 0),
+                        "pending_official_work": pending_official_by_section.get(row.section_id, 0),
+                    })
+
+            attendance_today_total = {
+                "total": sum(r.total for r in att_today_rows),
+                "present": sum(r.present for r in att_today_rows),
+                "on_leave": sum(r.on_leave for r in att_today_rows),
+                "official_work": sum(r.official_work for r in att_today_rows),
+                "absent": sum(r.absent for r in att_today_rows),
+            }
+
+            upcoming_holidays = [
+                {"name": h.name, "date": h.date.isoformat()}
+                for h in Holiday.objects.filter(date__gte=today).order_by("date")[:5]
+            ]
+
+            response = {
+                "scope": "org" if org_wide else "section",
+                "section_id": section_id,
+                "section_name": section_name,
+                "today": today.isoformat(),
+                "is_weekend": is_weekend_today,
+                "is_holiday": is_holiday_today,
+                "holiday_name": today_holiday.name if today_holiday else None,
+                "financial_year": f"{fy_start.strftime('%d-%b-%Y')} to {fy_end.strftime('%d-%b-%Y')}",
+                "employees": {
+                    "total": emp_row.total or 0,
+                    "male": emp_row.male or 0,
+                    "female": emp_row.female or 0,
+                    "by_grade": [{"grade": r.grade, "count": r.count} for r in grade_rows],
+                },
+                "attendance_today": attendance_today_total,
+                "attendance_trend": [
+                    {
+                        "date": r.att_date.isoformat(),
+                        "total": r.total,
+                        "present": r.present,
+                    }
+                    for r in trend_rows
+                ],
+                "leaves": {
+                    "pending": leave_pending or 0,
+                    "by_type": [
+                        {"type": r.leave_type, "requests": r.requests, "days": r.days or 0}
+                        for r in leave_by_type_rows
+                    ],
+                    "monthly_trend": [
+                        {"month": f"{r.yr:04d}-{r.mo:02d}", "days": r.days or 0}
+                        for r in leave_monthly_rows
+                    ],
+                },
+                "official_work": {
+                    "pending": official_pending or 0,
+                    "by_type": [
+                        {"type": r.leave_type, "requests": r.requests}
+                        for r in official_by_type_rows
+                    ],
+                    "monthly_trend": [
+                        {"month": f"{r.yr:04d}-{r.mo:02d}", "requests": r.requests}
+                        for r in official_monthly_rows
+                    ],
+                },
+                "upcoming_holidays": upcoming_holidays,
+                "by_section": by_section,
+            }
+
+            return JsonResponse(response, status=200)
+
+        finally:
+            session.close()
 
     @staticmethod
     def generate_random_hris_id(existing_ids):

@@ -3,7 +3,7 @@ import ComponentCard from "../../components/common/ComponentCard";
 import PageMeta from "../../components/common/PageMeta";
 import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
 import axios from "../../api/axios"; // Adjust the import path as necessary
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import moment from "moment";
 import _ from "lodash";
 import { ToastContainer, toast } from "react-toastify";
@@ -14,6 +14,8 @@ import Button from "../../components/ui/button/Button";
 import Label from "../../components/form/Label";
 import Select from "../../components/form/Select";
 import TextArea from "../../components/form/input/TextArea";
+import Badge from "../../components/ui/badge/Badge";
+import { LeaveIcon, InfoIcon } from "../../icons";
 
 type AttendanceRow = {
   id?: number;
@@ -37,6 +39,13 @@ export default function OfficialWork() {
   );
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const leavetype = ["Meetings", "ACT Test","Work From Home", "Official Tour", "Foreign Tour"];
+
+  const [employeesData, setEmployeesData] = useState<any[]>([]);
+  const [balance, setBalance] = useState<{
+    used_days: number;
+    financial_year: string;
+  } | null>(null);
+  const initializedSelf = useRef(false);
 
   useEffect(() => {
     fetchEmployeesOptions();
@@ -72,6 +81,69 @@ export default function OfficialWork() {
     "ED (SO) ISMO",
     "SECTION HEAD",
   ];
+
+  // Auto-select the logged in user as the employee, and derive their
+  // Section Head (highest-graded employee, grade_id >= 9, in the same section)
+  useEffect(() => {
+    if (initializedSelf.current || employeesData.length === 0) return;
+
+    const self = employeesData.find(
+      (e: any) => Number(e.erp_id) === Number(user.erpid)
+    );
+    if (!self) return;
+
+    initializedSelf.current = true;
+
+    let headErpId: any = user.grade_id >= 9 ? user.erpid : "";
+    if (user.grade_id < 9) {
+      const sectionHeads = employeesData.filter(
+        (e: any) =>
+          Number(e.section_id) === Number(self.section_id) &&
+          Number(e.grade_id) >= 9 &&
+          Number(e.erp_id) !== Number(self.erp_id)
+      );
+      if (sectionHeads.length > 0) {
+        const topHead = sectionHeads.reduce((max: any, e: any) =>
+          Number(e.grade_id) > Number(max.grade_id) ? e : max
+        );
+        headErpId = topHead.erp_id;
+      }
+    }
+
+    setData((prev) => ({
+      ...prev,
+      employee_id: self.id,
+      erp_id: self.erp_id,
+      head_erpid: headErpId,
+    }));
+  }, [employeesData]);
+
+  const selectedEmployee = employeesData.find(
+    (e: any) => Number(e.erp_id) === Number(data.erp_id)
+  );
+
+  // Fetch official work balance whenever the selected employee/work type changes
+  useEffect(() => {
+    if (!data.leave_type || !data.erp_id) {
+      setBalance(null);
+      return;
+    }
+
+    const fetchBalance = async () => {
+      try {
+        const response = await axios.post("/officialwork/balance/", {
+          erp_id: data.erp_id,
+          leave_type: data.leave_type,
+        });
+        setBalance(response.data);
+      } catch (error) {
+        console.error("Error fetching official work balance:", error);
+        setBalance(null);
+      }
+    };
+
+    fetchBalance();
+  }, [data.leave_type, data.erp_id]);
 
   const handleApproveLeave = async (id: string) => {
     const [leaveId, action] = id.split("-");
@@ -208,6 +280,7 @@ export default function OfficialWork() {
         value: employee.erp_id + "-" + employee.id, // Assuming employee.id is the unique identifier
       }));
       setOptions(employees);
+      setEmployeesData(response.data);
     } catch (error) {
       console.error("Error fetching employee options:", error);
       toast.error("Failed to load employee options");
@@ -246,8 +319,8 @@ export default function OfficialWork() {
         return;
       }
         setData({
-          erp_id: null,
-          employee_id: null,
+          erp_id: 0,
+          employee_id: 0,
           leave_type: "",
           reason: "",
           status: "",
@@ -273,6 +346,58 @@ export default function OfficialWork() {
       <div className="space-y-6">
         <ComponentCard title={`Official Work Application Form`}>
           <ToastContainer position="bottom-right" />
+
+          {data.leave_type && (
+            <div className="mb-5 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-50 dark:bg-brand-500/15">
+                    <LeaveIcon className="size-5 text-brand-500" />
+                  </div>
+                  <div>
+                    <h4 className="font-semibold text-gray-800 dark:text-white/90">
+                      {data.leave_type}
+                    </h4>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {selectedEmployee?.name || "Selected employee"}
+                      {selectedEmployee?.erp_id
+                        ? ` (${selectedEmployee.erp_id})`
+                        : ""}
+                    </p>
+                  </div>
+                </div>
+                {balance?.financial_year && (
+                  <Badge color="light" size="sm">
+                    FY {balance.financial_year}
+                  </Badge>
+                )}
+              </div>
+
+              <div className="px-5 py-4">
+                {!balance ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400 dark:text-gray-500">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-gray-300 dark:bg-gray-600" />
+                    Loading official work record...
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <span className="block text-xs text-gray-500 dark:text-gray-400">
+                        Days recorded this financial year
+                      </span>
+                      <span className="mt-1 block text-title-sm font-bold text-gray-800 dark:text-white/90">
+                        {balance.used_days}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                      <InfoIcon className="size-4 shrink-0" />
+                      Official Work has no entitlement limit — this is a running count, not a balance.
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 mb-4 gap-1 justify-center items-center">
             <div className="w-full">
