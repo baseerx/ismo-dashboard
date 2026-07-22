@@ -6,6 +6,7 @@ urlpatterns = [
     path('employees/', EmployeesView.get),  # Include the employees app URLs
     path('details/', EmployeesView.get_details),  # add employee
     path('create_employee/', EmployeesView.create_employee),  # Include the create employee URL
+    path('update_employee/<int:employee_id>/', EmployeesView.update_employee),  # Include the update employee URL
     # Include the create employee URL
     path('get_employees/', EmployeesView.get_employees),
     path('delete_employee/<int:employee_id>/', EmployeesView.delete_employee),

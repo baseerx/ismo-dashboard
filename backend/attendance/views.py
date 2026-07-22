@@ -2038,7 +2038,114 @@ GROUP BY Shift_Name;
             return JsonResponse({"error": "Attendance not found"}, status=404)
         finally:
             session.close()
-    
+
+    @require_GET
+    def my_attendance_today(request):
+        """
+        Today's attendance snapshot for the currently logged-in user, resolved
+        by erp_id. Returns first check-in, last check-out, the late / early
+        assessment against the standard 08:30 / 16:00 deadlines, and the day's
+        status (present / leave / official work / holiday / weekend / absent),
+        following the same precedence used elsewhere in the attendance module.
+        """
+        erp_id = request.GET.get("erp_id")
+        if not erp_id:
+            return JsonResponse({"error": "erp_id is required"}, status=400)
+
+        session = SessionLocal()
+        try:
+            employee = session.execute(text("""
+                SELECT
+                    e.erp_id,
+                    e.hris_id,
+                    e.name,
+                    d.title AS designation,
+                    g.name AS grade,
+                    s.name AS section
+                FROM employees e
+                LEFT JOIN sections s ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN grades g ON g.id = e.grade_id
+                WHERE e.erp_id = :erp_id AND e.flag = 1
+            """), {"erp_id": erp_id}).first()
+
+            if not employee:
+                return JsonResponse({"error": "Employee not found"}, status=404)
+
+            today = datetime.now().date()
+
+            att = session.execute(text("""
+                SELECT
+                    MIN(CASE WHEN status = 'Checked In' THEN timestamp END) AS checkin_time,
+                    MAX(CASE WHEN status IN ('Checked Out', 'Early Checked Out') THEN timestamp END) AS checkout_time
+                FROM attendance
+                WHERE user_id = :hris_id
+                    AND CAST(timestamp AS DATE) = :today
+            """), {"hris_id": employee.hris_id, "today": today}).first()
+
+            checkin = att.checkin_time if att else None
+            checkout = att.checkout_time if att else None
+
+            check_in_deadline = time(8, 30)
+            check_out_deadline = time(16, 0)
+
+            late_status = "-"
+            early_status = "-"
+            if checkin is not None:
+                late_status = "Late" if checkin.time() > check_in_deadline else "On Time"
+            if checkout is not None:
+                early_status = "Early" if checkout.time() < check_out_deadline else "On Time"
+
+            # Day-status precedence: present > leave > official work > holiday > weekend > absent
+            if checkin is not None or checkout is not None:
+                flag, flag_type = "Present", "present"
+            else:
+                leave = session.execute(text("""
+                    SELECT TOP 1 leave_type FROM leaves
+                    WHERE erp_id = :erp_id AND status = 'approved'
+                    AND CAST(start_date AS DATE) <= :today AND CAST(end_date AS DATE) >= :today
+                """), {"erp_id": employee.erp_id, "today": today}).first()
+
+                official = session.execute(text("""
+                    SELECT TOP 1 leave_type FROM official_work_leaves
+                    WHERE erp_id = :erp_id AND status = 'approved'
+                    AND CAST(start_date AS DATE) <= :today AND CAST(end_date AS DATE) >= :today
+                """), {"erp_id": employee.erp_id, "today": today}).first()
+
+                holiday = session.execute(text("""
+                    SELECT TOP 1 name FROM public_holidays
+                    WHERE CAST(date AS DATE) = :today
+                """), {"today": today}).first()
+
+                if leave:
+                    flag, flag_type = leave.leave_type, "leave"
+                elif official:
+                    flag, flag_type = official.leave_type, "official"
+                elif holiday:
+                    flag, flag_type = holiday.name, "holiday"
+                elif today.weekday() in (5, 6):
+                    flag, flag_type = "Weekend", "weekend"
+                else:
+                    flag, flag_type = "Absent", "absent"
+
+            return JsonResponse({
+                "erp_id": employee.erp_id,
+                "name": employee.name,
+                "designation": employee.designation,
+                "grade": employee.grade,
+                "section": employee.section,
+                "date": today.isoformat(),
+                "checkin_time": checkin.isoformat() if checkin is not None else None,
+                "checkout_time": checkout.isoformat() if checkout is not None else None,
+                "late_status": late_status,
+                "early_status": early_status,
+                "flag": flag,
+                "flag_type": flag_type,
+            }, status=200)
+
+        finally:
+            session.close()
+
     @csrf_exempt
     @require_POST
     def shift_add(request):

@@ -2,6 +2,7 @@ import PageMeta from "../../components/common/PageMeta";
 import PageBreadcrumb from "../../components/common/PageBreadCrumb";
 import ComponentCard from "../../components/common/ComponentCard";
 import StatTile from "../../components/cards/StatTile";
+import MyAttendanceToday from "../../components/attendance/MyAttendanceToday";
 import StatDonutChart from "../../components/charts/dashboard/StatDonutChart";
 import TrendAreaChart from "../../components/charts/dashboard/TrendAreaChart";
 import CategoryBarChart from "../../components/charts/dashboard/CategoryBarChart";
@@ -210,6 +211,13 @@ export default function Home() {
           {stats.is_holiday
             ? `Today is a public holiday${stats.holiday_name ? ` — ${stats.holiday_name}` : ""}.`
             : "Today is a weekend."}
+        </div>
+      )}
+
+      {/* My attendance today — personal snapshot on the section view */}
+      {scope === "section" && user.erpid && (
+        <div className="mb-6">
+          <MyAttendanceToday erpId={user.erpid} />
         </div>
       )}
 

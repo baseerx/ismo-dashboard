@@ -922,3 +922,51 @@ class EmployeesView:
             print("Unexpected error:", str(e))
             traceback.print_exc()   # <-- shows full traceback in console
             return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+    @csrf_exempt
+    @require_POST
+    def update_employee(request, employee_id):
+        if not employee_id:
+            return JsonResponse({"success": False, "error": "Employee ID is required"}, status=400)
+
+        try:
+            data = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            return JsonResponse({"success": False, "error": "Invalid JSON format"}, status=400)
+
+        # hris_id is deliberately excluded: it is assigned once at creation and
+        # must never change on edit. Every other field is editable.
+        required_fields = [
+            'erp_id', 'name', 'cnic', 'gender',
+            'section_id', 'location_id', 'grade_id', 'designation_id', 'position'
+        ]
+        for field in required_fields:
+            if field not in data or data[field] in [None, ""]:
+                return JsonResponse({"success": False, "error": f"Field '{field}' is required"}, status=400)
+
+        try:
+            employee = Employees.objects.get(pk=employee_id)
+        except Employees.DoesNotExist:
+            return JsonResponse({"success": False, "error": "Employee not found"}, status=404)
+
+        try:
+            employee.erp_id = str(data['erp_id'])
+            employee.name = data.get('name', '')
+            employee.cnic = data.get('cnic', '')
+            employee.gender = data.get('gender', '')
+            employee.section_id = int(data['section_id'])
+            employee.location_id = int(data['location_id'])
+            employee.grade_id = int(data['grade_id'])
+            employee.designation_id = int(data['designation_id'])
+            employee.position = data['position']
+            employee.flag = 1 if data.get('flag', False) else 0
+            # NOTE: employee.hris_id is intentionally left untouched.
+            employee.save()
+            return JsonResponse({"success": True, "message": "Employee updated successfully"}, status=200)
+        except ValueError as e:
+            return JsonResponse({"success": False, "error": f"Invalid value: {str(e)}"}, status=400)
+        except Exception as e:
+            import traceback
+            print("Unexpected error in update_employee:", str(e))
+            traceback.print_exc()
+            return JsonResponse({"success": False, "error": str(e)}, status=500)

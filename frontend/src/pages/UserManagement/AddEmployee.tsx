@@ -64,6 +64,8 @@ export default function AddEmployee() {
   const [grades, setGrades] = useState<Grade[]>([]);
   const [designations, setDesignations] = useState<Designation[]>([]);
   const [hrisid, setHrisId] = useState<number>(0);
+  // null = create mode; a number = the id of the employee being edited.
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const [data, setData] = useState<EmployeeFormData>({
     erp_id: "",
@@ -174,28 +176,59 @@ export default function AddEmployee() {
   };
 
   // ----------------------------
+  // Shared field validation
+  // ----------------------------
+  // `requireHris` only matters on create — on edit the HRIS ID is locked and
+  // never sent for validation because it can never change.
+  const validateEmployee = (
+    empData: EmployeeFormData,
+    requireHris: boolean
+  ): Record<string, string> => {
+    const errors: Record<string, string> = {};
+    if (!empData.erp_id) errors.erp_id = "ERP ID is required";
+    if (requireHris && !empData.hris_id) errors.hris_id = "HRIS ID is required";
+    if (!empData.name) errors.name = "Name is required";
+    if (!empData.cnic) {
+      errors.cnic = "CNIC is required";
+    } else if (!/^(\d{13}|\d{5}-\d{7}-\d)$/.test(empData.cnic)) {
+      // Accept both the plain 13-digit form (1120153664389) and the
+      // dashed form (11201-5366438-9).
+      errors.cnic = "CNIC must be 13 digits, e.g. 1120153664389 or 11201-5366438-9";
+    }
+    if (!empData.gender) errors.gender = "Gender is required";
+    if (!empData.section_id) errors.section_id = "Section is required";
+    if (!empData.location_id) errors.location_id = "Location is required";
+    if (!empData.grade_id) errors.grade_id = "Grade is required";
+    if (!empData.designation_id) errors.designation_id = "Designation is required";
+    if (!empData.position) errors.position = "Position is required";
+    return errors;
+  };
+
+  // Reset the form back to create mode with a fresh generated HRIS ID.
+  const resetForm = () => {
+    setEditingId(null);
+    setData({
+      erp_id: "",
+      hris_id: String(hrisid || ""),
+      name: "",
+      cnic: "",
+      gender: "",
+      section_id: "",
+      location_id: "",
+      grade_id: "",
+      designation_id: "",
+      position: "",
+      flag: true,
+    });
+    setFieldError(emptyErrors);
+  };
+
+  // ----------------------------
   // Validation + Create employee
   // ----------------------------
   const createEmployee = async (empData: EmployeeFormData) => {
     try {
-      const errors: Record<string, string> = {};
-
-      if (!empData.erp_id) errors.erp_id = "ERP ID is required";
-      if (!empData.hris_id) errors.hris_id = "HRIS ID is required";
-      if (!empData.name) errors.name = "Name is required";
-      if (!empData.cnic) {
-        errors.cnic = "CNIC is required";
-      } else if (!/^\d{13}$/.test(empData.cnic)) {
-        errors.cnic = "CNIC must be 13 digits";
-      }
-      if (!empData.gender) errors.gender = "Gender is required";
-      if (!empData.section_id) errors.section_id = "Section is required";
-      if (!empData.location_id) errors.location_id = "Location is required";
-      if (!empData.grade_id) errors.grade_id = "Grade is required";
-      if (!empData.designation_id)
-        errors.designation_id = "Designation is required";
-      if (!empData.position) errors.position = "Position is required";
-
+      const errors = validateEmployee(empData, true);
       if (Object.keys(errors).length > 0) {
         setFieldError(errors);
         toast.error("Please fix all validation errors");
@@ -203,26 +236,70 @@ export default function AddEmployee() {
       }
       await axios.post("/users/create_employee/", empData);
 
-      // Reset form
-      setData({
-        erp_id: "",
-        hris_id: "",
-        name: "",
-        cnic: "",
-        gender: "",
-        section_id: "",
-        location_id: "",
-        grade_id: "",
-        designation_id: "",
-        position: "",
-        flag: true,
-      });
-      setFieldError(emptyErrors);
+      resetForm();
+      // Pull a fresh HRIS ID so the next create doesn't reuse this one.
+      getDetails();
       getEmployees();
       toast.success("Employee created successfully");
     } catch (error) {
       toast.error(
         "Failed to create employee:" +
+        (error instanceof Error ? error.message : "Unknown error")
+      );
+    }
+  };
+
+  // ----------------------------
+  // Load a row into the form for editing
+  // ----------------------------
+  const handleEditClick = (row: EmployeeRow) => {
+    setEditingId(row.id ?? null);
+    setData({
+      erp_id: row.erp_id,
+      hris_id: row.hris_id, // shown read-only; never updated
+      name: row.name,
+      cnic: row.cnic,
+      gender: row.gender,
+      section_id: row.section_id,
+      location_id: row.location_id,
+      grade_id: row.grade_id,
+      designation_id: row.designation_id,
+      position: row.position,
+      flag: row.flag,
+    });
+    setFieldError(emptyErrors);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // ----------------------------
+  // Validation + Update employee
+  // ----------------------------
+  const updateEmployee = async (empData: EmployeeFormData) => {
+    if (editingId == null) return;
+    try {
+      const errors = validateEmployee(empData, false);
+      if (Object.keys(errors).length > 0) {
+        setFieldError(errors);
+        toast.error("Please fix all validation errors");
+        return;
+      }
+      // Confirm before committing the update.
+      if (
+        !window.confirm(
+          `Are you sure you want to update the record for ${empData.name || "this employee"}?`
+        )
+      ) {
+        return;
+      }
+      // hris_id is intentionally omitted — the backend ignores it too.
+      await axios.post(`/users/update_employee/${editingId}/`, empData);
+
+      resetForm();
+      getEmployees();
+      toast.success("Employee updated successfully");
+    } catch (error) {
+      toast.error(
+        "Failed to update employee:" +
         (error instanceof Error ? error.message : "Unknown error")
       );
     }
@@ -279,25 +356,35 @@ export default function AddEmployee() {
     {
       header: "Actions",
       id: "actions",
-      cell: ({ row }) => (
-        user?.user_id === 3 && (row.original?.flag === true ?
-          <Button
-            size="xs"
-            variant="danger"
-            onClick={() => handleDeleteEmployee(row.original.id || 0)}
-          >
-            Disable
-          </Button>
-          :
-          <Button
-            size="xs"
-            variant="primary"
-            onClick={() => handleDeleteEmployee(row.original.id || 0)}
-          >
-            Enable
-          </Button>
-        )
-      ),
+      cell: ({ row }) =>
+        user?.user_id === 3 ? (
+          <div className="flex items-center gap-2">
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => handleEditClick(row.original)}
+            >
+              Edit
+            </Button>
+            {row.original?.flag === true ? (
+              <Button
+                size="xs"
+                variant="danger"
+                onClick={() => handleDeleteEmployee(row.original.id || 0)}
+              >
+                Disable
+              </Button>
+            ) : (
+              <Button
+                size="xs"
+                variant="primary"
+                onClick={() => handleDeleteEmployee(row.original.id || 0)}
+              >
+                Enable
+              </Button>
+            )}
+          </div>
+        ) : null,
     },
   ];
 
@@ -312,7 +399,7 @@ export default function AddEmployee() {
       />
       <PageBreadcrumb pageTitle="Create Employee" />
       <div className="space-y-6">
-        <ComponentCard title="Create New Employee">
+        <ComponentCard title={editingId ? "Edit Employee" : "Create New Employee"}>
           <ToastContainer position="bottom-right" />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 mb-4 gap-4">
@@ -333,7 +420,7 @@ export default function AddEmployee() {
               <Input
                 type="text"
                 placeholder="Enter HRIS ID"
-                value={hrisid}
+                value={editingId ? data.hris_id : hrisid}
                 disabled
                 error={!!fielderror.hris_id}
                 hint={fielderror.hris_id}
@@ -356,7 +443,7 @@ export default function AddEmployee() {
               <Label>CNIC</Label>
               <Input
                 type="text"
-                placeholder="Enter CNIC (13 digits)"
+                placeholder="Enter CNIC (e.g. 11201-5366438-9)"
                 value={data.cnic}
                 onChange={(e) => setData({ ...data, cnic: e.target.value })}
                 error={!!fielderror.cnic}
@@ -367,6 +454,7 @@ export default function AddEmployee() {
             <div className="w-full">
               <Label>Gender</Label>
               <Select
+                key={`gender-${editingId ?? "new"}`}
                 options={[
                   { label: "Male", value: "M" },
                   { label: "Female", value: "F" },
@@ -383,6 +471,7 @@ export default function AddEmployee() {
             <div className="w-full">
               <Label>Section</Label>
               <Select
+                key={`section-${editingId ?? "new"}`}
                 options={sections.map((s) => ({
                   label: s.name,
                   value: String(s.id),
@@ -398,6 +487,7 @@ export default function AddEmployee() {
             <div className="w-full">
               <Label>Location</Label>
               <Select
+                key={`location-${editingId ?? "new"}`}
                 options={locations.map((l) => ({
                   label: l.name,
                   value: String(l.id),
@@ -413,6 +503,7 @@ export default function AddEmployee() {
             <div className="w-full">
               <Label>Grade</Label>
               <Select
+                key={`grade-${editingId ?? "new"}`}
                 options={grades.map((g) => ({
                   label: g.name,
                   value: String(g.id),
@@ -428,6 +519,7 @@ export default function AddEmployee() {
             <div className="w-full">
               <Label>Designation</Label>
               <Select
+                key={`designation-${editingId ?? "new"}`}
                 options={designations.map((d) => ({
                   label: d.title,
                   value: String(d.id),
@@ -477,15 +569,36 @@ export default function AddEmployee() {
             </div>
           </div>
 
-          <div className="w-full flex justify-center items-center">
-            <Button
-              size="sm"
-              className="w-1/3 mt-7"
-              variant="primary"
-              onClick={() => createEmployee(data)}
-            >
-              Create Employee
-            </Button>
+          <div className="w-full flex justify-center items-center gap-3">
+            {editingId ? (
+              <>
+                <Button
+                  size="sm"
+                  className="mt-7"
+                  variant="primary"
+                  onClick={() => updateEmployee(data)}
+                >
+                  Update Employee
+                </Button>
+                <Button
+                  size="sm"
+                  className="mt-7"
+                  variant="outline"
+                  onClick={resetForm}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                className="w-1/3 mt-7"
+                variant="primary"
+                onClick={() => createEmployee(data)}
+              >
+                Create Employee
+              </Button>
+            )}
           </div>
 
           <EnhancedDataTable<EmployeeRow> data={employees} columns={columns} />

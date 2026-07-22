@@ -412,7 +412,7 @@ def individual_detail_report(request):
     # Fetch employee
     if erpid == 0:
         query = text(""" 
-            SELECT e.id, e.erp_id, e.name, s.name
+            SELECT e.id, e.erp_id, e.name, s.name, e.gender
             FROM employees e
             LEFT JOIN sections s ON e.section_id = s.id
             WHERE e.flag = 1 AND e.section_id = :section
@@ -420,7 +420,7 @@ def individual_detail_report(request):
         emp = sessions.execute(query, {"section": section}).fetchone()
     else:
         query = text(""" 
-            SELECT e.id, e.erp_id, e.name, s.name
+            SELECT e.id, e.erp_id, e.name, s.name, e.gender
             FROM employees e
             LEFT JOIN sections s ON e.section_id = s.id
             WHERE e.flag = 1 AND e.section_id = :section AND e.erp_id = :erp_id
@@ -431,38 +431,61 @@ def individual_detail_report(request):
         sessions.close()
         return JsonResponse({"error": "Employee not found"}, status=404)
 
-    # Get all leave types for this employee in date range
-    leaves_query = text(""" 
-        SELECT DISTINCT leave_type
+    # Eligibility inputs: an employee's gender and years of service decide
+    # which leave types they are even entitled to apply for.
+    employee_gender = (emp[4] or "").upper()
+    years_of_service = get_employee_years_of_service(emp[1])
+
+    # Casual leave is charged an extra 10 days whenever the employee has taken
+    # Rest & Recreational leave in the period (mirrors get_leave_balance).
+    has_rr_leave = LeaveModel.objects.filter(
+        erp_id=emp[1],
+        leave_type="Rest & Recreational Leave",
+        start_date__lte=end_date,
+        end_date__gte=start_date,
+        status__in=["approved", "pending"],
+    ).exists()
+
+    # Master list of every configured leave type with its annual allocation.
+    all_types = sessions.execute(text("""
+        SELECT leave_type, total_leaves
+        FROM leave_type_counts
+        ORDER BY leave_type
+    """)).fetchall()
+
+    filtered_leaves_query = text("""
+        SELECT start_date, end_date
         FROM leaves
         WHERE erp_id = :erp_id
           AND status IN ('approved', 'pending')
+          AND leave_type = :leave_type
           AND start_date <= :end_date
           AND end_date >= :start_date
     """)
-    leave_types = sessions.execute(
-        leaves_query,
-        {"erp_id": emp[1], "start_date": start_date, "end_date": end_date}
-    ).fetchall()
 
     result = []
 
-    # Process each leave type
-    for lt_row in leave_types:
-        leave_type = lt_row[0]
-        leave_count = 0
+    # Walk every leave type so the report reflects the employee's *overall*
+    # standing — the types availed and the ones not availed yet — while
+    # skipping the types this particular employee is not eligible for.
+    for type_row in all_types:
+        leave_type = type_row[0]
+        total_leaves = type_row[1]
+        lt_lower = (leave_type or "").lower()
 
-        # Fetch leaves for this type
-        filtered_leaves_query = text(""" 
-            SELECT start_date, end_date
-            FROM leaves
-            WHERE erp_id = :erp_id
-              AND status IN ('approved', 'pending')
-              AND leave_type = :leave_type
-              AND start_date <= :end_date
-              AND end_date >= :start_date
-        """)
+        # Gender-restricted types (e.g. maternity / paternity / iddat).
+        required_gender = GENDER_RESTRICTED_LEAVE_TYPES.get(lt_lower)
+        if required_gender and employee_gender != required_gender:
+            continue
 
+        # Types needing a minimum tenure (e.g. hajj leave).
+        required_service_years = MIN_SERVICE_YEARS_LEAVE_TYPES.get(lt_lower)
+        if required_service_years and (
+            years_of_service is None or years_of_service < required_service_years
+        ):
+            continue
+
+        # Days availed for this type within the reporting window.
         leaves = sessions.execute(
             filtered_leaves_query,
             {
@@ -473,35 +496,29 @@ def individual_detail_report(request):
             },
         ).fetchall()
 
+        leave_count = 0
         for leave in leaves:
             actual_start = max(leave[0], start_date)
             actual_end = min(leave[1], end_date)
             leave_count += (actual_end - actual_start).days + 1
 
-        # Add 10 days to casual leave if RR leave exists
-        if leave_type.lower() == "casual leave":
-            has_rr_leave = LeaveModel.objects.filter(
-                erp_id=emp[1],
-                leave_type="Rest & Recreational Leave",
-                start_date__lte=end_date,
-                end_date__gte=start_date,
-                status__in=["approved", "pending"]
-            ).exists()
-            
-            if has_rr_leave:
-                leave_count += 10
+        if lt_lower == "casual leave" and has_rr_leave:
+            leave_count += 10
 
-        # Get total leaves for this type
-        total_leaves_query = text(""" 
-            SELECT total_leaves
-            FROM leave_type_counts
-            WHERE leave_type = :leave_type
-        """)
-        total_leaves_row = sessions.execute(
-            total_leaves_query, {"leave_type": leave_type}
-        ).fetchone()
-        total_leaves = total_leaves_row[0] if total_leaves_row else None
-        remaining_leaves = total_leaves - leave_count if total_leaves else None
+        remaining_leaves = (
+            total_leaves - leave_count if total_leaves is not None else None
+        )
+
+        # Three-state standing for the category:
+        #   Not Availed        -> none of the allocation used
+        #   Availed            -> the whole allocation used up (nothing left)
+        #   Partially Availed  -> some used, but a balance still remains
+        if leave_count <= 0:
+            status = "Not Availed"
+        elif total_leaves is not None and leave_count >= total_leaves:
+            status = "Availed"
+        else:
+            status = "Partially Availed"
 
         result.append({
             "employee_id": emp[0],
@@ -509,8 +526,11 @@ def individual_detail_report(request):
             "employee_name": emp[2],
             "section": emp[3],
             "leave_type": leave_type,
+            "total_leaves": total_leaves,
             "leave_count": leave_count,
             "remaining_leaves": remaining_leaves,
+            "availed": leave_count > 0,
+            "status": status,
             "start_date": start_date.strftime("%d-%m-%Y"),
             "end_date": end_date.strftime("%d-%m-%Y"),
         })
@@ -546,7 +566,7 @@ def leavetype_detail_report(request):
     # Fetch employees
     if erp_id == 0:
         query = text(""" 
-            SELECT e.id, e.erp_id, e.name, s.name
+            SELECT e.id, e.erp_id, e.name, s.name, e.gender
             FROM employees e
             LEFT JOIN sections s ON e.section_id = s.id
             WHERE e.flag = 1 AND e.section_id = :section
@@ -554,7 +574,7 @@ def leavetype_detail_report(request):
         employees = sessions.execute(query, {"section": section}).fetchall()
     else:
         query = text(""" 
-            SELECT e.id, e.erp_id, e.name, s.name
+            SELECT e.id, e.erp_id, e.name, s.name, e.gender
             FROM employees e
             LEFT JOIN sections s ON e.section_id = s.id
             WHERE e.flag = 1 AND e.section_id = :section AND e.erp_id = :erp_id

@@ -21,8 +21,11 @@ type AttendanceRow = {
     section: string;
     erp_id: any;
     leave_type?: string;
+    total_leaves?: number;
     leave_count?: number;
     remaining_leaves?: number;
+    availed?: boolean;
+    status?: string;
     start_date?: string;
     end_date?: string;
 };
@@ -74,10 +77,10 @@ const handleSubmit = async () => {
           updatedData
         );
         setIndividualLeaveReport(response.data.attendance);
-        toast.success("Leave applied successfully");
+        toast.success("Report generated successfully");
     } catch (error) {
-        console.error("Error applying leave:", error);
-        toast.error("Failed to apply leave");
+        console.error("Error generating report:", error);
+        toast.error("Failed to generate report");
     }
 };
 
@@ -124,19 +127,23 @@ const columns: ColumnDef<AttendanceRow>[] = [
         accessorKey: "section",
     },
     {
-        header:"Start Date",
-        accessorKey:"start_date",
-    },
-    {
-        header:"End Date",
-        accessorKey:"end_date",
-    },
-    {
         header: "Leave Type",
         accessorKey: "leave_type",
     },
     {
-        header: "Leave Count",
+        header: "Total Allowed",
+        accessorKey: "total_leaves",
+        cell: ({ getValue }) => {
+            const value = getValue<number | undefined>();
+            return (
+                <span className="inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-gray-100 text-gray-700 dark:bg-white/5 dark:text-white/80">
+                    {value ?? "-"}
+                </span>
+            );
+        },
+    },
+    {
+        header: "Availed (Days)",
         accessorKey: "leave_count",
         cell: ({ getValue }) => {
             const value = getValue<number>();
@@ -154,6 +161,34 @@ const columns: ColumnDef<AttendanceRow>[] = [
                 "inline-flex items-center px-6 py-0.5 justify-center gap-1 rounded-full font-semibold text-theme-lg bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-500";
             return <span className={color}>{value ?? 0}</span>;
         },
+    },
+    {
+        header: "Status",
+        accessorKey: "status",
+        cell: ({ getValue }) => {
+            const value = getValue<string>() || "Not Availed";
+            const color =
+                value === "Availed"
+                    ? "bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
+                    : value === "Partially Availed"
+                        ? "bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-orange-400"
+                        : "bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-300";
+            return (
+                <span
+                    className={`inline-flex items-center px-4 py-0.5 justify-center gap-1 rounded-full font-medium text-theme-sm ${color}`}
+                >
+                    {value}
+                </span>
+            );
+        },
+    },
+    {
+        header: "Period From",
+        accessorKey: "start_date",
+    },
+    {
+        header: "Period To",
+        accessorKey: "end_date",
     },
 ];
 
