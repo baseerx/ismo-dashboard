@@ -52,6 +52,15 @@ import EachLeaveDetail from "./pages/Leaves/EachLeaveDetail";
 import TotalAbsent from "./pages/Attendance/TotalAbsent";
 import DetailedAbsentReport from "./pages/Attendance/DetailedAbsentReport";
 import SectionMonthlyReport from "./pages/Attendance/SectionMonthlyReport";
+import EmpDailyActivities     from "./pages/WorkforceActivityManagement/EmpDailyActivities";
+import ActivitiesReport     from "./pages/WorkforceActivityManagement/ActivitiesReport";
+import DeptDashboard     from "./pages/WorkforceActivityManagement/DeptDashboard";
+import OrgDashboard     from "./pages/WorkforceActivityManagement/OrgDashboard";
+import MainTaskReport from "./pages/WorkforceActivityManagement/MainTaskReport";// Ab — function ka naam change hua
+import BusinessPlan from "./pages/WorkforceActivityManagement/BusinessPlan";
+import AttendanceReport from "./pages/WorkforceActivityManagement/AttendanceReport";
+import AddSubSection from "./pages/UserManagement/AddSubSection";
+import AssignSubSection from "./pages/UserManagement/AssignSubSection";
 export default function App() {
   return (
     <>
@@ -100,6 +109,15 @@ export default function App() {
                 path="/attendance/shift-history"
                 element={<ShiftHistory />}
               />
+              <Route path="/business-plan" element={<BusinessPlan />} />
+              <Route path="/emp-daily-activities"  element={<EmpDailyActivities />} />
+              <Route path="/activities-report"  element={<ActivitiesReport />} />
+              <Route path="/business-plan/attendance-report" element={<AttendanceReport/>} />
+              <Route path="/org-dashboard"  element={<OrgDashboard />} />
+              <Route path="/dept-dashboard"  element={<DeptDashboard />} />
+              <Route path="/business-plan/main-task-report" element={<MainTaskReport />} />
+ <Route path="/users/add-sub-section" element={<AddSubSection />} />
+              <Route path="/users/assign-sub-section" element={<AssignSubSection />} />
               <Route path="/attendance/rcc-shift" element={<RccShift />} />
               <Route path="/attendance/status" element={<PresentAbsent />} />
               <Route path="/attendance/team-level" element={<TeamLevel />} />
@@ -111,6 +129,7 @@ export default function App() {
                 path="/attendance/section-monthly-report"
                 element={<SectionMonthlyReport />}
               />
+
               <Route path="/leaves/official-work" element={<OfficialWork />} />
               <Route
                 path="/leaves/individual-leave-detail"
