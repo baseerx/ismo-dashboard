@@ -28,4 +28,8 @@ urlpatterns = [
     path('api/submenu/', include('submenu.urls')),  # Include the submenu app URLs
     path('api/assignrights/', include('assignrights.urls')),  # Include the assign rights app URLs
     path('api/officialwork/', include('officialwork.urls')),  # Include the official work app URLs
+    path('api/businessplan/', include('businessplan.urls')),
+    path('api/activities/', include('activities.urls')),
+    path('api/dashboard/', include('dashboard.urls')),
+    path('api/subsections/', include('subsections.urls')),  # Include the sub sections app URLs
 ]

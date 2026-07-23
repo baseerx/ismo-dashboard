@@ -22,4 +22,7 @@ urlpatterns = [
     path('reset_password/<int:user_id>/', UsersView.reset_password),  # Include the login URL
     path('ncc_employees/', EmployeesView.ncc_employees),  # Include the NCC employees URL
     path('rcc_employees/', EmployeesView.rcc_employees),  # Include the RCC employees URL
+         # Sub Section feature (new, additive)
+    path('by_section/<int:section_id>/', EmployeesView.get_employees_by_section),
+    path('assign_sub_section/<int:employee_id>/', EmployeesView.assign_sub_section),
 ]

@@ -183,6 +183,11 @@ class UsersView:
                 'grade_id', 'section_id', 'name', 'gender'
             ).first()
             grade = employee.get('grade_id') if employee else None
+            section = Employees.objects.filter(erp_id=erpid).values_list(
+            'section_id', flat=True).first()
+            sub_section = Employees.objects.filter(erp_id=erpid).values_list(
+            'sub_section_id', flat=True).first()
+            
             section_id = employee.get('section_id') if employee else None
             section_name = Sections.objects.filter(id=section_id).values_list(
                 'name', flat=True).first() if section_id else None
@@ -197,6 +202,7 @@ class UsersView:
                     'grade_id': grade,
                     'erpid': erpid,
                     'section_id': section_id,
+                    'sub_section_id': sub_section,
                     'section_name': section_name,
                     'employee_name': employee.get('name') if employee else None,
                     'gender': employee.get('gender') if employee else None,
@@ -968,5 +974,103 @@ class EmployeesView:
         except Exception as e:
             import traceback
             print("Unexpected error in update_employee:", str(e))
+            traceback.print_exc()
+            return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+    # -----------------------------------------------------------------
+    # Get all employees of a given section (used by Add Sub Section
+    # head-employee dropdown and by Assign Sub Section page).
+    # Read-only, does not touch any existing employee data.
+    # -----------------------------------------------------------------
+    @require_GET
+    def get_employees_by_section(request, section_id):
+        try:
+            section_id = int(section_id)
+        except (TypeError, ValueError):
+            return JsonResponse({"success": False, "error": "Invalid section_id"}, status=400)
+
+        try:
+            from subsections.models import SubSection
+
+            employees_qs = Employees.objects.filter(section_id=section_id).values(
+                'id', 'erp_id', 'hris_id', 'name', 'position', 'sub_section_id'
+            )
+
+            sub_section_map = {
+                s['id']: s['sub_section_name']
+                for s in SubSection.objects.filter(section_id=section_id).values('id', 'sub_section_name')
+            }
+
+            employees = [
+                {
+                    "id": e['id'],
+                    "erp_id": e['erp_id'],
+                    "hris_id": e['hris_id'],
+                    "name": e['name'],
+                    "position": e['position'],
+                    "sub_section_id": e['sub_section_id'],
+                    "sub_section_name": sub_section_map.get(e['sub_section_id']),
+                }
+                for e in employees_qs
+            ]
+            return JsonResponse({"success": True, "employees": employees}, status=200)
+        except Exception as e:
+            import traceback
+            print("Unexpected error in get_employees_by_section:", str(e))
+            traceback.print_exc()
+            return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+    # -----------------------------------------------------------------
+    # Assign / change ONLY the sub_section_id of a single employee.
+    # Does not modify any other employee field.
+    # -----------------------------------------------------------------
+    @csrf_exempt
+    @require_POST
+    def assign_sub_section(request, employee_id):
+        try:
+            data = json.loads(request.body.decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return JsonResponse({"success": False, "error": "Invalid JSON body"}, status=400)
+
+        raw_sub_section_id = data.get('sub_section_id', None)
+
+        try:
+            employee = Employees.objects.get(pk=employee_id)
+        except Employees.DoesNotExist:
+            return JsonResponse({"success": False, "error": "Employee not found"}, status=404)
+
+        try:
+            if raw_sub_section_id in (None, "", 0, "0"):
+                employee.sub_section_id = None
+            else:
+                from subsections.models import SubSection
+
+                try:
+                    sub_section_id = int(raw_sub_section_id)
+                except (TypeError, ValueError):
+                    return JsonResponse({"success": False, "error": "Invalid sub_section_id"}, status=400)
+
+                try:
+                    sub_section = SubSection.objects.get(pk=sub_section_id)
+                except SubSection.DoesNotExist:
+                    return JsonResponse({"success": False, "error": "Sub section not found"}, status=404)
+
+                # Guard: sub section must belong to the same section as the employee
+                if sub_section.section_id != employee.section_id:
+                    return JsonResponse(
+                        {"success": False, "error": "Sub section does not belong to this employee's section"},
+                        status=400,
+                    )
+
+                employee.sub_section_id = sub_section.id
+
+            employee.save(update_fields=['sub_section_id'])
+            return JsonResponse(
+                {"success": True, "employee_id": employee.id, "sub_section_id": employee.sub_section_id},
+                status=200,
+            )
+        except Exception as e:
+            import traceback
+            print("Unexpected error in assign_sub_section:", str(e))
             traceback.print_exc()
             return JsonResponse({"success": False, "error": str(e)}, status=500)

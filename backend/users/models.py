@@ -15,7 +15,8 @@ class Employees(models.Model):
     designation_id = models.IntegerField()
     position = models.CharField(max_length=100)
     flag=models.IntegerField(default=0)
-
+    sub_section_id = models.BigIntegerField(null=True, blank=True)
+    
     class Meta:
         db_table = 'employees'
         managed=True
