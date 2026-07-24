@@ -116,7 +116,7 @@ WSGI_APPLICATION = 'hris.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'mssql',
-        'NAME': 'Attendance_System',  # Replace with your actual database name
+        'NAME': 'Attendance_Stage',  # Replace with your actual database name
         'USER': 'sa',
         'PASSWORD': 'Sa@157',
         'HOST': '192.168.157.51',
