@@ -218,22 +218,31 @@ export default function SectionMonthlyReport() {
 
     const head = [["Employee", ...days.map((d) => `D${d}`)]];
     const bodyRows = employees.map((emp) => {
-      const row: string[] = [emp.name];
+      // Match the webpage: name on the first line, designation · grade beneath.
+      const empInfo = [emp.designation, emp.grade].filter(Boolean).join(" · ");
+      const row: string[] = [empInfo ? `${emp.name}\n${empInfo}` : emp.name];
       days.forEach((d) => {
         const rec = emp.days[dayKey(d)];
         if (!rec || rec.flagType !== "present") {
           row.push(rec ? rec.flag : "-");
           return;
         }
-        const inStr =
-          rec.checkin !== "-"
-            ? `${rec.checkin}${rec.lateStatus === "Late" ? "*" : ""}`
-            : "-";
-        const outStr =
-          rec.checkout !== "-"
-            ? `${rec.checkout}${rec.earlyStatus === "Early" ? "#" : ""}`
-            : "-";
-        row.push(`${inStr}\n${outStr}`);
+        // Match the webpage: check-in time with its late/on-time status, then
+        // check-out time with its early/on-time status — all shown as text.
+        const cellLines: string[] = [];
+        if (rec.checkin !== "-") {
+          cellLines.push(rec.checkin);
+          if (rec.lateStatus) cellLines.push(rec.lateStatus);
+        } else {
+          cellLines.push("-");
+        }
+        if (rec.checkout !== "-") {
+          cellLines.push(rec.checkout);
+          if (rec.earlyStatus) cellLines.push(rec.earlyStatus);
+        } else {
+          cellLines.push("-");
+        }
+        row.push(cellLines.join("\n"));
       });
       return row;
     });
@@ -246,13 +255,13 @@ export default function SectionMonthlyReport() {
       styles: { fontSize: 5, cellPadding: 1, halign: "center", valign: "middle" },
       headStyles: { fillColor: [70, 95, 255], fontSize: 5, textColor: 255 },
       columnStyles: {
-        0: { halign: "left", cellWidth: 90, fontStyle: "bold" },
+        0: { halign: "left", cellWidth: 120, fontStyle: "bold", fontSize: 6 },
       },
     });
 
     doc.setFontSize(8);
     doc.text(
-      "* = Late in    # = Early out",
+      "Each day shows check-in time and status, then check-out time and status.",
       20,
       doc.internal.pageSize.getHeight() - 14
     );
