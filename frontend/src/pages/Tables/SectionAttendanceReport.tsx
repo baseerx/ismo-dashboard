@@ -26,6 +26,7 @@ type AttendanceRow = {
 };
 
 export default function SectionAttendanceReport() {
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
   const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
   const [section, setSection] = useState<String>("");
   const [date, setDate] = useState<String>(moment().format("YYYY-MM-DD"));
@@ -41,6 +42,26 @@ export default function SectionAttendanceReport() {
 
   useEffect(() => {
     getSectionsData();
+  }, []);
+
+  // Default the section to the logged-in user's own section (resolved from the
+  // employee list, since the stored user object has no section id).
+  useEffect(() => {
+    const resolveUserSection = async () => {
+      try {
+        const response = await axios.get("/users/employees/");
+        const self = response.data.find(
+          (e: any) => Number(e.erp_id) === Number(user.erpid)
+        );
+        if (self && self.section_id != null) {
+          setSection(String(self.section_id));
+        }
+      } catch (error) {
+        console.error("Error resolving user section:", error);
+      }
+    };
+    resolveUserSection();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const getSectionsData = async () => {
@@ -175,6 +196,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
               <Select
                 options={options}
                 placeholder="Select an option"
+                value={section ? String(section) : ""}
                 onChange={handleSelectChange}
                 className="dark:bg-dark-900"
               />

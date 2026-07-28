@@ -52,6 +52,7 @@ export default function IndividualLeaveReport() {
   const [employeeOptions, setEmployeeOptions] = useState<
     { label: string; value: string }[]
   >([]);
+  const [employeesData, setEmployeesData] = useState<any[]>([]);
   const [sectionOptions, setSectionOptions] = useState<
     { label: string; value: string }[]
   >([]);
@@ -112,15 +113,16 @@ const handleSubmit = async () => {
     }
   };
 
+  const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
   const [data, setData] = useState<{
     erp_id: number;
     section: string;
     leave_type: string;
     start_date: string;
     end_date: string;
-   
+
   }>({
-    erp_id: 0,
+    erp_id: Number(currentUser.erpid) || 0,
     section: "",
     leave_type: "",
     start_date: "",
@@ -176,6 +178,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
   const fetchEmployeesOptions = async () => {
     try {
       const response = await axios.get("/users/employees/");
+      setEmployeesData(response.data);
       const employees = response.data.map((employee: any) => ({
         label: `${employee.name} (${employee.erp_id})`,
         value: employee.erp_id + "-" + employee.id,
@@ -186,6 +189,28 @@ const columns: ColumnDef<AttendanceRow>[] = [
       toast.error("Failed to load employee options");
     }
   };
+
+  // Resolve the section id that a given employee belongs to.
+  const getSectionForErp = (erpId: number | string) => {
+    const emp = employeesData.find(
+      (e: any) => Number(e.erp_id) === Number(erpId)
+    );
+    return emp && emp.section_id != null ? String(emp.section_id) : "";
+  };
+
+  // Once the employee list loads, populate the section (and any other
+  // employee-derived field) for the currently selected employee — this
+  // covers the default logged-in user selected on mount.
+  useEffect(() => {
+    if (!employeesData.length) return;
+    setData((prev) => {
+      const emp = employeesData.find(
+        (e: any) => Number(e.erp_id) === Number(prev.erp_id)
+      );
+      if (!emp) return prev;
+      return { ...prev, section: String(emp.section_id ?? "") };
+    });
+  }, [employeesData]);
 
   return (
     <>
@@ -213,9 +238,11 @@ const columns: ColumnDef<AttendanceRow>[] = [
                 }
                 onChange={(value) => {
                   const vals = value?.toString().split("-");
+                  const newErpId = parseInt(vals[0] || "0");
                   setData({
                     ...data,
-                    erp_id: parseInt(vals[0] || "0"),
+                    erp_id: newErpId,
+                    section: getSectionForErp(newErpId),
                   });
                 }}
               />
@@ -227,6 +254,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
               <Select
                 options={sectionOptions}
                 placeholder="Select an option"
+                value={data.section ? String(data.section) : ""}
                 onChange={handleSelectChange}
                 className="dark:bg-dark-900"
               />

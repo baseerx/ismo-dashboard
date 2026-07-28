@@ -65,6 +65,12 @@ const ADMIN_GRADES = [9, 10, 11];
 const inp = "w-full border border-gray-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100";
 const lbl = "block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1";
 
+/* Pull a user-friendly message out of an axios/API error without using `any` */
+function getApiError(err: unknown, fallback: string): string {
+  const e = err as { response?: { data?: { error?: string } } };
+  return e?.response?.data?.error || fallback;
+}
+
 /* ═══════════════════════════════════════
    MAIN COMPONENT
 ═══════════════════════════════════════ */
@@ -204,8 +210,8 @@ export default function EmpDailyActivities() {
       if (res.data.overall_pct !== undefined) {
         toast.info(`BP Overall Completion: ${res.data.overall_pct}%`);
       }
-    } catch (err: any) {
-      toast.error(err?.response?.data?.error || "Submit failed");
+    } catch (err) {
+      toast.error(getApiError(err, "Submit failed"));
     } finally {
       setSubmitting(false);
     }
@@ -217,7 +223,7 @@ export default function EmpDailyActivities() {
     try {
       // If today_progress changed, recalculate overall_pct from the linked BP task's current pct
       const original = activities.find(a => a.id === editId);
-      let patchData = { ...editData };
+      const patchData = { ...editData };
 
       if (
         editData.today_progress !== undefined &&
@@ -237,8 +243,8 @@ export default function EmpDailyActivities() {
       toast.success("Entry updated!");
       setEditId(null); setEditData({});
       await Promise.all([fetchActivities(), fetchBpTasks()]);
-    } catch (err: any) {
-      toast.error(err?.response?.data?.error || "Update failed");
+    } catch (err) {
+      toast.error(getApiError(err, "Update failed"));
     }
   };
 
@@ -249,8 +255,8 @@ export default function EmpDailyActivities() {
       await axios.delete(`/activities/delete/${id}/`);
       toast.success("Entry deleted.");
       await Promise.all([fetchActivities(), fetchBpTasks()]);
-    } catch (err: any) {
-      toast.error(err?.response?.data?.error || "Delete failed");
+    } catch (err) {
+      toast.error(getApiError(err, "Delete failed"));
     }
   };
 

@@ -879,9 +879,12 @@ def create_leave_request(request):
 
         # --------------------------------------------------
         # WEEKEND / PUBLIC HOLIDAY CHECK
-        # Weekends are allowed when "sandwiched" inside a leave request
-        # (i.e. at least one working day is actually being taken off).
-        # A request made up of only weekend day(s) is rejected.
+        # Weekends and public holidays are allowed when "sandwiched" inside a
+        # leave request (i.e. at least one working day is actually being taken
+        # off). This lets a leave span an intervening public holiday — e.g.
+        # 23 Jul -> 21 Aug across the 14th Aug holiday.
+        # Only a request made up *entirely* of weekend / public holiday day(s)
+        # is rejected, since that isn't a real leave.
         # --------------------------------------------------
         holiday_dates = set(
             Holiday.objects.filter(
@@ -892,18 +895,16 @@ def create_leave_request(request):
         has_working_day = False
         day_cursor = start_date
         while day_cursor <= end_date:
-            if day_cursor in holiday_dates:
-                return JsonResponse(
-                    {"error": f"Leave cannot be applied on a public holiday ({day_cursor})"},
-                    status=400
-                )
-            if day_cursor.weekday() not in (5, 6):  # not Saturday/Sunday
+            is_weekend = day_cursor.weekday() in (5, 6)  # Saturday/Sunday
+            is_holiday = day_cursor in holiday_dates
+            if not is_weekend and not is_holiday:
                 has_working_day = True
+                break
             day_cursor += timedelta(days=1)
 
         if not has_working_day:
             return JsonResponse(
-                {"error": "Leave cannot be applied only for weekend day(s)"},
+                {"error": "Leave cannot be applied only for weekend or public holiday day(s)"},
                 status=400
             )
 
