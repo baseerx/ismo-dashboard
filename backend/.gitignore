@@ -1,0 +1,16 @@
+# Virtual environment
+venv/
+
+# Windows service / startup scripts (machine-specific)
+DjangoService.bat
+run_django.vbs
+
+# Waitress server log
+waitress.log
+
+# Environment variables
+.env
+
+# Python bytecode
+__pycache__/
+*.pyc
