@@ -18,6 +18,7 @@ type AttendanceRow = {
   total_leave: number;
   total_official_work: number;
   total_absent: number;
+  attendance_percentage: number;
   status: string;
 };
 
@@ -51,16 +52,25 @@ export default function TeamLevel() {
         }
       );
 
-      const cleanedData: AttendanceRow[] = response.data.map((item: any) => ({
-        date: moment(item.date).format("DD-MM-YYYY"),
-        section: item.section ?? "-",
-        total_employees: Number(item.total_employees),
-        total_present: Number(item.total_present),
-        total_leave: Number(item.total_leave),
-        total_official_work: Number(item.total_official_work),
-        total_absent: Number(item.total_absent),
-        status: item.status,
-      }));
+      const cleanedData: AttendanceRow[] = response.data.map((item: any) => {
+        const totalEmployees = Number(item.total_employees);
+        const totalPresent = Number(item.total_present);
+
+        return {
+          date: moment(item.date).format("DD-MM-YYYY"),
+          section: item.section ?? "-",
+          total_employees: totalEmployees,
+          total_present: totalPresent,
+          total_leave: Number(item.total_leave),
+          total_official_work: Number(item.total_official_work),
+          total_absent: Number(item.total_absent),
+          // Share of the section that actually marked attendance that day.
+          attendance_percentage: totalEmployees
+            ? Math.round((totalPresent / totalEmployees) * 1000) / 10
+            : 0,
+          status: item.status,
+        };
+      });
 
       toast.dismiss("attendance-fetch-success");
       setAttendanceData(cleanedData);
@@ -157,8 +167,37 @@ export default function TeamLevel() {
 
         return (
 
-          <span className="inline-flex items-center justify-center px-5 py-1 rounded-full font-semibold bg-danger-50 text-danger-600 dark:bg-danger-500/15 dark:text-danger-500">
+          <span className="inline-flex items-center justify-center px-5 py-1 rounded-full font-semibold bg-error-50 text-error-600 dark:bg-error-500/15 dark:text-error-500">
             {value}
+          </span>
+
+        );
+
+      }
+
+    },
+
+    {
+      accessorKey: "attendance_percentage",
+      header: "Attendance %",
+
+      cell: ({ getValue }) => {
+
+        const value = getValue<number>();
+
+        const tone =
+          value >= 90
+            ? "bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-500"
+            : value >= 75
+            ? "bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-warning-500"
+            : "bg-error-50 text-error-600 dark:bg-error-500/15 dark:text-error-500";
+
+        return (
+
+          <span
+            className={`inline-flex items-center justify-center px-4 py-1 rounded-full font-semibold ${tone}`}
+          >
+            {value.toFixed(1)}%
           </span>
 
         );
@@ -170,6 +209,11 @@ export default function TeamLevel() {
     {
       accessorKey: "status",
       header: "Summary",
+
+      // The summary is a full sentence of badges; on paper the column is narrow
+      // enough that they would stack into a tall vertical strip, so keep the
+      // printed cell on a single line.
+      meta: { getTdClassName: () => "print-nowrap" },
 
       cell: ({ row }) => {
 
@@ -194,7 +238,7 @@ export default function TeamLevel() {
               Official Work : {official}
             </span>
 
-            <span className="inline-flex items-center px-3 py-1 rounded-full font-semibold bg-danger-50 text-danger-600 dark:bg-danger-500/15 dark:text-danger-500">
+            <span className="inline-flex items-center px-3 py-1 rounded-full font-semibold bg-error-50 text-error-600 dark:bg-error-500/15 dark:text-error-500">
               Absent : {absent}
             </span>
 
@@ -220,7 +264,7 @@ export default function TeamLevel() {
         <ComponentCard title={`Attendance on ${fromdate}`}>
           <ToastContainer position="bottom-right" />
 
-          <div className="flex justify-between items-center mb-4 gap-1">
+          <div className="no-print flex justify-between items-center mb-4 gap-1">
             <div className="w-1/2">
               <DatePicker
                 id="from-date-picker"
@@ -249,12 +293,55 @@ export default function TeamLevel() {
             </div>
           </div>
 
-          <EnhancedDataTable<AttendanceRow>
-            data={attendancedata}
-            columns={columns}
-            fromdate={fromdate.toString()}
-            todate={todate.toString()}
-          />
+          <div className="print-area">
+            {/* Letterhead — only rendered on paper, where the page chrome and
+                the card title are not printed. */}
+            <div className="print-only mb-3 border-b border-gray-300 pb-2 text-center">
+              <div className="text-[13pt] font-bold">
+                Independent System &amp; Market Operator (ISMO)
+              </div>
+              <div className="text-[10pt] font-semibold">
+                Detailed Attendance Summary Report
+              </div>
+              <div className="text-[7pt] text-gray-600">
+                {moment(fromdate.toString()).format("DD-MMM-YYYY")} –{" "}
+                {moment(todate.toString()).format("DD-MMM-YYYY")} · Generated{" "}
+                {moment().format("DD-MMM-YYYY HH:mm")}
+              </div>
+            </div>
+
+            <EnhancedDataTable<AttendanceRow>
+              data={attendancedata}
+              columns={columns}
+              fromdate={fromdate.toString()}
+              todate={todate.toString()}
+              printable
+              getExportHeaders={() => [
+                "Date",
+                "Section",
+                "Total Employees",
+                "Present",
+                "Leave",
+                "Official Work",
+                "Absent",
+                "Attendance %",
+                "Summary",
+              ]}
+              getExportRows={(rows) =>
+                rows.map((row) => [
+                  row.date,
+                  row.section,
+                  row.total_employees,
+                  row.total_present,
+                  row.total_leave,
+                  row.total_official_work,
+                  row.total_absent,
+                  `${row.attendance_percentage.toFixed(1)}%`,
+                  row.status,
+                ])
+              }
+            />
+          </div>
         </ComponentCard>
       </div>
     </>
