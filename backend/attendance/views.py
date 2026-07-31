@@ -1138,7 +1138,7 @@ class AttendanceView:
     @require_POST
     def attendance_section_monthly(request):
         """
-        Monthly attendance for every employee of the requesting user's section.
+        Monthly attendance for every employee of the requested section.
         Returns one row per (employee, day) with the day's first check-in and
         last check-out, so the frontend can pivot it into a day-wise grid.
         """
@@ -1146,16 +1146,44 @@ class AttendanceView:
         erp_id = data.get("erp_id")
         fromdate = data.get("fromdate")
         todate = data.get("todate")
+        # Optional section filter:
+        #   omitted / ""  -> the requesting user's own section (default)
+        #   0 / "all"     -> every section
+        #   <id>          -> that section only
+        section_id = data.get("section_id")
 
         if not erp_id or not fromdate or not todate:
             return JsonResponse(
                 {"error": "erp_id, fromdate and todate are required"}, status=400
             )
 
+        params = {"fromdate": fromdate, "todate": todate}
+        section_choice = (
+            str(section_id).strip().lower() if section_id is not None else ""
+        )
+
+        if section_choice in ("", "none", "null"):
+            section_filter = (
+                "AND e.section_id = "
+                "(SELECT section_id FROM employees WHERE erp_id = :erpid)"
+            )
+            params["erpid"] = erp_id
+        elif section_choice in ("0", "all"):
+            section_filter = ""  # every section
+        else:
+            try:
+                params["section_id"] = int(section_choice)
+            except ValueError:
+                return JsonResponse(
+                    {"error": "section_id must be a section id, 0 or 'all'"},
+                    status=400,
+                )
+            section_filter = "AND e.section_id = :section_id"
+
         session = SessionLocal()
         records = []
         try:
-            query = text("""
+            query = text(f"""
                 WITH date_range AS (
                     SELECT DATEADD(DAY, v.number, :fromdate) AS the_date
                     FROM master..spt_values v
@@ -1173,7 +1201,7 @@ class AttendanceView:
                         e.grade_id
                     FROM employees e
                     WHERE e.flag = 1
-                        AND e.section_id = (SELECT section_id FROM employees WHERE erp_id = :erpid)
+                        {section_filter}
                 ),
                 att AS (
                     -- Pre-aggregate the month's punches once, filtered by a sargable
@@ -1251,15 +1279,13 @@ class AttendanceView:
                     att.checkin_time,
                     att.checkout_time
                 ORDER BY
+                    s.name,
                     g.name DESC,
                     se.name,
                     dr.the_date
             """)
 
-            rows = session.execute(
-                query,
-                {"fromdate": fromdate, "todate": todate, "erpid": erp_id}
-            ).fetchall()
+            rows = session.execute(query, params).fetchall()
 
             check_in_deadline = time(8, 30)
             check_out_deadline = time(16, 0)
@@ -1311,7 +1337,45 @@ class AttendanceView:
                     "flag_type": flag_type,
                 })
 
-            return JsonResponse(records, safe=False)
+            # Supervising head of each section on the report — the most senior
+            # employee it holds (grade_id ranks G-01..G-11 low to high). Ties
+            # are ordered by name so the pick is stable between calls.
+            heads_query = text(f"""
+                SELECT
+                    s.id    AS section_id,
+                    s.name  AS section_name,
+                    e.erp_id,
+                    e.name,
+                    d.title AS designation,
+                    g.name  AS grade
+                FROM employees e
+                INNER JOIN sections s ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN grades g ON g.id = e.grade_id
+                WHERE e.flag = 1
+                    AND e.grade_id = (
+                        SELECT MAX(e2.grade_id)
+                        FROM employees e2
+                        WHERE e2.flag = 1
+                            AND e2.section_id = e.section_id
+                    )
+                    {section_filter}
+                ORDER BY s.name, e.name
+            """)
+
+            heads = [
+                {
+                    "section_id": h.section_id,
+                    "section": h.section_name,
+                    "erp_id": h.erp_id,
+                    "name": h.name,
+                    "designation": h.designation,
+                    "grade": h.grade,
+                }
+                for h in session.execute(heads_query, params).fetchall()
+            ]
+
+            return JsonResponse({"records": records, "heads": heads})
 
         finally:
             session.close()
