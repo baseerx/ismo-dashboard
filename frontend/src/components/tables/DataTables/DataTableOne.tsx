@@ -1,4 +1,5 @@
-import  { useState,useEffect } from "react";
+import  { useState,useEffect, useRef } from "react";
+import { flushSync } from "react-dom";
 import {
   useReactTable,
   getCoreRowModel,
@@ -21,6 +22,9 @@ interface EnhancedDataTableProps<T extends object> {
   getExportHeaders?: () => string[];
   getExportRows?: (data: T[]) => any[][];
   idKey?: keyof T;
+  /** Show a Print button. The caller must wrap the table in a `print-area`
+   *  element, otherwise the global print stylesheet keeps it off the paper. */
+  printable?: boolean;
 }
 
 const EnhancedDataTable = <T extends object>({
@@ -30,9 +34,14 @@ const EnhancedDataTable = <T extends object>({
     todate,
   getExportHeaders,
   getExportRows,
+  printable = false,
 }: EnhancedDataTableProps<T>) => {
     const [globalFilter, setGlobalFilter] = useState("");
     const [tableData, setTableData] = useState<T[]>([]);
+    // Page size / theme captured while a print dialog is open, restored after.
+    const printRestore = useRef<{ pageSize: number; wasDark: boolean } | null>(
+      null
+    );
     
     
   useEffect(() => {
@@ -93,10 +102,58 @@ const exportToPDF = () => {
   doc.save("attendance_report.pdf");
 };
 
+// The browser prints what is on screen, so before the dialog opens the
+// paginated view has to be widened to every matching row — otherwise only the
+// current page of 15 reaches the paper — and the dark palette has to go, since
+// white-on-white is unreadable in print.
+const expandForPrint = () => {
+  if (printRestore.current) return; // already opened up for this dialog
+
+  const root = document.documentElement;
+  const wasDark = root.classList.contains("dark");
+  if (wasDark) root.classList.remove("dark");
+
+  printRestore.current = {
+    pageSize: table.getState().pagination.pageSize,
+    wasDark,
+  };
+
+  // Synchronous so the extra rows are in the DOM by the time the browser
+  // snapshots the page for printing.
+  flushSync(() => {
+    table.setPageIndex(0);
+    table.setPageSize(Math.max(table.getFilteredRowModel().rows.length, 1));
+  });
+};
+
+const restoreAfterPrint = () => {
+  const saved = printRestore.current;
+  if (!saved) return;
+  printRestore.current = null;
+  table.setPageSize(saved.pageSize);
+  if (saved.wasDark) document.documentElement.classList.add("dark");
+};
+
+// Covers Ctrl+P and the browser menu as well as the Print button.
+useEffect(() => {
+  if (!printable) return;
+  window.addEventListener("beforeprint", expandForPrint);
+  window.addEventListener("afterprint", restoreAfterPrint);
+  return () => {
+    window.removeEventListener("beforeprint", expandForPrint);
+    window.removeEventListener("afterprint", restoreAfterPrint);
+  };
+});
+
+const handlePrint = () => {
+  expandForPrint(); // browsers that never fire `beforeprint`
+  window.print();
+};
+
 
   return (
     <div className="p-6 space-y-4 bg-white rounded-xl shadow border border-gray-200">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+      <div className="no-print flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
         <input
           type="text"
           placeholder="Search..."
@@ -105,6 +162,15 @@ const exportToPDF = () => {
           className="w-full sm:w-64 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring focus:border-blue-400"
         />
         <div className="flex gap-2">
+          {printable && (
+            <button
+              onClick={handlePrint}
+              disabled={tableData.length === 0}
+              className="bg-brand-500 hover:bg-brand-600 text-white px-4 py-2 rounded text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Print
+            </button>
+          )}
           <button
             onClick={exportToExcel}
             className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm"
@@ -122,7 +188,7 @@ const exportToPDF = () => {
 
           <div className="overflow-x-auto">
         
-        <table className="min-w-full table-auto border-collapse">
+        <table className="print-report min-w-full table-auto border-collapse">
           <thead className="bg-gray-100 text-sm text-gray-700">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
@@ -158,7 +224,7 @@ const exportToPDF = () => {
         </table>
       </div>
 
-      <div className="flex justify-between items-center text-sm">
+      <div className="no-print flex justify-between items-center text-sm">
         <div>
           Page {table.getState().pagination.pageIndex + 1} of{" "}
           {table.getPageCount()}

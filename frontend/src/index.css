@@ -903,6 +903,45 @@ span.flatpickr-weekday,
     text-align: left !important;
   }
 
+  /* Record-per-row report tables (the shared data table). The card chrome and
+     the generous on-screen padding only waste sheet space. */
+  .print-area .p-6 {
+    padding: 0 !important;
+  }
+
+  .print-area .shadow,
+  .print-area .shadow-sm {
+    box-shadow: none !important;
+  }
+
+  .print-area table.print-report {
+    font-size: 8pt !important;
+  }
+
+  .print-area table.print-report th,
+  .print-area table.print-report td {
+    padding: 3pt 4pt !important;
+    line-height: 1.25 !important;
+  }
+
+  /* Summary-style cells carry a whole sentence of badges. The printed column is
+     narrower than the screen one, so the badges would wrap into a tall vertical
+     strip and stretch every row — keep them running horizontally on one line
+     and let the column claim the width it needs instead. */
+  .print-area td.print-nowrap,
+  .print-area td.print-nowrap span {
+    white-space: nowrap !important;
+  }
+
+  .print-area td.print-nowrap > div {
+    flex-wrap: nowrap !important;
+    gap: 3pt !important;
+  }
+
+  .print-area td.print-nowrap span {
+    padding: 0 3pt !important;
+  }
+
   /* Each slice of the month starts a new sheet. */
   .print-page-break {
     break-after: page;
