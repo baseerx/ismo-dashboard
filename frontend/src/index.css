@@ -778,3 +778,160 @@ span.flatpickr-weekday,
 .simplebar-scrollbar.simplebar-visible:before {
   @apply opacity-100;
 }
+
+/* ---------------------------------------------------------------------------
+   Print layout for report pages.
+
+   Mark the report container with `print-area`, anything that should stay on
+   screen only with `no-print`, and print-only headings with `print-only`.
+   Pages that print a wide day-wise grid should also add `print-grid` to the
+   table so the whole month fits on the sheet.
+   --------------------------------------------------------------------------- */
+.print-only {
+  display: none;
+}
+
+@media print {
+  /* A4 landscape is what most printers actually hold — asking for a larger
+     sheet makes the browser scale the page down and shrink the text. */
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  /* Only the report reaches the paper — the shell (sidebar, header, buttons)
+     is kept out without collapsing the layout it belongs to. */
+  body * {
+    visibility: hidden;
+  }
+
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+
+  .print-area {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+  }
+
+  .no-print,
+  .no-print * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  /* Every column has to make it onto the page: drop the horizontal scroll
+     container, and un-stick the frozen first column (a sticky cell prints as
+     a duplicate overlay on top of the table). */
+  .print-area .overflow-x-auto,
+  .print-area .custom-scrollbar {
+    overflow: visible !important;
+    max-width: none !important;
+  }
+
+  .print-area .sticky {
+    position: static !important;
+  }
+
+  .print-area table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  /* Repeat the column headings at the top of every printed page. */
+  .print-area thead {
+    display: table-header-group;
+  }
+
+  .print-area tr {
+    break-inside: avoid;
+  }
+
+  .print-area th,
+  .print-area td {
+    background: #fff !important;
+    border: 0.3pt solid #cbd5e1 !important;
+  }
+
+  /* Readable body text. The page only holds a slice of the month, so the
+     grid is printed at a normal size and continues on the next page rather
+     than being shrunk to fit a whole month across one sheet. */
+  .print-area table.print-grid {
+    table-layout: fixed;
+    font-size: 8pt !important;
+  }
+
+  .print-area table.print-grid th,
+  .print-area table.print-grid td {
+    padding: 2.5pt !important;
+    line-height: 1.25 !important;
+    word-break: break-word;
+  }
+
+  /* Day/status captions sit a step below the times they annotate. */
+  .print-area table.print-grid .text-\[9px\],
+  .print-area table.print-grid .text-\[10px\],
+  .print-area table.print-grid .text-\[11px\] {
+    font-size: 7pt !important;
+  }
+
+  /* The employee column carries names, so give it a fixed share of the width
+     instead of the on-screen minimum that would push the days off the page. */
+  .print-area table.print-grid th:first-child,
+  .print-area table.print-grid td:first-child {
+    min-width: 0 !important;
+    width: 130pt !important;
+    text-align: left !important;
+  }
+
+  /* Each slice of the month starts a new sheet. */
+  .print-page-break {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  /* Keep the status colours readable on paper. */
+  .print-area,
+  .print-area * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .print-area .text-success-500,
+  .print-area .text-success-600 {
+    color: #15803d !important;
+  }
+
+  .print-area .text-warning-500,
+  .print-area .text-warning-600 {
+    color: #b45309 !important;
+  }
+
+  .print-area .text-error-500,
+  .print-area .text-error-600 {
+    color: #b91c1c !important;
+  }
+
+  .print-area .text-blue-light-500 {
+    color: #0369a1 !important;
+  }
+}

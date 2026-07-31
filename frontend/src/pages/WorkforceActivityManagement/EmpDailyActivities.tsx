@@ -47,10 +47,10 @@ interface ActivityRow {
    STATUS BADGE
 ═══════════════════════════════════════ */
 const STATUS_COLORS: Record<string, string> = {
-  "Completed":   "bg-green-100 text-green-800",
+  "Completed": "bg-green-100 text-green-800",
   "In Progress": "bg-blue-100 text-blue-800",
-  "Pending":     "bg-yellow-100 text-yellow-800",
-  "Blocked":     "bg-red-100 text-red-800",
+  "Pending": "bg-yellow-100 text-yellow-800",
+  "Blocked": "bg-red-100 text-red-800",
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -75,49 +75,49 @@ function getApiError(err: unknown, fallback: string): string {
    MAIN COMPONENT
 ═══════════════════════════════════════ */
 export default function EmpDailyActivities() {
-  const user        = JSON.parse(localStorage.getItem("user") || "{}");
-  const erpid       = user?.erpid      ?? 0;
-  const gradeId     = user?.grade_id    ?? 0;
-  const sectionId   = user?.section_id  ?? 0;
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  const erpid = user?.erpid ?? 0;
+  const gradeId = user?.grade_id ?? 0;
+  const sectionId = user?.section_id ?? 0;
   const isSuperuser = user?.is_superuser ?? false;
   const isAdmin     = ADMIN_GRADES.includes(gradeId) || isSuperuser;
   const today       = new Date().toISOString().split("T")[0];
 
   /* ── State ── */
-  const [bpTasks,    setBpTasks]    = useState<BPTask[]>([]);
+  const [bpTasks, setBpTasks] = useState<BPTask[]>([]);
   const [activities, setActivities] = useState<ActivityRow[]>([]);
-  const [loading,    setLoading]    = useState(true);
+  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   /* Form */
-  const [l1Id,        setL1Id]        = useState("");
-  const [l2Id,        setL2Id]        = useState("");
-  const [l3Id,        setL3Id]        = useState("");
-  const [desc,        setDesc]        = useState("");
-  const [risk,        setRisk]        = useState("");
-  const [actDate,     setActDate]     = useState(today);
-  const [todayProg,   setTodayProg]   = useState("");
-  const [overallPct,  setOverallPct]  = useState("");
+  const [l1Id, setL1Id] = useState("");
+  const [l2Id, setL2Id] = useState("");
+  const [l3Id, setL3Id] = useState("");
+  const [desc, setDesc] = useState("");
+  const [risk, setRisk] = useState("");
+  const [actDate, setActDate] = useState(today);
+  const [todayProg, setTodayProg] = useState("");
+  const [overallPct, setOverallPct] = useState("");
 
   /* History filters */
-  const [search,   setSearch]   = useState("");
+  const [search, setSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
-  const [dateTo,   setDateTo]   = useState("");
-  const [page,     setPage]     = useState(1);
-  const [perPage,  setPerPage]  = useState(10);
+  const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(10);
 
   /* Edit */
-  const [editId,   setEditId]   = useState<number | null>(null);
+  const [editId, setEditId] = useState<number | null>(null);
   const [editData, setEditData] = useState<Partial<ActivityRow>>({});
 
   /* ── Fetch BP Tasks ── */
   const fetchBpTasks = useCallback(async () => {
     try {
       const params = new URLSearchParams({
-        section_id:   String(sectionId),
-        grade_id:     String(gradeId),
+        section_id: String(sectionId),
+        grade_id: String(gradeId),
         is_superuser: String(isSuperuser),
-        erpid:        String(erpid),
+        erpid: String(erpid),
       });
       const res = await axios.get(`/activities/bp-tasks/?${params}`);
       setBpTasks(res.data);
@@ -147,13 +147,13 @@ export default function EmpDailyActivities() {
   /* ── Hierarchical Dropdowns ── */
   const l1Tasks = bpTasks.filter(t => getLevel(t.sr_number) === 1);
 
-  const selectedL1  = bpTasks.find(t => t.id === parseInt(l1Id));
-  const l2Tasks     = bpTasks.filter(t => getLevel(t.sr_number) === 2 && getParentSr(t.sr_number) === selectedL1?.sr_number);
+  const selectedL1 = bpTasks.find(t => t.id === parseInt(l1Id));
+  const l2Tasks = bpTasks.filter(t => getLevel(t.sr_number) === 2 && getParentSr(t.sr_number) === selectedL1?.sr_number);
 
-  const selectedL2  = bpTasks.find(t => t.id === parseInt(l2Id));
-  const l3Tasks     = bpTasks.filter(t => getLevel(t.sr_number) === 3 && getParentSr(t.sr_number) === selectedL2?.sr_number);
+  const selectedL2 = bpTasks.find(t => t.id === parseInt(l2Id));
+  const l3Tasks = bpTasks.filter(t => getLevel(t.sr_number) === 3 && getParentSr(t.sr_number) === selectedL2?.sr_number);
 
-  const selectedL3  = bpTasks.find(t => t.id === parseInt(l3Id));
+  const selectedL3 = bpTasks.find(t => t.id === parseInt(l3Id));
 
   // Most specific selected task
   const selectedTask = selectedL3 || selectedL2 || selectedL1 || null;
@@ -186,18 +186,18 @@ export default function EmpDailyActivities() {
     const bp_task_id = l3Id || l2Id || l1Id;
     // Calculate new overall_pct: current BP completion + today's progress (capped at 100)
     const currentPct = selectedTask?.completion_pct ?? 0;
-    const todayNum   = parseInt(todayProg) || 0;
+    const todayNum = parseInt(todayProg) || 0;
     const newOverall = Math.min(100, currentPct + todayNum);
     setSubmitting(true);
     try {
       const res = await axios.post("/activities/submit/", {
         erp_id: erpid,
-        bp_task_id:       bp_task_id ? parseInt(bp_task_id) : null,
+        bp_task_id: bp_task_id ? parseInt(bp_task_id) : null,
         task_description: desc,
-        risk_comment:     risk,
-        activity_date:    actDate,
-        today_progress:   todayNum,
-        overall_pct:      newOverall,
+        risk_comment: risk,
+        activity_date: actDate,
+        today_progress: todayNum,
+        overall_pct: newOverall,
       });
       toast.success("Activity submitted successfully!");
       // Form reset
@@ -262,14 +262,14 @@ export default function EmpDailyActivities() {
 
   /* ── Filter & Paginate ── */
   const filtered = activities.filter(r => {
-    const q           = search.toLowerCase();
+    const q = search.toLowerCase();
     const matchSearch = !search || r.bp_task_name?.toLowerCase().includes(q) || r.task_description?.toLowerCase().includes(q);
-    const matchFrom   = !dateFrom || r.activity_date >= dateFrom;
-    const matchTo     = !dateTo   || r.activity_date <= dateTo;
+    const matchFrom = !dateFrom || r.activity_date >= dateFrom;
+    const matchTo = !dateTo || r.activity_date <= dateTo;
     return matchSearch && matchFrom && matchTo;
   });
   const totalPages = Math.ceil(filtered.length / perPage);
-  const pageSlice  = filtered.slice((page - 1) * perPage, page * perPage);
+  const pageSlice = filtered.slice((page - 1) * perPage, page * perPage);
 
   /* ═══════════════════════════════════════
      RENDER
@@ -448,10 +448,10 @@ export default function EmpDailyActivities() {
               <tr className="bg-blue-100 text-blue-900">
                 {["Sr.", "Task", "Description", "Comment/Risk", "Start Date", "End Date",
                   "Activity Date", "Today %", "Overall %", "Status", "Edit", "Delete"].map(h => (
-                  <th key={h} className="border border-blue-200 px-2 py-2 text-center font-semibold whitespace-nowrap">
-                    {h}
-                  </th>
-                ))}
+                    <th key={h} className="border border-blue-200 px-2 py-2 text-center font-semibold whitespace-nowrap">
+                      {h}
+                    </th>
+                  ))}
               </tr>
             </thead>
             <tbody>
@@ -463,7 +463,7 @@ export default function EmpDailyActivities() {
                 <tr><td colSpan={12} className="text-center py-8 text-gray-400">No activity record found</td></tr>
               ) : pageSlice.map((r, i) => {
                 const isEditing = editId === r.id;
-                const absIdx    = (page - 1) * perPage + i;
+                const absIdx = (page - 1) * perPage + i;
                 return (
                   <tr key={r.id} className={`${isEditing ? "bg-yellow-50" : absIdx % 2 === 0 ? "bg-white" : "bg-gray-50"} hover:bg-blue-50 transition-colors`}>
 
@@ -512,7 +512,7 @@ export default function EmpDailyActivities() {
                       {(() => {
                         // Try to get live completion from refreshed bpTasks
                         const live = bpTasks.find(t => t.id === r.bp_task_id);
-                        const pct  = live ? live.completion_pct : r.overall_pct;
+                        const pct = live ? live.completion_pct : r.overall_pct;
                         return (
                           <div className="flex items-center gap-1 justify-center">
                             <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden w-10">
