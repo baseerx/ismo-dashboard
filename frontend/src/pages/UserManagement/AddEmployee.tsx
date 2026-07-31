@@ -357,7 +357,7 @@ export default function AddEmployee() {
       header: "Actions",
       id: "actions",
       cell: ({ row }) =>
-        user?.user_id === 3 ? (
+        (
           <div className="flex items-center gap-2">
             <Button
               size="xs"
@@ -366,7 +366,7 @@ export default function AddEmployee() {
             >
               Edit
             </Button>
-            {row.original?.flag === true ? (
+            {row.original?.flag === true && user?.user_id === 3 ? (
               <Button
                 size="xs"
                 variant="danger"
@@ -374,7 +374,7 @@ export default function AddEmployee() {
               >
                 Disable
               </Button>
-            ) : (
+            ) : user?.user_id === 3 ? (
               <Button
                 size="xs"
                 variant="primary"
@@ -382,9 +382,9 @@ export default function AddEmployee() {
               >
                 Enable
               </Button>
-            )}
+            ) : null}
           </div>
-        ) : null,
+        ),
     },
   ];
 
