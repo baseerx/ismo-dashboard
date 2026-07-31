@@ -1382,6 +1382,499 @@ class AttendanceView:
 
     @csrf_exempt
     @require_POST
+    def attendance_monthly_summary(request):
+        """
+        One row per employee for the requested month: the days they were
+        present, the days they were absent and the approved leave days they
+        took.
+
+        Each (employee, day) of the month falls into exactly one bucket, using
+        the same precedence as the section monthly report:
+            present > leave > official work > holiday > weekend > absent
+        so a day is never counted twice. Days that have not happened yet are
+        not counted as absent — for the running month the absent tally only
+        covers the days up to today.
+        """
+        data = json.loads(request.body.decode("utf-8"))
+        fromdate = data.get("fromdate")
+        todate = data.get("todate")
+
+        if not fromdate or not todate:
+            return JsonResponse(
+                {"error": "fromdate and todate are required"}, status=400
+            )
+
+        session = SessionLocal()
+        records = []
+
+        try:
+            query = text("""
+                WITH date_range AS
+                (
+                    SELECT CAST(DATEADD(DAY, v.number, :fromdate) AS DATE) AS the_date
+                    FROM master..spt_values v
+                    WHERE v.type = 'P'
+                    AND DATEADD(DAY, v.number, :fromdate) <= :todate
+                ),
+
+                employees_data AS
+                (
+                    SELECT
+                        e.erp_id,
+                        e.hris_id,
+                        e.name,
+                        ISNULL(s.name, '-') AS department,
+                        ISNULL(d.title, '-') AS designation,
+                        ISNULL(loc.name, '-') AS location,
+                        g.name AS grade
+                    FROM employees e
+                    LEFT JOIN sections s
+                        ON s.id = e.section_id
+                    LEFT JOIN designations d
+                        ON d.id = e.designation_id
+                    LEFT JOIN locations loc
+                        ON loc.id = e.location_id
+                    LEFT JOIN grades g
+                        ON g.id = e.grade_id
+                    WHERE e.flag = 1
+                ),
+
+                attendance_days AS
+                (
+                    SELECT DISTINCT
+                        user_id,
+                        CAST(timestamp AS DATE) AS att_date
+                    FROM attendance
+                    WHERE timestamp >= :fromdate
+                    AND timestamp < DATEADD(DAY, 1, :todate)
+                ),
+
+                -- Leave and official work are stored as ranges; expand them to
+                -- one DISTINCT row per (employee, day) so overlapping requests
+                -- cannot multiply an employee's days in the grid below.
+                leave_dates AS
+                (
+                    SELECT DISTINCT
+                        l.erp_id,
+                        dr.the_date
+                    FROM leaves l
+                    JOIN date_range dr
+                        ON dr.the_date BETWEEN CAST(l.start_date AS DATE)
+                                           AND CAST(l.end_date AS DATE)
+                    WHERE l.status = 'approved'
+                    AND l.end_date >= :fromdate
+                    AND l.start_date <= :todate
+                ),
+
+                official_dates AS
+                (
+                    SELECT DISTINCT
+                        ow.erp_id,
+                        dr.the_date
+                    FROM official_work_leaves ow
+                    JOIN date_range dr
+                        ON dr.the_date BETWEEN CAST(ow.start_date AS DATE)
+                                           AND CAST(ow.end_date AS DATE)
+                    WHERE ow.status = 'approved'
+                    AND ow.end_date >= :fromdate
+                    AND ow.start_date <= :todate
+                ),
+
+                holiday_dates AS
+                (
+                    SELECT DISTINCT
+                        CAST(date AS DATE) AS holiday_date
+                    FROM public_holidays
+                    WHERE date >= :fromdate
+                    AND date <= :todate
+                )
+
+                SELECT
+                    ed.erp_id,
+                    ed.name,
+                    ed.department,
+                    ed.designation,
+                    ed.location,
+
+                    SUM(
+                        CASE
+                            WHEN a.user_id IS NOT NULL
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS total_present,
+
+                    SUM(
+                        CASE
+                            WHEN a.user_id IS NOT NULL
+                            THEN 0
+                            WHEN l.erp_id IS NOT NULL
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS approved_leaves,
+
+                    SUM(
+                        CASE
+                            -- Present
+                            WHEN a.user_id IS NOT NULL
+                            THEN 0
+
+                            -- Approved leave
+                            WHEN l.erp_id IS NOT NULL
+                            THEN 0
+
+                            -- Official work
+                            WHEN ow.erp_id IS NOT NULL
+                            THEN 0
+
+                            -- Public holiday
+                            WHEN h.holiday_date IS NOT NULL
+                            THEN 0
+
+                            -- Saturday
+                            WHEN DATEPART(WEEKDAY, dr.the_date) = 7
+                            THEN 0
+
+                            -- Sunday
+                            WHEN DATEPART(WEEKDAY, dr.the_date) = 1
+                            THEN 0
+
+                            -- Day has not happened yet
+                            WHEN dr.the_date > CAST(GETDATE() AS DATE)
+                            THEN 0
+
+                            ELSE 1
+                        END
+                    ) AS total_absent
+
+                FROM employees_data ed
+
+                CROSS JOIN date_range dr
+
+                LEFT JOIN attendance_days a
+                    ON a.user_id = ed.hris_id
+                AND a.att_date = dr.the_date
+
+                LEFT JOIN leave_dates l
+                    ON l.erp_id = ed.erp_id
+                AND l.the_date = dr.the_date
+
+                LEFT JOIN official_dates ow
+                    ON ow.erp_id = ed.erp_id
+                AND ow.the_date = dr.the_date
+
+                LEFT JOIN holiday_dates h
+                    ON h.holiday_date = dr.the_date
+
+                GROUP BY
+                    ed.erp_id,
+                    ed.name,
+                    ed.department,
+                    ed.designation,
+                    ed.location,
+                    ed.grade
+
+                ORDER BY
+                    ed.department,
+                    ed.grade DESC,
+                    ed.name
+            """)
+
+            rows = session.execute(
+                query,
+                {
+                    "fromdate": fromdate,
+                    "todate": todate,
+                },
+            ).fetchall()
+
+            for row in rows:
+                records.append({
+                    "erp_id": row.erp_id,
+                    "name": row.name,
+                    "department": row.department,
+                    "designation": row.designation,
+                    "location": row.location,
+                    "total_present": row.total_present,
+                    "total_absent": row.total_absent,
+                    "approved_leaves": row.approved_leaves,
+                })
+
+            return JsonResponse(records, safe=False)
+
+        finally:
+            session.close()
+
+    @csrf_exempt
+    @require_POST
+    def attendance_monthly_employee_days(request):
+        """
+        The day-by-day detail behind one row of the monthly summary.
+
+        Returns every day of the requested month for a single employee with the
+        day's first check-in, last check-out and the bucket it fell into, using
+        exactly the same precedence as attendance_monthly_summary
+            present > leave > official work > holiday > weekend > absent
+        so the counts in the summary and the rows listed here always agree.
+
+        Alongside that, every leave request touching the month is returned with
+        its own status — approved, pending or rejected — so a pending request
+        can be seen next to the days it would cover.
+        """
+        data = json.loads(request.body.decode("utf-8"))
+        erp_id = data.get("erp_id")
+        fromdate = data.get("fromdate")
+        todate = data.get("todate")
+
+        if not erp_id or not fromdate or not todate:
+            return JsonResponse(
+                {"error": "erp_id, fromdate and todate are required"}, status=400
+            )
+
+        session = SessionLocal()
+        try:
+            params = {"erpid": erp_id, "fromdate": fromdate, "todate": todate}
+
+            employee = session.execute(text("""
+                SELECT
+                    e.erp_id,
+                    e.name,
+                    ISNULL(s.name, '-') AS department,
+                    ISNULL(d.title, '-') AS designation,
+                    ISNULL(loc.name, '-') AS location,
+                    ISNULL(g.name, '-')  AS grade
+                FROM employees e
+                LEFT JOIN sections s     ON s.id = e.section_id
+                LEFT JOIN designations d ON d.id = e.designation_id
+                LEFT JOIN locations loc  ON loc.id = e.location_id
+                LEFT JOIN grades g       ON g.id = e.grade_id
+                WHERE e.erp_id = :erpid
+            """), {"erpid": erp_id}).first()
+
+            if employee is None:
+                return JsonResponse({"error": "employee not found"}, status=404)
+
+            query = text("""
+                WITH date_range AS (
+                    SELECT CAST(DATEADD(DAY, v.number, :fromdate) AS DATE) AS the_date
+                    FROM master..spt_values v
+                    WHERE v.type = 'P'
+                        AND DATEADD(DAY, v.number, :fromdate) <= :todate
+                ),
+                att AS (
+                    SELECT
+                        CAST(a.timestamp AS DATE) AS att_date,
+                        MIN(CASE WHEN a.status = 'Checked In' THEN a.timestamp END) AS checkin_time,
+                        MAX(CASE WHEN a.status IN ('Checked Out', 'Early Checked Out') THEN a.timestamp END) AS checkout_time,
+                        MAX(a.lateintime) AS lateintime,
+                        -- The summary counts any punch on a day as present, so
+                        -- keep that test here too rather than relying on the
+                        -- check-in / check-out statuses being present.
+                        COUNT(*) AS punches
+                    FROM attendance a
+                    WHERE a.timestamp >= :fromdate
+                        AND a.timestamp < DATEADD(DAY, 1, :todate)
+                        AND a.user_id = (SELECT hris_id FROM employees WHERE erp_id = :erpid)
+                    GROUP BY CAST(a.timestamp AS DATE)
+                ),
+                leave_days AS (
+                    SELECT erp_id, leave_type,
+                           CAST(start_date AS DATE) AS start_date,
+                           CAST(end_date AS DATE) AS end_date
+                    FROM leaves
+                    WHERE status = 'approved'
+                        AND erp_id = :erpid
+                        AND end_date >= :fromdate
+                        AND start_date <= :todate
+                ),
+                official_days AS (
+                    SELECT erp_id, leave_type,
+                           CAST(start_date AS DATE) AS start_date,
+                           CAST(end_date AS DATE) AS end_date
+                    FROM official_work_leaves
+                    WHERE status = 'approved'
+                        AND erp_id = :erpid
+                        AND end_date >= :fromdate
+                        AND start_date <= :todate
+                ),
+                holiday_days AS (
+                    SELECT CAST(date AS DATE) AS holiday_date, name
+                    FROM public_holidays
+                    WHERE date >= :fromdate AND date <= :todate
+                )
+                SELECT
+                    dr.the_date,
+                    MIN(att.checkin_time)   AS checkin_time,
+                    MAX(att.checkout_time)  AS checkout_time,
+                    MAX(att.lateintime)     AS lateintime,
+                    MAX(att.punches)        AS punches,
+                    MAX(l.leave_type)       AS leave_type,
+                    MAX(ow.leave_type)      AS official_type,
+                    MAX(h.name)             AS holiday_name
+                FROM date_range dr
+                LEFT JOIN att
+                    ON att.att_date = dr.the_date
+                LEFT JOIN leave_days l
+                    ON dr.the_date BETWEEN l.start_date AND l.end_date
+                LEFT JOIN official_days ow
+                    ON dr.the_date BETWEEN ow.start_date AND ow.end_date
+                LEFT JOIN holiday_days h
+                    ON h.holiday_date = dr.the_date
+                GROUP BY dr.the_date
+                ORDER BY dr.the_date
+            """)
+
+            rows = session.execute(query, params).fetchall()
+
+            check_in_deadline = time(8, 30)
+            check_out_deadline = time(16, 0)
+            today = datetime.now().date()
+
+            days = []
+            for row in rows:
+                checkin = row.checkin_time
+                checkout = row.checkout_time
+                the_date = (
+                    row.the_date.date()
+                    if isinstance(row.the_date, datetime)
+                    else row.the_date
+                )
+
+                late_status = "-"
+                early_status = "-"
+                if checkin is not None:
+                    late_status = (
+                        "Late" if checkin.time() > check_in_deadline else "On Time"
+                    )
+                if checkout is not None:
+                    early_status = (
+                        "Early" if checkout.time() < check_out_deadline else "On Time"
+                    )
+
+                # A day the device recorded at all counts as present, matching
+                # the summary's DISTINCT-day attendance bucket.
+                if row.punches:
+                    status, status_type = "Present", "present"
+                elif row.leave_type:
+                    status, status_type = row.leave_type, "leave"
+                elif row.official_type:
+                    status, status_type = row.official_type, "official"
+                elif row.holiday_name:
+                    status, status_type = row.holiday_name, "holiday"
+                elif the_date and the_date.weekday() in (5, 6):
+                    status, status_type = "Weekend", "weekend"
+                elif the_date and the_date > today:
+                    status, status_type = "-", "future"
+                else:
+                    status, status_type = "Absent", "absent"
+
+                days.append({
+                    "date": the_date.strftime("%Y-%m-%d") if the_date else None,
+                    "day_name": the_date.strftime("%A") if the_date else "-",
+                    "checkin_time": checkin.strftime("%H:%M:%S") if checkin else "-",
+                    "checkout_time": checkout.strftime("%H:%M:%S") if checkout else "-",
+                    "lateintime": row.lateintime if row.lateintime is not None else "-",
+                    "late_status": late_status,
+                    "early_status": early_status,
+                    "status": status,
+                    "status_type": status_type,
+                })
+
+            # Days already spoken for by an actual punch — an approved leave day
+            # the employee still came in on is reported as present by the
+            # summary, so flag it here rather than counting it twice.
+            present_dates = {d["date"] for d in days if d["status_type"] == "present"}
+
+            leave_rows = session.execute(text("""
+                SELECT
+                    l.id,
+                    l.leave_type,
+                    CAST(l.start_date AS DATE) AS start_date,
+                    CAST(l.end_date AS DATE)   AS end_date,
+                    l.total_days,
+                    l.reason,
+                    l.status,
+                    l.approved_by,
+                    l.created_at
+                FROM leaves l
+                WHERE l.erp_id = :erpid
+                    AND l.end_date >= :fromdate
+                    AND l.start_date <= :todate
+                ORDER BY l.start_date DESC
+            """), params).fetchall()
+
+            month_start = datetime.strptime(fromdate, "%Y-%m-%d").date()
+            month_end = datetime.strptime(todate, "%Y-%m-%d").date()
+
+            leaves = []
+            for leave in leave_rows:
+                start = leave.start_date
+                end = leave.end_date
+                if isinstance(start, datetime):
+                    start = start.date()
+                if isinstance(end, datetime):
+                    end = end.date()
+
+                # Only the part of the request that falls inside the month is
+                # relevant to this report; a leave may span a month boundary.
+                span_start = max(start, month_start) if start else month_start
+                span_end = min(end, month_end) if end else month_end
+
+                dates = []
+                cursor = span_start
+                while cursor <= span_end:
+                    stamp = cursor.strftime("%Y-%m-%d")
+                    dates.append({
+                        "date": stamp,
+                        "day_name": cursor.strftime("%A"),
+                        "weekend": cursor.weekday() in (5, 6),
+                        "attended": stamp in present_dates,
+                    })
+                    cursor += timedelta(days=1)
+
+                status = (leave.status or "pending").lower()
+                counted = sum(
+                    1 for d in dates
+                    if status == "approved" and not d["attended"]
+                )
+
+                leaves.append({
+                    "id": leave.id,
+                    "leave_type": leave.leave_type or "-",
+                    "start_date": start.strftime("%Y-%m-%d") if start else "-",
+                    "end_date": end.strftime("%Y-%m-%d") if end else "-",
+                    "total_days": leave.total_days,
+                    "days_in_month": len(dates),
+                    "counted_days": counted,
+                    "reason": leave.reason or "-",
+                    "status": status,
+                    "approved_by": leave.approved_by or "-",
+                    "applied_on": (
+                        leave.created_at.strftime("%Y-%m-%d")
+                        if leave.created_at else "-"
+                    ),
+                    "dates": dates,
+                })
+
+            return JsonResponse({
+                "employee": {
+                    "erp_id": employee.erp_id,
+                    "name": employee.name,
+                    "department": employee.department,
+                    "designation": employee.designation,
+                    "location": employee.location,
+                    "grade": employee.grade,
+                },
+                "days": days,
+                "leaves": leaves,
+            })
+
+        finally:
+            session.close()
+
+    @csrf_exempt
+    @require_POST
     def attendance_section(request):
         data = json.loads(request.body.decode("utf-8"))
         section = data.get("section")

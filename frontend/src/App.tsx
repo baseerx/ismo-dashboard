@@ -61,6 +61,7 @@ import BusinessPlan from "./pages/WorkforceActivityManagement/BusinessPlan";
 import AttendanceReport from "./pages/WorkforceActivityManagement/AttendanceReport";
 import AddSubSection from "./pages/UserManagement/AddSubSection";
 import AssignSubSection from "./pages/UserManagement/AssignSubSection";
+import MonthlyAttendanceReport from "./pages/Attendance/MonthlyAttendanceReport";
 export default function App() {
   return (
     <>
@@ -129,7 +130,10 @@ export default function App() {
                 path="/attendance/section-monthly-report"
                 element={<SectionMonthlyReport />}
               />
-
+              <Route
+                path="/attendance/monthly-attendance-report"
+                element={<MonthlyAttendanceReport />}
+              />
               <Route path="/leaves/official-work" element={<OfficialWork />} />
               <Route
                 path="/leaves/individual-leave-detail"
