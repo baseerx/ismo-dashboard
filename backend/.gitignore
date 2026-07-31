@@ -1,5 +1,3 @@
-# Virtual environment
-venv/
 
 # Windows service / startup scripts (machine-specific)
 DjangoService.bat
@@ -8,9 +6,68 @@ run_django.vbs
 # Waitress server log
 waitress.log
 
-# Environment variables
-.env
 
 # Python bytecode
 __pycache__/
 *.pyc
+
+
+# Virtual Environment
+venv/
+.env/
+.venv/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Build / Dist
+build/
+dist/
+
+# Coverage
+.pytest_cache/
+__pycache__
+
+# Mypy
+.mypy_cache/
+
+
+# Uploads / Temp Files
+uploads/
+temp/
+tmp/
+
+# Node
+node_modules/
+
+# React / Next
+.next/
+out/
+
+# Package Locks
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+
+# Cache
+.cache/
+
+
+# OCR / Document Processing
+ocr_output/
+parsed_docs/
+extracted_frames/
+
+# LangChain / Vector DB
+chroma/
+vector_store/
+
+# Ollama
+ollama_data/
+
+# Testing
+
+chroma_db
