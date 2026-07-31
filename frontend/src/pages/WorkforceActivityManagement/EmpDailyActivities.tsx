@@ -61,8 +61,7 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-const ADMIN_GRADES = [9, 10, 11];
-const inp = "w-full border border-gray-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100";
+const inp ="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100";
 const lbl = "block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1";
 
 /* Pull a user-friendly message out of an axios/API error without using `any` */
@@ -80,7 +79,6 @@ export default function EmpDailyActivities() {
   const gradeId = user?.grade_id ?? 0;
   const sectionId = user?.section_id ?? 0;
   const isSuperuser = user?.is_superuser ?? false;
-  const isAdmin     = ADMIN_GRADES.includes(gradeId) || isSuperuser;
   const today       = new Date().toISOString().split("T")[0];
 
   /* ── State ── */
