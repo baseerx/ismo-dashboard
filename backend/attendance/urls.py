@@ -15,6 +15,8 @@ urlpatterns = [
     path('detailed-absent-report/', AttendanceView.attendance_detailed_absent_report),
     path('individual-user/', AttendanceView.attendance_individual_user),
     path('section-monthly/', AttendanceView.attendance_section_monthly),
+    path('monthly-summary/', AttendanceView.attendance_monthly_summary),
+    path('monthly-employee-days/', AttendanceView.attendance_monthly_employee_days),
     path('get-shifts/', AttendanceView.getshifts),
     path('shift-details/', AttendanceView.shift_details),
     path('shift-history/', AttendanceView.shift_history),

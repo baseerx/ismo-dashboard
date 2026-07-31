@@ -52,6 +52,7 @@ import EachLeaveDetail from "./pages/Leaves/EachLeaveDetail";
 import TotalAbsent from "./pages/Attendance/TotalAbsent";
 import DetailedAbsentReport from "./pages/Attendance/DetailedAbsentReport";
 import SectionMonthlyReport from "./pages/Attendance/SectionMonthlyReport";
+import MonthlyAttendanceReport from "./pages/Attendance/MonthlyAttendanceReport";
 export default function App() {
   return (
     <>
@@ -110,6 +111,10 @@ export default function App() {
               <Route
                 path="/attendance/section-monthly-report"
                 element={<SectionMonthlyReport />}
+              />
+              <Route
+                path="/attendance/monthly-attendance-report"
+                element={<MonthlyAttendanceReport />}
               />
               <Route path="/leaves/official-work" element={<OfficialWork />} />
               <Route
