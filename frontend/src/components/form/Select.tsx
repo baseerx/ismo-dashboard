@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface Option {
   value: string;
@@ -11,6 +11,7 @@ interface SelectProps {
   onChange: (value: string) => void;
   className?: string;
     defaultValue?: string;
+    value?: string;
     error?: boolean;
     hint?: string;
 }
@@ -23,9 +24,18 @@ const Select: React.FC<SelectProps> = ({
     hint = "",
   className = "",
   defaultValue = "",
+  value,
 }) => {
   // Manage the selected value
   const [selectedValue, setSelectedValue] = useState<string>(defaultValue);
+
+  // When a controlled `value` prop is provided, keep the internal state in
+  // sync so the select reflects values set programmatically by the parent.
+  useEffect(() => {
+    if (value !== undefined) {
+      setSelectedValue(value);
+    }
+  }, [value]);
 
   const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;

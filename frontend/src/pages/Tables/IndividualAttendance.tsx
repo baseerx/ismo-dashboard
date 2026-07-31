@@ -30,6 +30,7 @@ type AttendanceRow = {
 };
 
 export default function IndividualAttendance() {
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
   const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
   const [fromdate, setFromdate] = useState<String>(
     moment().format("YYYY-MM-DD")
@@ -56,6 +57,11 @@ export default function IndividualAttendance() {
         value: employee.erp_id,
       }));
       setOptions(employees);
+      // Default the employee dropdown to the currently logged-in user.
+      const self = employees.find(
+        (opt: any) => Number(opt.value) === Number(user.erpid)
+      );
+      if (self) setErpId(self.value);
     } catch (error) {
       console.error("Error fetching employee options:", error);
       toast.error("Failed to load employee options");

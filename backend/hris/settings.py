@@ -27,6 +27,15 @@ DEBUG = True
 CORS_ALLOW_ALL_ORIGINS = True
 USE_TZ = False
 
+
+
+CORS_ALLOW_HEADERS = [
+    'content-type',
+    'x-grade-id',  
+    'authorization',
+    'x-erp-id',
+]
+
 # CORS settings
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",  # Vite (React dev server)
@@ -38,7 +47,9 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "192.168.157.55",
-    "192.168.157.55:9000",  # Adjust this to your production frontend URL
+    "192.168.157.55:9000",
+    "172.16.17.163",
+    # Adjust this to your production frontend URL
     
 ]
 
@@ -62,6 +73,10 @@ INSTALLED_APPS = [
     'addtouser',
     'officialwork',
     'rest_framework',  # If you're using Django REST Framework
+    'businessplan',
+    'activities',
+    'dashboard',
+    'subsections',
 ]
 
 MIDDLEWARE = [
@@ -101,7 +116,7 @@ WSGI_APPLICATION = 'hris.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'mssql',
-        'NAME': 'Attendance_System',  # Replace with your actual database name
+        'NAME': 'Attendance_Stage',  # Replace with your actual database name
         'USER': 'sa',
         'PASSWORD': 'Sa@157',
         'HOST': '192.168.157.51',

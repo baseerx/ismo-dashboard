@@ -20,7 +20,7 @@ import {
   ListIcon,
 } from "../icons";
 import { useSidebar } from "../context/SidebarContext";
-
+const ADMIN_GRADES = [9, 10, 11];
 type NavItem = {
   name: string;
   icon?: React.ReactNode;
@@ -68,6 +68,15 @@ const navItems: NavItem[] = [
         path: "/attendance/status",
         pro: false,
       },
+    ],
+  },
+  {
+    icon: <GridIcon />,
+    name: "WF Activity Management",
+    subItems: [
+      { name: "Emp Daily Activities", path: "/emp-daily-activities", pro: false },
+      { name: "Daily Activities Report", path: "/activities-report", pro: false },
+      { name: "Business Plan", path: "/business-plan", pro: false },
     ],
   },
   {
@@ -331,49 +340,162 @@ const AppSidebar: React.FC = () => {
     </ul>
   );
 
-  const userRights = async () => {
+const userRights = async () => {
     const user = JSON.parse(localStorage.getItem("user") || "{}");
+    const gradeId = user?.grade_id ?? 0;
+    const isSuperuser = user?.is_superuser ?? false;
+    const isAdmin = ADMIN_GRADES.includes(gradeId) || isSuperuser;
+    const hasOrgAccess = [10, 11].includes(gradeId) || isSuperuser;
+
     try {
       const response = await axios.get(`/assignrights/get/${user.user_id}/`);
       if (response.status !== 200) {
         throw new Error("Failed to fetch user rights");
       }
       const data = response.data;
-    const transformed = _(data)
-      .groupBy("mainmenu")
-      .map((items, mainmenu) => {
-        const icon =
-        navItems.find((item) => item.name === mainmenu)?.icon ||
-        <HorizontaLDots className="size-6" />;
-        return {
-        icon,
-        name: mainmenu,
-        subItems: items.map((item) => ({
-          name: item.submenu,
-          path: item.uri,
-          pro: false,
-          icon: icon,
-        })),
-        };
-      })
-      .value();
 
-    // Ensure Dashboard is first if it exists
-    const dashboardIndex = transformed.findIndex(
-      (item) => item.name === "Dashboard"
-    );
-    if (dashboardIndex > 0) {
-      const [dashboard] = transformed.splice(dashboardIndex, 1);
-      transformed.unshift(dashboard);
-    }
+      const transformed = _(data)
+        .groupBy("mainmenu")
+        .map((items, mainmenu) => {
+          const icon =
+            navItems.find((item) => item.name === mainmenu)?.icon || <GridIcon />;
+          return {
+            icon,
+            name: mainmenu,
+            subItems: items.map((item: any) => ({
+              name: item.submenu,
+              path: item.uri,
+              pro: false,
+            })),
+          };
+        })
+        .value();
 
-    setTransformedNavItems(transformed);
-    //   console.log("User Rights Data:", transformed);
-      // Process the user rights data as needed
+      // Ensure Dashboard is first if it exists
+      const dashIdx = transformed.findIndex((item) => item.name === "Dashboard");
+      if (dashIdx > 0) {
+        const [dash] = transformed.splice(dashIdx, 1);
+        transformed.unshift(dash);
+      }
+
+      // Handle WF Activity Management 
+      const wfItem = transformed.find((item) => item.name === "WF Activity Management");
+
+      if (wfItem && wfItem.subItems) {
+
+        const seen = new Set<string>();
+        wfItem.subItems = wfItem.subItems.filter((s) => {
+          if (seen.has(s.path)) return false;
+          seen.add(s.path);
+          return true;
+        });
+
+        // Step 2: Required links
+        const requiredLinks = [
+          { name: "Emp Daily Activities", path: "/emp-daily-activities" },
+          { name: "Daily Activities Report", path: "/activities-report" },
+          { name: "Business Plan", path: "/business-plan" },
+        ];
+        requiredLinks.forEach((link) => {
+          if (!wfItem.subItems!.find((s) => s.path === link.path)) {
+            wfItem.subItems!.push({ ...link, pro: false });
+          }
+        });
+
+        // Step 3: Dept Dashboard — grade 9/10/11 + superuser
+        if (isAdmin) {
+          if (!wfItem.subItems.find((s) => s.path === "/dept-dashboard")) {
+            wfItem.subItems.push({
+              name: "Department Dashboard",
+              path: "/dept-dashboard",
+              pro: false,
+            });
+          }
+        } else {
+          // Emp Below Grade 9 — Hide Dept Dashboard
+          wfItem.subItems = wfItem.subItems.filter(
+            (s) => s.path !== "/dept-dashboard"
+          );
+        }
+
+        // Step 4: Org Dashboard — only for grade 10/11 + superuser
+        if (hasOrgAccess) {
+          if (!wfItem.subItems.find((s) => s.path === "/org-dashboard")) {
+            wfItem.subItems.push({
+              name: "Organization Dashboard",
+              path: "/org-dashboard",
+              pro: false,
+            });
+          }
+        } else {
+          // Emp Below Grade 10 — Hide Org Dashboard 
+          wfItem.subItems = wfItem.subItems.filter(
+            (s) => s.path !== "/org-dashboard"
+          );
+        }
+
+      } else if (!wfItem) {
+        // If not in database, Show hard coded Nav
+        const wfSubItems: any[] = [
+          { name: "Emp Daily Activities", path: "/emp-daily-activities", pro: false },
+          { name: "Daily Activities Report", path: "/activities-report", pro: false },
+          { name: "Business Plan", path: "/business-plan", pro: false },
+        ];
+        if (isAdmin) {
+          wfSubItems.push({
+            name: "Department Dashboard",
+            path: "/dept-dashboard",
+            pro: false,
+          });
+        }
+        if (hasOrgAccess) {
+          wfSubItems.push({
+            name: "Organization Dashboard",
+            path: "/org-dashboard",
+            pro: false,
+          });
+        }
+        transformed.push({
+          icon: <GridIcon />,
+          name: "WF Activity Management",
+          subItems: wfSubItems,
+        });
+      }
+
+      setTransformedNavItems(transformed);
+
     } catch (error) {
       console.error("Error fetching user rights:", error);
+      // If API fail then navItems fallback + grade check
+      const fallback = navItems.map((item) => {
+        if (item.name === "WF Activity Management") {
+          const extra: any[] = [];
+          if (isAdmin) {
+            extra.push({
+              name: "Department Dashboard",
+              path: "/dept-dashboard",
+              pro: false,
+            });
+          }
+          if (hasOrgAccess) {
+            extra.push({
+              name: "Organization Dashboard",
+              path: "/org-dashboard",
+              pro: false,
+            });
+          }
+          return {
+            ...item,
+            subItems: [...(item.subItems || []), ...extra],
+          };
+        }
+        return item;
+      });
+      setTransformedNavItems(fallback);
     }
   };
+
+
   useEffect(() => {
     userRights();
   }, []);

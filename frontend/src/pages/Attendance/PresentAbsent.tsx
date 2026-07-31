@@ -29,6 +29,7 @@ type AttendanceRow = {
 export default function SectionAttendanceReport() {
     const location = useLocation();
     const preset = (location.state as { section?: string; status?: string; date?: string } | null) || null;
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
 
     const [attendancedata, setAttendanceData] = useState<AttendanceRow[]>([]);
 
@@ -45,6 +46,27 @@ export default function SectionAttendanceReport() {
     });
     useEffect(() => {
         getSectionsData();
+    }, []);
+
+    // Default the section filter to the logged-in user's own section, unless a
+    // section was already preset via dashboard navigation.
+    useEffect(() => {
+        if (preset?.section) return;
+        const resolveUserSection = async () => {
+            try {
+                const response = await axios.get("/users/employees/");
+                const self = response.data.find(
+                    (e: any) => Number(e.erp_id) === Number(user.erpid)
+                );
+                if (self && self.section_id != null) {
+                    setData((prev) => ({ ...prev, section: String(self.section_id) }));
+                }
+            } catch (error) {
+                console.error("Error resolving user section:", error);
+            }
+        };
+        resolveUserSection();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // When arriving from the dashboard with a preselected section/status,
@@ -149,7 +171,7 @@ const capitalizeFirstLetter = (val:string) => {
                 <Select
                   options={options}
                   placeholder="Select a section"
-                  defaultValue={data.section}
+                  value={data.section}
                   onChange={(value) => {
                     setData((prev) => ({ ...prev, section: value }));
                   }}
