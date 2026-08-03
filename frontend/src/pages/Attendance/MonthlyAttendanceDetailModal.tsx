@@ -11,6 +11,8 @@ export type DetailEmployee = {
   designation: string;
   department: string;
   location: string;
+  is_shift: boolean;
+  shift_names: string;
   total_present: number;
   total_absent: number;
   approved_leaves: number;
@@ -431,6 +433,10 @@ export default function MonthlyAttendanceDetailModal({
             <div className="mt-2 flex flex-wrap gap-1.5">
               {meta("Department", employee?.department)}
               {meta("Location", employee?.location)}
+              {meta(
+                "Shift",
+                employee?.is_shift ? `Yes · ${employee.shift_names}` : "No"
+              )}
             </div>
           </div>
         </div>
