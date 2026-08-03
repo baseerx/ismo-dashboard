@@ -1417,6 +1417,22 @@ class AttendanceView:
                     AND DATEADD(DAY, v.number, :fromdate) <= :todate
                 ),
 
+                -- shift_user_map is the roster both shift screens are built on
+                -- (the NCC/RCC split only comes from the SDXP roster API), so
+                -- an employee listed here is a shift employee either way.
+                shift_users AS
+                (
+                    SELECT
+                        m.ErpID AS erp_id,
+                        STRING_AGG(m.Shift_Name, ', ')
+                            WITHIN GROUP (ORDER BY m.Shift_Name) AS shift_names
+                    FROM (
+                        SELECT DISTINCT ErpID, Shift_Name
+                        FROM shift_user_map
+                    ) m
+                    GROUP BY m.ErpID
+                ),
+
                 employees_data AS
                 (
                     SELECT
@@ -1426,7 +1442,9 @@ class AttendanceView:
                         ISNULL(s.name, '-') AS department,
                         ISNULL(d.title, '-') AS designation,
                         ISNULL(loc.name, '-') AS location,
-                        g.name AS grade
+                        g.name AS grade,
+                        CASE WHEN su.erp_id IS NOT NULL THEN 1 ELSE 0 END AS is_shift,
+                        ISNULL(su.shift_names, '-') AS shift_names
                     FROM employees e
                     LEFT JOIN sections s
                         ON s.id = e.section_id
@@ -1436,6 +1454,8 @@ class AttendanceView:
                         ON loc.id = e.location_id
                     LEFT JOIN grades g
                         ON g.id = e.grade_id
+                    LEFT JOIN shift_users su
+                        ON su.erp_id = e.erp_id
                     WHERE e.flag = 1
                 ),
 
@@ -1495,6 +1515,8 @@ class AttendanceView:
                     ed.department,
                     ed.designation,
                     ed.location,
+                    ed.is_shift,
+                    ed.shift_names,
 
                     SUM(
                         CASE
@@ -1573,6 +1595,8 @@ class AttendanceView:
                     ed.department,
                     ed.designation,
                     ed.location,
+                    ed.is_shift,
+                    ed.shift_names,
                     ed.grade
 
                 ORDER BY
@@ -1596,6 +1620,8 @@ class AttendanceView:
                     "department": row.department,
                     "designation": row.designation,
                     "location": row.location,
+                    "is_shift": bool(row.is_shift),
+                    "shift_names": row.shift_names,
                     "total_present": row.total_present,
                     "total_absent": row.total_absent,
                     "approved_leaves": row.approved_leaves,
@@ -1643,12 +1669,25 @@ class AttendanceView:
                     ISNULL(s.name, '-') AS department,
                     ISNULL(d.title, '-') AS designation,
                     ISNULL(loc.name, '-') AS location,
-                    ISNULL(g.name, '-')  AS grade
+                    ISNULL(g.name, '-')  AS grade,
+                    ISNULL(su.shift_names, '-') AS shift_names,
+                    CASE WHEN su.erp_id IS NOT NULL THEN 1 ELSE 0 END AS is_shift
                 FROM employees e
                 LEFT JOIN sections s     ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN locations loc  ON loc.id = e.location_id
                 LEFT JOIN grades g       ON g.id = e.grade_id
+                LEFT JOIN (
+                    SELECT
+                        m.ErpID AS erp_id,
+                        STRING_AGG(m.Shift_Name, ', ')
+                            WITHIN GROUP (ORDER BY m.Shift_Name) AS shift_names
+                    FROM (
+                        SELECT DISTINCT ErpID, Shift_Name
+                        FROM shift_user_map
+                    ) m
+                    GROUP BY m.ErpID
+                ) su ON su.erp_id = e.erp_id
                 WHERE e.erp_id = :erpid
             """), {"erpid": erp_id}).first()
 
@@ -1865,6 +1904,8 @@ class AttendanceView:
                     "designation": employee.designation,
                     "location": employee.location,
                     "grade": employee.grade,
+                    "is_shift": bool(employee.is_shift),
+                    "shift_names": employee.shift_names,
                 },
                 "days": days,
                 "leaves": leaves,
