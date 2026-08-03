@@ -284,6 +284,10 @@ export default function SectionMonthlyReport() {
 
   const dayKey = (d: number) => monthStart.clone().date(d).format("YYYY-MM-DD");
 
+  // Column heading for a day of the month. The report title already carries the
+  // month and year, so the date alone is enough to identify the column.
+  const dayLabel = (d: number) => monthStart.clone().date(d).format("DD MMM");
+
   // Text color for a non-present day status (leave / official / holiday / etc.).
   const statusColor = (t: string) =>
     t === "leave"
@@ -322,8 +326,8 @@ export default function SectionMonthlyReport() {
     const header: string[] = ["Employee", "Designation", "Grade"];
     if (showSectionBands) header.push("Section");
     days.forEach((d) => {
-      header.push(`Day ${d} In`);
-      header.push(`Day ${d} Out`);
+      header.push(`${dayLabel(d)} In`);
+      header.push(`${dayLabel(d)} Out`);
     });
 
     const body = employees.map((emp) => {
@@ -388,7 +392,7 @@ export default function SectionMonthlyReport() {
       [
         "Employee",
         ...(showSectionBands ? ["Section"] : []),
-        ...days.map((d) => `D${d}`),
+        ...days.map((d) => dayLabel(d)),
       ],
     ];
     const bodyRows = employees.map((emp) => {
@@ -586,7 +590,7 @@ export default function SectionMonthlyReport() {
                       : "text-gray-700 dark:text-gray-300"
                   }`}
                 >
-                  Day {d}
+                  {dayLabel(d)}
                   <div className="text-[10px] font-normal text-gray-400">
                     {dateObj.format("ddd")}
                   </div>

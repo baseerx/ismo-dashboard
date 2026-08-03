@@ -19,10 +19,15 @@ type MonthlyRow = {
   designation: string;
   department: string;
   location: string;
+  is_shift: boolean;
+  shift_names: string;
+  shift_types: string;
   total_present: number;
   total_absent: number;
   approved_leaves: number;
 };
+
+type ShiftInfo = { shifts: string[]; types: string[] };
 
 // How far back the year dropdown reaches. Attendance older than this is not
 // worth offering — the picker stays short enough to scan at a glance.
@@ -36,6 +41,10 @@ export default function MonthlyAttendanceReport() {
   const [year, setYear] = useState<string>(now.format("YYYY"));
   const [rows, setRows] = useState<MonthlyRow[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
+
+  // Shift roster for the selected month, keyed by ERP ID. Built from the same
+  // endpoints the /attendance/shifts and /attendance/rcc-shift screens use.
+  const [shiftMap, setShiftMap] = useState<Map<string, ShiftInfo>>(new Map());
 
   // The employee whose day-wise detail is open, and which tally was clicked.
   const [detailRow, setDetailRow] = useState<MonthlyRow | null>(null);
@@ -82,12 +91,73 @@ export default function MonthlyAttendanceReport() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [year, month]);
 
+  /**
+   * Who was rostered on a shift during the selected month.
+   *
+   * Walks every shift from /attendance/get-shifts and pulls its roster from
+   * /attendance/shift-history — the same pair of calls behind the shift
+   * screens, so this report agrees with them by construction. It also yields
+   * the NCC / RCC type, which the summary query cannot know because that
+   * split only exists in the SDXP roster.
+   *
+   * Never throws: a shift that fails simply contributes nothing, leaving the
+   * summary's own is_shift flag as the answer for those employees.
+   */
+  const fetchShiftRoster = async (
+    fromdate: string,
+    todate: string
+  ): Promise<Map<string, ShiftInfo>> => {
+    const map = new Map<string, ShiftInfo>();
+    try {
+      const { data: shifts } = await axios.get("/attendance/get-shifts/");
+
+      const rosters = await Promise.allSettled(
+        (shifts || []).map((shift: any) =>
+          axios.post("/attendance/shift-history/", {
+            shiftid: shift.shift_id,
+            fromdate,
+            todate,
+          })
+        )
+      );
+
+      rosters.forEach((result) => {
+        if (result.status !== "fulfilled") return;
+        const members = result.value.data?.attendance ?? [];
+        members.forEach((member: any) => {
+          const key = String(member.erp_id ?? "").trim();
+          if (!key) return;
+          const entry = map.get(key) ?? { shifts: [], types: [] };
+          if (member.shiftname && !entry.shifts.includes(member.shiftname)) {
+            entry.shifts.push(member.shiftname);
+          }
+          if (member.shifttype && !entry.types.includes(member.shifttype)) {
+            entry.types.push(member.shifttype);
+          }
+          map.set(key, entry);
+        });
+      });
+    } catch (err) {
+      // The rosters are a supplement, not a hard dependency — the report still
+      // renders using whatever the summary reported.
+      console.error("Shift roster lookup failed", err);
+    }
+    return map;
+  };
+
   const fetchReport = async () => {
     setLoading(true);
+    const fromdate = monthStart.clone().startOf("month").format("YYYY-MM-DD");
+    const todate = monthStart.clone().endOf("month").format("YYYY-MM-DD");
+
+    // Both in flight together — the roster must land with the summary so the
+    // Shift column never renders a premature "No" and then flips to "Yes".
+    const rosterPromise = fetchShiftRoster(fromdate, todate);
+
     try {
       const response = await axios.post("/attendance/monthly-summary/", {
-        fromdate: monthStart.clone().startOf("month").format("YYYY-MM-DD"),
-        todate: monthStart.clone().endOf("month").format("YYYY-MM-DD"),
+        fromdate,
+        todate,
       });
 
       const cleaned: MonthlyRow[] = (response.data || []).map((item: any) => ({
@@ -96,20 +166,45 @@ export default function MonthlyAttendanceReport() {
         designation: item.designation ?? "-",
         department: item.department ?? "-",
         location: item.location ?? "-",
+        is_shift: Boolean(item.is_shift),
+        shift_names: item.shift_names ?? "-",
+        shift_types: "-",
         total_present: Number(item.total_present) || 0,
         total_absent: Number(item.total_absent) || 0,
         approved_leaves: Number(item.approved_leaves) || 0,
       }));
 
+      setShiftMap(await rosterPromise);
       setRows(cleaned);
     } catch (err) {
       console.error(err);
       toast.error("Failed to fetch monthly attendance report.");
+      setShiftMap(new Map());
       setRows([]);
     } finally {
       setLoading(false);
     }
   };
+
+  // An employee counts as shift staff if either source says so: the roster
+  // pulled from the shift screens, or the summary's own shift_user_map flag.
+  // Older backends omit is_shift entirely, so the roster carries it alone.
+  const tableRows = useMemo<MonthlyRow[]>(
+    () =>
+      rows.map((row) => {
+        const info = shiftMap.get(String(row.erp_id).trim());
+        if (!info) return row;
+        return {
+          ...row,
+          is_shift: true,
+          shift_names: info.shifts.length
+            ? info.shifts.join(", ")
+            : row.shift_names,
+          shift_types: info.types.length ? info.types.join(", ") : "-",
+        };
+      }),
+    [rows, shiftMap]
+  );
 
   const openDetail = (row: MonthlyRow, tab: DetailTab) => {
     setDetailTab(tab);
@@ -161,6 +256,33 @@ export default function MonthlyAttendanceReport() {
     {
       accessorKey: "location",
       header: "Location",
+    },
+    {
+      accessorKey: "is_shift",
+      header: "Shift",
+      // Sort and filter on the word shown, not the raw boolean.
+      accessorFn: (row) => (row.is_shift ? "Yes" : "No"),
+      cell: ({ row }) => {
+        const { is_shift: shift, shift_names, shift_types } = row.original;
+        return (
+          <span
+            title={
+              shift
+                ? `Shift employee — ${shift_names}${
+                    shift_types !== "-" ? ` (${shift_types})` : ""
+                  }`
+                : "Not on any shift roster"
+            }
+            className={`inline-flex items-center justify-center rounded-full px-3 py-1 font-semibold ${
+              shift
+                ? "bg-brand-50 text-brand-600 dark:bg-brand-500/15 dark:text-brand-400"
+                : "bg-gray-100 text-gray-500 dark:bg-white/5 dark:text-gray-400"
+            }`}
+          >
+            {shift ? "Yes" : "No"}
+          </span>
+        );
+      },
     },
     {
       accessorKey: "total_present",
@@ -252,13 +374,13 @@ export default function MonthlyAttendanceReport() {
                   Monthly Attendance Report — {monthStart.format("MMMM YYYY")}
                 </div>
                 <div className="text-[7pt] text-gray-600">
-                  {rows.length} employee(s) · Generated{" "}
+                  {tableRows.length} employee(s) · Generated{" "}
                   {moment().format("DD-MMM-YYYY HH:mm")}
                 </div>
               </div>
 
               <EnhancedDataTable<MonthlyRow>
-                data={rows}
+                data={tableRows}
                 columns={columns}
                 fromdate={monthStart.clone().startOf("month").format("YYYY-MM-DD")}
                 todate={monthStart.clone().endOf("month").format("YYYY-MM-DD")}
@@ -269,6 +391,7 @@ export default function MonthlyAttendanceReport() {
                   "Designation",
                   "Department",
                   "Location",
+                  "Shift",
                   "Total Presents",
                   "Total Absents",
                   "Approved Leaves",
@@ -280,6 +403,7 @@ export default function MonthlyAttendanceReport() {
                     row.designation,
                     row.department,
                     row.location,
+                    row.is_shift ? "Yes" : "No",
                     row.total_present,
                     row.total_absent,
                     row.approved_leaves,
