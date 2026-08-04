@@ -1,10 +1,87 @@
-backend/.env
-backend/venv/
-frontend/.env
-frontend/node_modules/
+# Virtual environments
+**/venv/
+**/.venv/
 
-# Python bytecode (anywhere in the repo)
+# Node
+**/node_modules/
+
+# Environment files
+**/.env
+
+# Python
+__pycache__/
+*.py[cod]
+
+
+# Windows service / startup scripts (machine-specific)
+DjangoService.bat
+run_django.vbs
+
+# Waitress server log
+waitress.log
+
+
+# Python bytecode
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
+
+
+# Virtual Environment
+venv/
+.env/
+.venv/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Build / Dist
+build/
+dist/
+
+# Coverage
+.pytest_cache/
+__pycache__
+
+# Mypy
+.mypy_cache/
+
+
+# Uploads / Temp Files
+uploads/
+temp/
+tmp/
+
+# Node
+node_modules/
+
+# React / Next
+.next/
+out/
+
+# Package Locks
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+
+# Cache
+.cache/
+
+
+# OCR / Document Processing
+ocr_output/
+parsed_docs/
+extracted_frames/
+
+# LangChain / Vector DB
+chroma/
+vector_store/
+
+# Ollama
+ollama_data/
+
+# Testing
+
+chroma_db
