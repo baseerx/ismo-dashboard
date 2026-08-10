@@ -5,7 +5,7 @@ from django.views.decorators.http import require_GET,require_POST
 from django.views.decorators.csrf import csrf_exempt
 from django.db.models import Q
 import json
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 from db import SessionLocal
 from datetime import datetime,date,timedelta
 from holidays.models import Holiday
@@ -249,6 +249,393 @@ def get_leaves_count(request):
     finally:
         sessions.close()
 
+# "Official Work" is not a row in the `leaves` table — it is its own module
+# backed by `official_work_leaves`, where each record carries one of several
+# sub-types (Meetings, Official Tour, Work From Home, ...). Selecting
+# "Official Work" on a leave report therefore has to read from that table
+# instead, otherwise the report comes back empty (or worse, shows only the
+# handful of legacy rows that were typed into `leaves` by hand).
+OFFICIAL_WORK_LEAVE_TYPE = "Official Work"
+
+
+def get_official_work_records(
+    session,
+    section_id,
+    start_date,
+    end_date,
+    include_pending,
+    erp_id=None,
+):
+    """Return one row per official-work record overlapping the date range.
+
+    `include_pending` mirrors whatever status filter the calling report
+    already applies to ordinary leaves, so the official-work detail agrees
+    with the summary shown above it on the same page.
+    """
+    # Statuses are internal constants, never user input — safe to inline.
+    status_clause = (
+        "IN ('approved', 'pending')" if include_pending else "= 'approved'"
+    )
+    erp_clause = "AND o.erp_id = :erp_id" if erp_id else ""
+
+    records_query = text(f"""
+        SELECT
+            o.erp_id,
+            e.name AS employee_name,
+            s.name AS section_name,
+            o.leave_type,
+            o.start_date,
+            o.end_date,
+            o.status,
+            o.reason
+        FROM official_work_leaves o
+        INNER JOIN employees e ON e.erp_id = o.erp_id
+        LEFT JOIN sections s ON s.id = e.section_id
+        WHERE e.flag = 1
+          AND e.section_id = :section
+          AND o.start_date <= :end_date
+          AND o.end_date >= :start_date
+          AND LOWER(o.status) {status_clause}
+          {erp_clause}
+        ORDER BY o.start_date DESC, e.name
+    """)
+
+    params = {
+        "section": section_id,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    if erp_id:
+        params["erp_id"] = erp_id
+
+    rows = session.execute(records_query, params).fetchall()
+
+    records = []
+    for row in rows:
+        # Clip to the requested window so a tour that straddles the boundary
+        # is not counted beyond it — same rule the leave counts use.
+        days = clipped_days(row.start_date, row.end_date, start_date, end_date)
+        if not days:
+            continue
+
+        records.append({
+            "erp_id": row.erp_id,
+            "employee_name": row.employee_name,
+            "section": row.section_name,
+            "leave_type": row.leave_type,
+            "start_date": row.start_date.strftime("%d-%m-%Y"),
+            "end_date": row.end_date.strftime("%d-%m-%Y"),
+            "days": len(days),
+            "status": row.status,
+            "reason": row.reason,
+            # Consumed by summarize_official_work, stripped before responding.
+            "_days": days,
+        })
+
+    return records
+
+
+def strip_internal_fields(records):
+    """Drop the day-set scratch field before the records go over the wire."""
+    return [
+        {key: value for key, value in record.items() if not key.startswith("_")}
+        for record in records
+    ]
+
+
+def summarize_official_work(records):
+    """Totals per official-work sub-type, for the summary strip.
+
+    Day totals count each calendar day once per employee. The live data holds
+    overlapping official-work records (e.g. a tour recorded twice), so summing
+    each record's span would report more days than actually elapsed.
+    """
+    totals = {}
+    seen_days = {}
+
+    for record in records:
+        label = record["leave_type"] or "Unspecified"
+        bucket = totals.setdefault(
+            label, {"leave_type": label, "records": 0, "days": 0}
+        )
+        bucket["records"] += 1
+
+        # Distinct (employee, day) pairs per sub-type.
+        day_set = seen_days.setdefault(label, set())
+        for day in record["_days"]:
+            day_set.add((record["erp_id"], day))
+
+    for label, day_set in seen_days.items():
+        totals[label]["days"] = len(day_set)
+
+    return sorted(totals.values(), key=lambda item: -item["days"])
+
+
+# ==========================================================================
+# Shared reporting core
+#
+# Both leave reports previously counted days by summing each leave record's
+# span. That is wrong whenever two records for the same employee and type
+# overlap — and the live data contains 27 such pairs, including exact
+# duplicates (one employee has the same 10-day Earned Leave entered twice,
+# which reported 20 days). Counting *distinct calendar days* instead makes a
+# duplicate or partial overlap contribute the days it actually covers.
+#
+# The old loops also issued three queries per employee. These helpers fetch
+# every employee's rows in one pass, so a 182-person section costs a fixed
+# handful of queries rather than several hundred.
+# ==========================================================================
+
+def parse_report_range(start_date, end_date):
+    """Parse and sanity-check the requested window.
+
+    Returns (start, end, error_message).
+    """
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None, None, "start_date and end_date must be YYYY-MM-DD"
+
+    if start > end:
+        return None, None, "start_date must be on or before end_date"
+
+    return start, end, None
+
+
+def clipped_days(row_start, row_end, range_start, range_end):
+    """Every calendar day of a record that falls inside the window.
+
+    Returns an empty list for records that cannot be counted — missing dates,
+    or an end before the start. The live data holds two such rows (one
+    Maternity Leave runs 2025-12-09 to 2025-04-08); the old individual report
+    had no guard and let that subtract ~245 days from the employee's total.
+    """
+    if row_start is None or row_end is None or row_end < row_start:
+        return []
+
+    first = max(row_start, range_start)
+    last = min(row_end, range_end)
+    if first > last:
+        return []
+
+    return [first + timedelta(days=offset)
+            for offset in range((last - first).days + 1)]
+
+
+def fetch_section_employees(session, section_id, erp_id=None):
+    """Active employees of a section, one row per ERP ID.
+
+    The employees table currently holds a duplicated active record (ERP 805
+    appears twice), which made that person show up twice in every report.
+    """
+    erp_clause = "AND e.erp_id = :erp_id" if erp_id else ""
+
+    rows = session.execute(
+        text(f"""
+            SELECT
+                e.id AS employee_id,
+                e.erp_id,
+                e.name AS employee_name,
+                s.name AS section_name
+            FROM employees e
+            LEFT JOIN sections s ON e.section_id = s.id
+            WHERE e.flag = 1
+              AND e.section_id = :section
+              {erp_clause}
+            ORDER BY e.name, e.id
+        """),
+        {"section": section_id, **({"erp_id": erp_id} if erp_id else {})},
+    ).fetchall()
+
+    employees = []
+    seen = set()
+    duplicates = 0
+    for row in rows:
+        if row.erp_id in seen:
+            duplicates += 1
+            continue
+        seen.add(row.erp_id)
+        employees.append(row)
+
+    return employees, duplicates
+
+
+def fetch_leave_days(
+    session, erp_ids, leave_type, include_pending, range_start, range_end
+):
+    """Distinct leave days per ERP ID, in a single query.
+
+    Returns (days_by_erp, quality) where days_by_erp maps erp_id -> set of
+    dates and quality reports what the data forced us to drop or merge.
+    """
+    quality = {"records_read": 0, "records_skipped": 0, "overlapping_days_merged": 0}
+    if not erp_ids:
+        return {}, quality
+
+    statuses = ["approved", "pending"] if include_pending else ["approved"]
+
+    query = text("""
+        SELECT erp_id, start_date, end_date
+        FROM leaves
+        WHERE erp_id IN :erp_ids
+          AND LOWER(status) IN :statuses
+          AND leave_type = :leave_type
+          AND start_date <= :range_end
+          AND end_date >= :range_start
+    """).bindparams(
+        bindparam("erp_ids", expanding=True),
+        bindparam("statuses", expanding=True),
+    )
+
+    rows = session.execute(
+        query,
+        {
+            "erp_ids": list(erp_ids),
+            "statuses": statuses,
+            "leave_type": leave_type,
+            "range_start": range_start,
+            "range_end": range_end,
+        },
+    ).fetchall()
+
+    days_by_erp = {}
+    for row in rows:
+        quality["records_read"] += 1
+        days = clipped_days(row.start_date, row.end_date, range_start, range_end)
+        if not days:
+            quality["records_skipped"] += 1
+            continue
+
+        bucket = days_by_erp.setdefault(row.erp_id, set())
+        before = len(bucket)
+        bucket.update(days)
+        # Anything that did not enlarge the set was already claimed by another
+        # record — i.e. a duplicate or overlapping entry.
+        quality["overlapping_days_merged"] += len(days) - (len(bucket) - before)
+
+    return days_by_erp, quality
+
+
+def fetch_leave_allocation(session, leave_type):
+    """Annual allocation for a leave type — one lookup, not one per employee."""
+    row = session.execute(
+        text("""
+            SELECT total_leaves
+            FROM leave_type_counts
+            WHERE leave_type = :leave_type
+        """),
+        {"leave_type": leave_type},
+    ).fetchone()
+
+    return row[0] if row is not None else None
+
+
+def fetch_rr_erp_ids(session, erp_ids, include_pending, range_start, range_end):
+    """ERP IDs with Rest & Recreational leave in the window.
+
+    Casual leave is charged an extra 10 days for these employees (the rule
+    get_leave_balance already applies). Fetched set-wise rather than with a
+    per-employee ORM round trip.
+    """
+    if not erp_ids:
+        return set()
+
+    statuses = ["approved", "pending"] if include_pending else ["approved"]
+
+    query = text("""
+        SELECT DISTINCT erp_id
+        FROM leaves
+        WHERE erp_id IN :erp_ids
+          AND leave_type = 'Rest & Recreational Leave'
+          AND LOWER(status) IN :statuses
+          AND start_date <= :range_end
+          AND end_date >= :range_start
+    """).bindparams(
+        bindparam("erp_ids", expanding=True),
+        bindparam("statuses", expanding=True),
+    )
+
+    rows = session.execute(
+        query,
+        {
+            "erp_ids": list(erp_ids),
+            "statuses": statuses,
+            "range_start": range_start,
+            "range_end": range_end,
+        },
+    ).fetchall()
+
+    return {row.erp_id for row in rows}
+
+
+def build_report_metadata(
+    leave_type, range_start, range_end, include_pending, quality, duplicates
+):
+    """Self-describing footer so a reader can audit what the numbers mean."""
+    notes = []
+    if quality.get("records_skipped"):
+        notes.append(
+            f"{quality['records_skipped']} record(s) ignored: end date before "
+            "start date, or missing dates."
+        )
+    if quality.get("overlapping_days_merged"):
+        notes.append(
+            f"{quality['overlapping_days_merged']} duplicate/overlapping day(s) "
+            "counted once."
+        )
+    if duplicates:
+        notes.append(
+            f"{duplicates} duplicate employee record(s) collapsed by ERP ID."
+        )
+
+    return {
+        "leave_type": leave_type,
+        "start_date": range_start.strftime("%d-%m-%Y"),
+        "end_date": range_end.strftime("%d-%m-%Y"),
+        "statuses_counted": (
+            ["approved", "pending"] if include_pending else ["approved"]
+        ),
+        "counting_method": "distinct calendar days within the selected range",
+        "records_read": quality.get("records_read", 0),
+        "data_quality_notes": notes,
+    }
+
+
+@require_GET
+def get_leave_types(request):
+    """The configured leave types, for report filters.
+
+    The report pages used to hard-code their own lists, which had drifted from
+    the master table: the section report offered "Sick Leave" and both offered
+    a plain "Maternity Leave", none of which exist in leave_type_counts — so
+    picking them could only ever return an empty report. Official Work is
+    appended because it is a real filter option backed by its own table.
+    """
+    session = SessionLocal()
+    try:
+        rows = session.execute(text("""
+            SELECT leave_type, total_leaves
+            FROM leave_type_counts
+            WHERE leave_type IS NOT NULL AND LTRIM(RTRIM(leave_type)) <> ''
+            ORDER BY leave_type
+        """)).fetchall()
+
+        types = [
+            {"leave_type": row[0], "total_leaves": row[1]}
+            for row in rows
+        ]
+
+        if not any(t["leave_type"] == OFFICIAL_WORK_LEAVE_TYPE for t in types):
+            types.append(
+                {"leave_type": OFFICIAL_WORK_LEAVE_TYPE, "total_leaves": None}
+            )
+
+        return JsonResponse({"leave_types": types}, status=200)
+    finally:
+        session.close()
+
+
 @csrf_exempt
 @require_POST
 def individual_report(request):
@@ -259,8 +646,7 @@ def individual_report(request):
     leave_type = data.get("leave_type")   # REQUIRED
     start_date = data.get("start_date")
     end_date = data.get("end_date")
-   
-    
+
     # Validate required fields
     if not all([section, leave_type, start_date, end_date]):
         return JsonResponse(
@@ -268,123 +654,94 @@ def individual_report(request):
             status=400
         )
 
-    # Convert dates to Python date objects
-    start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
-    end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+    start_date, end_date, range_error = parse_report_range(start_date, end_date)
+    if range_error:
+        return JsonResponse({"error": range_error}, status=400)
+
+    # This report reserves days that are approved *or* still awaiting
+    # approval, so "remaining leaves" never promises a balance an employee
+    # has already committed. The section report deliberately differs — see
+    # section_leave_report.
+    include_pending = True
 
     sessions = SessionLocal()
 
-    # ----------------------------------------------------
-    # FETCH EMPLOYEES
-    # ----------------------------------------------------
-    if erpid == 0:
-        query = text(""" 
-            SELECT
-                e.id AS employee_id,
-                e.erp_id,
-                e.name AS employee_name,
-                s.name AS section_name
-            FROM employees e
-            LEFT JOIN sections s ON e.section_id = s.id
-            WHERE e.flag = 1
-              AND e.section_id = :section
-        """)
-        employees = sessions.execute(query, {"section": section}).fetchall()
-    else:
-        query = text(""" 
-            SELECT
-                e.id AS employee_id,
-                e.erp_id,
-                e.name AS employee_name,
-                s.name AS section_name
-            FROM employees e
-            LEFT JOIN sections s ON e.section_id = s.id
-            WHERE e.flag = 1
-              AND e.section_id = :section
-              AND e.erp_id = :erp_id
-        """)
-        employees = sessions.execute(
-            query, {"section": section, "erp_id": erpid}
-        ).fetchall()
+    try:
+        employees, duplicate_employees = fetch_section_employees(
+            sessions, section, erpid or None
+        )
+        erp_ids = [emp.erp_id for emp in employees]
 
-    result = []
+        # Three set-based queries replace the previous three-per-employee.
+        days_by_erp, quality = fetch_leave_days(
+            sessions, erp_ids, leave_type, include_pending, start_date, end_date
+        )
+        total_leaves = fetch_leave_allocation(sessions, leave_type)
+        rr_erp_ids = (
+            fetch_rr_erp_ids(
+                sessions, erp_ids, include_pending, start_date, end_date
+            )
+            if leave_type.lower() == "casual leave"
+            else set()
+        )
 
-    # ----------------------------------------------------
-    # LOOP EMPLOYEES
-    # ----------------------------------------------------
-    for emp in employees:
-        leave_count = 0
+        result = []
+        for emp in employees:
+            leave_count = len(days_by_erp.get(emp.erp_id, ()))
 
-        # ------------------------------------------------
-        # FILTERED LEAVES (by type + date range)
-        # ------------------------------------------------
-        leaves_query = text(""" 
-            SELECT start_date, end_date
-            FROM leaves
-            WHERE erp_id = :erp_id
-              AND status IN ('approved', 'pending')
-              AND leave_type = :leave_type
-              AND start_date <= :end_date
-              AND end_date >= :start_date
-        """)
-
-        leaves = sessions.execute(
-            leaves_query,
-            {
-                "erp_id": emp.erp_id,
-                "leave_type": leave_type,
-                "start_date": start_date,
-                "end_date": end_date,
-            },
-        ).fetchall()
-
-        for leave in leaves:
-            actual_start = max(leave.start_date, start_date)
-            actual_end = min(leave.end_date, end_date)
-            leave_count += (actual_end - actual_start).days + 1
-       
-        if leave_type.lower() == "casual leave":
-            print("Checking for RR leaves for emp:", emp.erp_id)
-            has_rr_leave = LeaveModel.objects.filter(
-                erp_id=emp.erp_id,
-                leave_type="Rest & Recreational Leave",
-                start_date__lte=end_date,
-                end_date__gte=start_date,
-                status__in=["approved", "pending"]
-            ).exists()
-            
-            if has_rr_leave:
+            # Taking Rest & Recreational leave costs an extra 10 casual days
+            # (the same rule get_leave_balance applies).
+            if emp.erp_id in rr_erp_ids:
                 leave_count += 10
-        # ------------------------------------------------
-        # GET TOTAL LEAVES COUNT
-        # ------------------------------------------------
-        total_leaves_query = text(""" 
-            SELECT total_leaves
-            FROM leave_type_counts
-            WHERE leave_type = :leave_type
-        """)
-        total_leaves_row = sessions.execute(total_leaves_query, {"leave_type": leave_type}).fetchone()
-        total_leaves = total_leaves_row[0] if total_leaves_row is not None else None
 
-        remaining_leaves = total_leaves - leave_count if total_leaves is not None else None
+            remaining_leaves = (
+                total_leaves - leave_count if total_leaves is not None else None
+            )
 
-        # ------------------------------------------------
-        # RESPONSE
-        # ------------------------------------------------
-        result.append({
-            "employee_id": emp.employee_id,
-            "erp_id": emp.erp_id,
-            "employee_name": emp.employee_name,
-            "section": emp.section_name,
-            "leave_type": leave_type,
-            "leave_count": leave_count,
-            "remaining_leaves": remaining_leaves,
-            "start_date": start_date.strftime("%d-%m-%Y"),
-            "end_date": end_date.strftime("%d-%m-%Y"),
-        })
+            result.append({
+                "employee_id": emp.employee_id,
+                "erp_id": emp.erp_id,
+                "employee_name": emp.employee_name,
+                "section": emp.section_name,
+                "leave_type": leave_type,
+                "leave_count": leave_count,
+                "remaining_leaves": remaining_leaves,
+                "start_date": start_date.strftime("%d-%m-%Y"),
+                "end_date": end_date.strftime("%d-%m-%Y"),
+            })
 
-    sessions.close()
-    return JsonResponse({"attendance": result}, status=200)
+        # Official work is stored separately and split across several
+        # sub-types, so ship the underlying records alongside the summary.
+        official_work = []
+        if leave_type == OFFICIAL_WORK_LEAVE_TYPE:
+            official_work = get_official_work_records(
+                sessions,
+                section,
+                start_date,
+                end_date,
+                include_pending=include_pending,
+                erp_id=erpid or None,
+            )
+
+        return JsonResponse(
+            {
+                "attendance": result,
+                "official_work": strip_internal_fields(official_work),
+                "official_work_summary": summarize_official_work(official_work),
+                "report_meta": build_report_metadata(
+                    leave_type,
+                    start_date,
+                    end_date,
+                    include_pending,
+                    quality,
+                    duplicate_employees,
+                ),
+            },
+            status=200,
+        )
+
+    finally:
+        sessions.close()
 
 @csrf_exempt
 @require_POST
@@ -650,68 +1007,30 @@ def section_leave_report(request):
             status=400
         )
 
-    start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
-    end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+    start_date, end_date, range_error = parse_report_range(start_date, end_date)
+    if range_error:
+        return JsonResponse({"error": range_error}, status=400)
+
+    # This report shows leave actually granted, so pending applications are
+    # excluded. The individual report counts them — see individual_report.
+    include_pending = False
 
     session = SessionLocal()
 
     try:
+        employees, duplicate_employees = fetch_section_employees(
+            session, section_id
+        )
+        erp_ids = [emp.erp_id for emp in employees]
 
-        employees_query = text("""
-            SELECT
-                e.id AS employee_id,
-                e.erp_id,
-                e.name AS employee_name,
-                s.name AS section_name
-            FROM employees e
-            INNER JOIN sections s
-                ON s.id = e.section_id
-            WHERE
-                e.flag = 1
-                AND e.section_id = :section_id
-        """)
-
-        employees = session.execute(
-            employees_query,
-            {"section_id": section_id}
-        ).fetchall()
+        # One query for the whole section instead of one per employee.
+        days_by_erp, quality = fetch_leave_days(
+            session, erp_ids, leave_type, include_pending, start_date, end_date
+        )
 
         result = []
-
         for emp in employees:
-
-            leave_count = 0
-
-            leaves_query = text("""
-                SELECT
-                    start_date,
-                    end_date
-                FROM leaves
-                WHERE
-                    erp_id = :erp_id
-                    AND status = 'approved'
-                    AND leave_type = :leave_type
-                    AND start_date <= :end_date
-                    AND end_date >= :start_date
-            """)
-
-            leaves = session.execute(
-                leaves_query,
-                {
-                    "erp_id": emp.erp_id,
-                    "leave_type": leave_type,
-                    "start_date": start_date,
-                    "end_date": end_date,
-                }
-            ).fetchall()
-
-            for leave in leaves:
-
-                overlap_start = max(leave.start_date, start_date)
-                overlap_end = min(leave.end_date, end_date)
-
-                if overlap_start <= overlap_end:
-                    leave_count += (overlap_end - overlap_start).days + 1
+            leave_count = len(days_by_erp.get(emp.erp_id, ()))
 
             # Only return employees having selected leave
             if leave_count > 0:
@@ -722,11 +1041,38 @@ def section_leave_report(request):
                     "section": emp.section_name,
                     "leave_type": leave_type,
                     "leave_count": leave_count,
-                    "start_date": start_date.strftime("%Y-%m-%d"),
-                    "end_date": end_date.strftime("%Y-%m-%d"),
+                    "start_date": start_date.strftime("%d-%m-%Y"),
+                    "end_date": end_date.strftime("%d-%m-%Y"),
                 })
 
-        return JsonResponse({"attendance": result}, status=200)
+        # Official work lives in its own table with its own sub-types, so the
+        # summary above cannot represent it — return the records themselves.
+        official_work = []
+        if leave_type == OFFICIAL_WORK_LEAVE_TYPE:
+            official_work = get_official_work_records(
+                session,
+                section_id,
+                start_date,
+                end_date,
+                include_pending=include_pending,
+            )
+
+        return JsonResponse(
+            {
+                "attendance": result,
+                "official_work": strip_internal_fields(official_work),
+                "official_work_summary": summarize_official_work(official_work),
+                "report_meta": build_report_metadata(
+                    leave_type,
+                    start_date,
+                    end_date,
+                    include_pending,
+                    quality,
+                    duplicate_employees,
+                ),
+            },
+            status=200,
+        )
 
     finally:
         session.close()

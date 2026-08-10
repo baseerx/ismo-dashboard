@@ -12,7 +12,16 @@ import Button from "../../components/ui/button/Button";
 import Label from "../../components/form/Label";
 import Select from "../../components/form/Select";
 import moment from "moment";
+import OfficialWorkBreakdown, {
+  OfficialWorkRow,
+  OfficialWorkSummaryRow,
+} from "../../components/common/OfficialWorkBreakdown";
+import ReportAuditNote, {
+  ReportMeta,
+} from "../../components/common/ReportAuditNote";
 // import DatePicker from "../../components/form/date-picker";
+
+const OFFICIAL_WORK = "Official Work";
 
 type AttendanceRow = {
     id?: number;
@@ -31,24 +40,21 @@ export default function IndividualLeaveReport() {
   const [IndividualLeaveReport, setIndividualLeaveReport] = useState<
     AttendanceRow[]
   >([]);
-  const leavetype = [
-    "Medical Leave",
-    "Casual Leave",
-    "Annual Leave",
-    "Maternity Leave",
-    "External Meeting",
-    "Official Work",
-    "Umrah Leave",
-    "Hajj Leave",
-    "Shift Leave",
-    "Rest & Recreational Leave",
-    "Compensatory Leave",
-    "Short Leave",
-    "Study Leave",
-    "Marriage Leave",
-    "Paternity Leave",
-    "Earned Leave",
-  ];
+  // Loaded from leave_type_counts so the filter can only offer types the
+  // data actually uses. The old hard-coded list included "Maternity Leave",
+  // which is not a configured type (the master list splits it into
+  // First/Second/Third), so selecting it always returned an empty report.
+  const [leavetype, setLeavetype] = useState<string[]>([]);
+  // Official work records are fetched alongside the summary but only when
+  // that type is selected; `appliedLeaveType` tracks the type the currently
+  // displayed report was run for, so changing the dropdown afterwards does
+  // not swap the table out before Apply is pressed again.
+  const [officialWork, setOfficialWork] = useState<OfficialWorkRow[]>([]);
+  const [officialWorkSummary, setOfficialWorkSummary] = useState<
+    OfficialWorkSummaryRow[]
+  >([]);
+  const [appliedLeaveType, setAppliedLeaveType] = useState<string>("");
+  const [reportMeta, setReportMeta] = useState<ReportMeta | null>(null);
   const [employeeOptions, setEmployeeOptions] = useState<
     { label: string; value: string }[]
   >([]);
@@ -60,7 +66,20 @@ export default function IndividualLeaveReport() {
   useEffect(() => {
     fetchEmployeesOptions();
     getSectionsData();
+    getLeaveTypes();
   }, []);
+
+  const getLeaveTypes = async () => {
+    try {
+      const response = await axios.get("/leaves/types/");
+      setLeavetype(
+        response.data.leave_types.map((item: any) => item.leave_type)
+      );
+    } catch (error) {
+      console.error("Error fetching leave types:", error);
+      toast.error("Failed to load leave types");
+    }
+  };
 
   const handleSelectChange = (value: string) => {
     setData({
@@ -91,10 +110,16 @@ const handleSubmit = async () => {
     try {
         const response = await axios.post("/leaves/individual-report/", updatedData);
         setIndividualLeaveReport(response.data.attendance);
-        toast.success("Leave applied successfully");
-    } catch (error) {
-        console.error("Error applying leave:", error);
-        toast.error("Failed to apply leave");
+        setOfficialWork(response.data.official_work ?? []);
+        setOfficialWorkSummary(response.data.official_work_summary ?? []);
+        setReportMeta(response.data.report_meta ?? null);
+        setAppliedLeaveType(data.leave_type);
+        toast.success("Report generated successfully");
+    } catch (error: any) {
+        console.error("Error generating report:", error);
+        toast.error(
+            error?.response?.data?.error || "Failed to generate report"
+        );
     }
 };
 
@@ -269,6 +294,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
                   value: type,
                 }))}
                 placeholder="Select an option"
+                value={data.leave_type}
                 onChange={(value) =>
                   setData({
                     ...data,
@@ -278,18 +304,22 @@ const columns: ColumnDef<AttendanceRow>[] = [
                 className="dark:bg-dark-900"
               />
                       </div>
-                      
+
                     <div className="w-full">
-                        <Label>Year</Label>
+                        <Label>Financial Year</Label>
                         <Select
                             options={Array.from({ length: 10 }, (_, i) => {
-                                const year = new Date().getFullYear() - i;
+                                const startYear = new Date().getFullYear() - i;
                                 return {
-                                    label: year.toString(),
-                                    value: year.toString(),
+                                    label: `${startYear}-${startYear + 1} (Jul ${startYear} – Jun ${startYear + 1})`,
+                                    value: startYear.toString(),
                                 };
                             })}
-                            placeholder="Select a year"
+                            placeholder="Select a financial year"
+                            // Bound so the control shows the year that will
+                            // actually be submitted — it defaults to the
+                            // current year rather than to nothing.
+                            value={year}
                             onChange={(value) =>
                                 setYear(value)
                             }
@@ -313,6 +343,15 @@ const columns: ColumnDef<AttendanceRow>[] = [
             data={IndividualLeaveReport}
             columns={columns}
           />
+
+          {appliedLeaveType === OFFICIAL_WORK && (
+            <OfficialWorkBreakdown
+              records={officialWork}
+              summary={officialWorkSummary}
+            />
+          )}
+
+          <ReportAuditNote meta={reportMeta} />
         </ComponentCard>
       </div>
     </>
