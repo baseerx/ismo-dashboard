@@ -268,42 +268,73 @@ def get_official_work_records(
 ):
     """Return one row per official-work record overlapping the date range.
 
-    `include_pending` mirrors whatever status filter the calling report
-    already applies to ordinary leaves, so the official-work detail agrees
-    with the summary shown above it on the same page.
+    Reads BOTH sources and unions them:
+
+    * `official_work_leaves` — the official work module, where every new
+      entry is recorded. Each row carries a sub-type (Meetings, Official
+      Tour, Work From Home, ...).
+    * `leaves` where leave_type = 'Official Work' — historical entries made
+      through the leave application form before official work moved to its
+      own module. The form no longer offers the option, but these rows still
+      exist and must keep showing up or the report would under-report.
+
+    Each record is tagged with `source` so a reader can tell which table it
+    came from. `include_pending` mirrors whatever status filter the calling
+    report already applies to ordinary leaves, so the official-work detail
+    agrees with the summary shown above it on the same page.
     """
     # Statuses are internal constants, never user input — safe to inline.
     status_clause = (
         "IN ('approved', 'pending')" if include_pending else "= 'approved'"
     )
-    erp_clause = "AND o.erp_id = :erp_id" if erp_id else ""
+    erp_clause = "AND r.erp_id = :erp_id" if erp_id else ""
 
+    # UNION ALL, not UNION: two genuinely separate records that happen to
+    # share every column are still two records, and the day-level dedupe in
+    # summarize_official_work handles any overlap in the totals.
     records_query = text(f"""
         SELECT
-            o.erp_id,
+            r.erp_id,
             e.name AS employee_name,
             s.name AS section_name,
-            o.leave_type,
-            o.start_date,
-            o.end_date,
-            o.status,
-            o.reason
-        FROM official_work_leaves o
-        INNER JOIN employees e ON e.erp_id = o.erp_id
+            r.leave_type,
+            r.start_date,
+            r.end_date,
+            r.status,
+            r.reason,
+            r.source
+        FROM (
+            SELECT
+                o.erp_id, o.leave_type, o.start_date, o.end_date,
+                o.status, o.reason,
+                'Official work module' AS source
+            FROM official_work_leaves o
+
+            UNION ALL
+
+            SELECT
+                l.erp_id, l.leave_type, l.start_date, l.end_date,
+                l.status, l.reason,
+                'Leave form (historical)' AS source
+            FROM leaves l
+            WHERE l.leave_type = :official_work_type
+        ) r
+        INNER JOIN employees e ON e.erp_id = r.erp_id
         LEFT JOIN sections s ON s.id = e.section_id
         WHERE e.flag = 1
           AND e.section_id = :section
-          AND o.start_date <= :end_date
-          AND o.end_date >= :start_date
-          AND LOWER(o.status) {status_clause}
+          AND r.start_date <= :end_date
+          AND r.end_date >= :start_date
+          AND LOWER(r.status) {status_clause}
           {erp_clause}
-        ORDER BY o.start_date DESC, e.name
+        ORDER BY r.start_date DESC, e.name
     """)
 
     params = {
         "section": section_id,
         "start_date": start_date,
         "end_date": end_date,
+        "official_work_type": OFFICIAL_WORK_LEAVE_TYPE,
     }
     if erp_id:
         params["erp_id"] = erp_id
@@ -328,11 +359,60 @@ def get_official_work_records(
             "days": len(days),
             "status": row.status,
             "reason": row.reason,
+            "source": row.source,
             # Consumed by summarize_official_work, stripped before responding.
             "_days": days,
         })
 
     return records
+
+
+def official_work_day_sets(records):
+    """Distinct official-work days per ERP ID, across both source tables.
+
+    Lets the per-employee summary agree with the record list underneath it:
+    a day recorded once in the official work module and again as a legacy
+    leave row is one day off, not two.
+    """
+    days_by_erp = {}
+    for record in records:
+        days_by_erp.setdefault(record["erp_id"], set()).update(record["_days"])
+    return days_by_erp
+
+
+def fetch_official_work_module_rows(
+    session, erp_id, range_start, range_end, include_pending=True
+):
+    """Official work module rows for one employee, for the detail reports.
+
+    Those reports walk the `leaves` table per leave type, which on its own
+    would show nothing but the historical 'Official Work' entries. This adds
+    the module's own records so the two sources are reported together.
+    """
+    status_clause = (
+        "IN ('approved', 'pending')" if include_pending else "= 'approved'"
+    )
+
+    return session.execute(
+        text(f"""
+            SELECT leave_type, start_date, end_date, reason, status
+            FROM official_work_leaves
+            WHERE erp_id = :erp_id
+              AND LOWER(status) {status_clause}
+              AND start_date <= :range_end
+              AND end_date >= :range_start
+            ORDER BY start_date ASC
+        """),
+        {
+            "erp_id": erp_id,
+            "range_start": range_start,
+            "range_end": range_end,
+        },
+    ).fetchall()
+
+
+def is_official_work(leave_type):
+    return (leave_type or "").strip().lower() == OFFICIAL_WORK_LEAVE_TYPE.lower()
 
 
 def strip_internal_fields(records):
@@ -685,6 +765,22 @@ def individual_report(request):
             else set()
         )
 
+        # Official work spans two tables, so its records are fetched first and
+        # the per-employee counts are derived from that union — otherwise the
+        # summary would report only the historical `leaves` rows while the
+        # breakdown underneath listed both sources.
+        official_work = []
+        if leave_type == OFFICIAL_WORK_LEAVE_TYPE:
+            official_work = get_official_work_records(
+                sessions,
+                section,
+                start_date,
+                end_date,
+                include_pending=include_pending,
+                erp_id=erpid or None,
+            )
+            days_by_erp = official_work_day_sets(official_work)
+
         result = []
         for emp in employees:
             leave_count = len(days_by_erp.get(emp.erp_id, ()))
@@ -709,19 +805,6 @@ def individual_report(request):
                 "start_date": start_date.strftime("%d-%m-%Y"),
                 "end_date": end_date.strftime("%d-%m-%Y"),
             })
-
-        # Official work is stored separately and split across several
-        # sub-types, so ship the underlying records alongside the summary.
-        official_work = []
-        if leave_type == OFFICIAL_WORK_LEAVE_TYPE:
-            official_work = get_official_work_records(
-                sessions,
-                section,
-                start_date,
-                end_date,
-                include_pending=include_pending,
-                erp_id=erpid or None,
-            )
 
         return JsonResponse(
             {
@@ -820,6 +903,18 @@ def individual_detail_report(request):
           AND end_date >= :start_date
     """)
 
+    # Official work also lives in its own table, so its day count is the union
+    # of the module's records and the historical 'Official Work' rows in
+    # `leaves`. Fetched once rather than inside the per-type loop.
+    official_work_module_days = set()
+    if any(is_official_work(row[0]) for row in all_types):
+        for ow_row in fetch_official_work_module_rows(
+            sessions, emp[1], start_date, end_date
+        ):
+            official_work_module_days.update(
+                clipped_days(ow_row[1], ow_row[2], start_date, end_date)
+            )
+
     result = []
 
     # Walk every leave type so the report reflects the employee's *overall*
@@ -853,11 +948,17 @@ def individual_detail_report(request):
             },
         ).fetchall()
 
-        leave_count = 0
+        # Distinct days, so a duplicated or overlapping entry is not counted
+        # twice and a row with its dates reversed cannot subtract days.
+        day_set = set()
         for leave in leaves:
-            actual_start = max(leave[0], start_date)
-            actual_end = min(leave[1], end_date)
-            leave_count += (actual_end - actual_start).days + 1
+            day_set.update(clipped_days(leave[0], leave[1], start_date, end_date))
+
+        # Fold in the official work module's own records for that type.
+        if is_official_work(leave_type):
+            day_set |= official_work_module_days
+
+        leave_count = len(day_set)
 
         if lt_lower == "casual leave" and has_rr_leave:
             leave_count += 10
@@ -968,12 +1069,11 @@ def leavetype_detail_report(request):
                 "end_date": end_date
             }
         ).fetchall()
-        print(leaves)
         # Process each leave record
         for leave in leaves:
-            actual_start = max(leave[1], start_date)
-            actual_end = min(leave[2], end_date)
-            leave_count = (actual_end - actual_start).days + 1
+            days = clipped_days(leave[1], leave[2], start_date, end_date)
+            if not days:
+                continue
 
             result.append({
                 "erp_id": emp[1],
@@ -982,8 +1082,32 @@ def leavetype_detail_report(request):
                 "start_date": leave[1].strftime("%Y-%m-%d"),
                 "end_date": leave[2].strftime("%Y-%m-%d"),
                 "leave_type": leave_type,
-                "leave_count": leave_count
+                "leave_count": len(days),
+                "source": "Leave form (historical)",
             })
+
+        # Official work is also recorded in its own module, so a search for it
+        # has to list those records too — the `leaves` table only holds the
+        # historical entries made before the module existed.
+        if is_official_work(leave_type):
+            for ow_row in fetch_official_work_module_rows(
+                sessions, emp[1], start_date, end_date
+            ):
+                days = clipped_days(ow_row[1], ow_row[2], start_date, end_date)
+                if not days:
+                    continue
+
+                result.append({
+                    "erp_id": emp[1],
+                    "employee_name": emp[2],
+                    "section": emp[3],
+                    "start_date": ow_row[1].strftime("%Y-%m-%d"),
+                    "end_date": ow_row[2].strftime("%Y-%m-%d"),
+                    # The module's own sub-type (Meetings, Official Tour, ...).
+                    "leave_type": ow_row[0] or leave_type,
+                    "leave_count": len(days),
+                    "source": "Official work module",
+                })
 
     sessions.close()
     return JsonResponse({"attendance": result}, status=200)
@@ -1028,6 +1152,20 @@ def section_leave_report(request):
             session, erp_ids, leave_type, include_pending, start_date, end_date
         )
 
+        # Official work spans the official work module and the historical
+        # 'Official Work' rows in `leaves`, so its counts come from the union
+        # of both — see get_official_work_records.
+        official_work = []
+        if leave_type == OFFICIAL_WORK_LEAVE_TYPE:
+            official_work = get_official_work_records(
+                session,
+                section_id,
+                start_date,
+                end_date,
+                include_pending=include_pending,
+            )
+            days_by_erp = official_work_day_sets(official_work)
+
         result = []
         for emp in employees:
             leave_count = len(days_by_erp.get(emp.erp_id, ()))
@@ -1044,18 +1182,6 @@ def section_leave_report(request):
                     "start_date": start_date.strftime("%d-%m-%Y"),
                     "end_date": end_date.strftime("%d-%m-%Y"),
                 })
-
-        # Official work lives in its own table with its own sub-types, so the
-        # summary above cannot represent it — return the records themselves.
-        official_work = []
-        if leave_type == OFFICIAL_WORK_LEAVE_TYPE:
-            official_work = get_official_work_records(
-                session,
-                section_id,
-                start_date,
-                end_date,
-                include_pending=include_pending,
-            )
 
         return JsonResponse(
             {
@@ -1166,6 +1292,24 @@ def create_leave_request(request):
         if not all([erp_id, employee_id, leave_type, start_date, end_date]):
             return JsonResponse(
                 {"error": "erp_id, employee_id, leave_type, start_date and end_date are required"},
+                status=400
+            )
+
+        # --------------------------------------------------
+        # OFFICIAL WORK IS NO LONGER A LEAVE TYPE
+        # --------------------------------------------------
+        # It has its own module and its own table. The leave form no longer
+        # offers the option; this rejects it server side too, so no new
+        # 'Official Work' rows can land in `leaves` by any route. Existing
+        # historical rows are left untouched and still appear in the reports.
+        if (leave_type or "").strip().lower() == OFFICIAL_WORK_LEAVE_TYPE.lower():
+            return JsonResponse(
+                {
+                    "error": (
+                        "Official Work is no longer applied for through the "
+                        "leave form. Please use the Official Work module."
+                    )
+                },
                 status=400
             )
 
