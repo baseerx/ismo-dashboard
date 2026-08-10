@@ -88,8 +88,14 @@ export default function IndividualAttendance() {
     financial_year: string;
   } | null>(null);
   const initializedSelf = useRef(false);
+  // The logged-in user's own employee and section-head values. Remembered so
+  // a reset can restore them immediately — the effect below that derives them
+  // runs once and must not be relied on to re-populate the form.
+  const selfDefaults = useRef<Partial<AttendanceRow>>({});
 
-  const [data, setData] = useState<AttendanceRow>({
+  // A blank form, built fresh on every call so a reset picks up today's date
+  // rather than the date the page happened to be opened on.
+  const buildBlankForm = (): AttendanceRow => ({
     erp_id: 0,
     employee_id: 0,
     entry_made_by: user.erpid,
@@ -101,7 +107,8 @@ export default function IndividualAttendance() {
     start_date: moment().format("YYYY-MM-DD").toString(),
     end_date: moment().format("YYYY-MM-DD").toString(),
   });
-  const [fielderror, setFieldError] = useState<AttendanceRow>({
+
+  const buildBlankFieldErrors = (): AttendanceRow => ({
     erp_id: "",
     employee_id: "",
     leave_type: "",
@@ -112,6 +119,24 @@ export default function IndividualAttendance() {
     start_date: "",
     end_date: "",
   });
+
+  const [data, setData] = useState<AttendanceRow>(buildBlankForm);
+  const [fielderror, setFieldError] =
+    useState<AttendanceRow>(buildBlankFieldErrors);
+
+  // Return the form to exactly the state a fresh page load produces.
+  //
+  // The previous reset rebuilt `data` from a partial literal that omitted
+  // entry_made_by, approved_by and head, and set status to "". Those fields
+  // are required by the validation above, and two of them are never edited
+  // directly — so the next Apply always failed on fields the user could not
+  // see or fix, which is why the page had to be reloaded between entries.
+  // (It also let a leave through with an empty status.)
+  const resetForm = () => {
+    setData({ ...buildBlankForm(), ...selfDefaults.current });
+    setFieldError(buildBlankFieldErrors());
+    setBalance(null);
+  };
 
   useEffect(() => {
     fetchEmployeesOptions();
@@ -146,12 +171,13 @@ export default function IndividualAttendance() {
       }
     }
 
-    setData((prev) => ({
-      ...prev,
+    selfDefaults.current = {
       employee_id: self.id,
       erp_id: self.erp_id,
       head: headErpId,
-    }));
+    };
+
+    setData((prev) => ({ ...prev, ...selfDefaults.current }));
   }, [employeesData]);
 
   const selectedEmployee = employeesData.find(
@@ -423,16 +449,7 @@ export default function IndividualAttendance() {
         return;
       }
 
-      setData({
-        erp_id: 0,
-        employee_id: 0,
-        leave_type: "",
-        reason: "",
-        status: "",
-        start_date: moment().format("YYYY-MM-DD").toString(),
-        end_date: moment().format("YYYY-MM-DD").toString(),
-      });
-
+      resetForm();
       getEmployeesLeaves();
       toast.success("Leave application submitted successfully");
     } catch (error) {
@@ -573,6 +590,9 @@ export default function IndividualAttendance() {
                   value: type,
                 }))}
                 placeholder="Select an option"
+                // Controlled so clearing `data` after a submission also
+                // clears what the user sees.
+                value={data.leave_type}
                 onChange={(value) => {
                   setData({ ...data, leave_type: value?.toString() || "" });
                 }}
@@ -641,6 +661,7 @@ export default function IndividualAttendance() {
                   value: type,
                 }))}
                 placeholder="Select an option"
+                value={data.approved_by}
                 onChange={(value) => {
                   setData({ ...data, approved_by: value?.toString() || "" });
                 }}

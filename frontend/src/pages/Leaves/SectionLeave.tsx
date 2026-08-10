@@ -12,6 +12,15 @@ import Label from "../../components/form/Label";
 import Select from "../../components/form/Select";
 import moment from "moment";
 import DatePicker from "../../components/form/date-picker";
+import OfficialWorkBreakdown, {
+  OfficialWorkRow,
+  OfficialWorkSummaryRow,
+} from "../../components/common/OfficialWorkBreakdown";
+import ReportAuditNote, {
+  ReportMeta,
+} from "../../components/common/ReportAuditNote";
+
+const OFFICIAL_WORK = "Official Work";
 
 type AttendanceRow = {
     id?: number;
@@ -28,33 +37,40 @@ export default function SectionLeaveReport() {
     AttendanceRow[]
         >([]);
     
-  const leavetype = [
-    "Sick Leave",
-    "Casual Leave",
-    "Annual Leave",
-    "Maternity Leave",
-    "External Meeting",
-    "Official Work",
-    "Umrah Leave",
-    "Hajj Leave",
-    "Shift Leave",
-    "Rest & Recreational Leave",
-    "Compensatory Leave",
-    "Short Leave",
-    "Study Leave",
-    "Marriage Leave",
-    "Paternity Leave",
-    "Earned Leave",
-  ];
+  // Loaded from leave_type_counts. The old hard-coded list offered "Sick
+  // Leave" and "Maternity Leave", neither of which is a configured type, so
+  // choosing either could only ever produce an empty report.
+  const [leavetype, setLeavetype] = useState<string[]>([]);
   const [loader, setLoader] = useState(false);
+  // Official work records come back with the summary but only when that type
+  // is selected; `appliedLeaveType` pins the breakdown to the report actually
+  // on screen rather than to the current dropdown value.
+  const [officialWork, setOfficialWork] = useState<OfficialWorkRow[]>([]);
+  const [officialWorkSummary, setOfficialWorkSummary] = useState<
+    OfficialWorkSummaryRow[]
+  >([]);
+  const [appliedLeaveType, setAppliedLeaveType] = useState<string>("");
+  const [reportMeta, setReportMeta] = useState<ReportMeta | null>(null);
   const [sectionOptions, setSectionOptions] = useState<
     { label: string; value: string }[]
   >([]);
 
   useEffect(() => {
-
     getSectionsData();
+    getLeaveTypes();
   }, []);
+
+  const getLeaveTypes = async () => {
+    try {
+      const response = await axios.get("/leaves/types/");
+      setLeavetype(
+        response.data.leave_types.map((item: any) => item.leave_type)
+      );
+    } catch (error) {
+      console.error("Error fetching leave types:", error);
+      toast.error("Failed to load leave types");
+    }
+  };
 
   const handleSelectChange = (value: string) => {
     setData({
@@ -67,14 +83,24 @@ export default function SectionLeaveReport() {
       toast.error("Please select a section and leave type");
       return;
     }
+    // Caught here so the user gets a clear message instead of an empty table
+    // when the pickers are the wrong way round.
+    if (data.start_date > data.end_date) {
+      toast.error("From date must be on or before To date");
+      return;
+    }
     setLoader(true);
     try {
       const response = await axios.post("/leaves/section-leave-report/", data);
       setSectionLeaveReport(response.data.attendance);
-      toast.success("Leave applied successfully");
-    } catch (error) {
-      console.error("Error applying leave:", error);
-      toast.error("Failed to apply leave");
+      setOfficialWork(response.data.official_work ?? []);
+      setOfficialWorkSummary(response.data.official_work_summary ?? []);
+      setReportMeta(response.data.report_meta ?? null);
+      setAppliedLeaveType(data.leave_type);
+      toast.success("Report generated successfully");
+    } catch (error: any) {
+      console.error("Error generating report:", error);
+      toast.error(error?.response?.data?.error || "Failed to generate report");
     } finally {
       setLoader(false);
     }
@@ -168,6 +194,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
               <Select
                 options={sectionOptions}
                 placeholder="Select an option"
+                value={data.section ? String(data.section) : ""}
                 onChange={handleSelectChange}
                 className="dark:bg-dark-900"
               />
@@ -182,6 +209,7 @@ const columns: ColumnDef<AttendanceRow>[] = [
                   value: type,
                 }))}
                 placeholder="Select an option"
+                value={data.leave_type}
                 onChange={(value) =>
                   setData({
                     ...data,
@@ -236,6 +264,15 @@ const columns: ColumnDef<AttendanceRow>[] = [
             data={SectionLeaveReport}
             columns={columns}
           />
+
+          {appliedLeaveType === OFFICIAL_WORK && (
+            <OfficialWorkBreakdown
+              records={officialWork}
+              summary={officialWorkSummary}
+            />
+          )}
+
+          <ReportAuditNote meta={reportMeta} />
         </ComponentCard>
       </div>
     </>
