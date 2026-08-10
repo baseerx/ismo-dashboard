@@ -40,6 +40,10 @@ export default function IndividualAttendance() {
   const [options, setOptions] = useState<{ label: string; value: string }[]>(
     []
   );
+  // "Official Work" is deliberately absent: it has its own module and its own
+  // table, and is no longer applied for through this form. The backend rejects
+  // it too, so no new 'Official Work' rows can reach the `leaves` table.
+  // Historical rows already there are untouched and still appear in reports.
   const leavetype = [
     "Medical Leave",
     "Casual Leave",
@@ -48,7 +52,6 @@ export default function IndividualAttendance() {
     "Maternity Leave Second",
     "Maternity Leave Third",
     "External Meeting",
-    "Official Work",
     "Umrah Leave",
     "Hajj Leave",
     "Shift Leave",
