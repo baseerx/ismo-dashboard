@@ -52,7 +52,12 @@ export default function OfficialWork() {
     getEmployeesLeaves();
   }, []);
 
-  const [data, setData] = useState<AttendanceRow>({
+  // The logged-in user's own employee and section-head values, remembered so
+  // a reset restores them without depending on the once-only effect below.
+  const selfDefaults = useRef<Partial<AttendanceRow>>({});
+
+  // A blank form, rebuilt on every call so a reset uses today's date.
+  const buildBlankForm = (): AttendanceRow => ({
     erp_id: 0,
     employee_id: 0,
     leave_type: "",
@@ -63,7 +68,8 @@ export default function OfficialWork() {
     approved_by: "",
     end_date: moment().format("YYYY-MM-DD").toString(),
   });
-  const [fielderror, setFieldError] = useState<AttendanceRow>({
+
+  const buildBlankFieldErrors = (): AttendanceRow => ({
     erp_id: "",
     employee_id: "",
     leave_type: "",
@@ -74,6 +80,22 @@ export default function OfficialWork() {
     approved_by: "",
     end_date: "",
   });
+
+  const [data, setData] = useState<AttendanceRow>(buildBlankForm);
+  const [fielderror, setFieldError] =
+    useState<AttendanceRow>(buildBlankFieldErrors);
+
+  // Return the form to a fresh-page-load state.
+  //
+  // The previous reset blanked status and head_erpid and dropped approved_by
+  // entirely — all three are required by the validation above, and none is
+  // recoverable from the UI, so every submission after the first failed until
+  // the page was reloaded.
+  const resetForm = () => {
+    setData({ ...buildBlankForm(), ...selfDefaults.current });
+    setFieldError(buildBlankFieldErrors());
+    setBalance(null);
+  };
   const approvedby = [
     "CEO ISMO",
     "ED (HR) ISMO",
@@ -110,12 +132,13 @@ export default function OfficialWork() {
       }
     }
 
-    setData((prev) => ({
-      ...prev,
+    selfDefaults.current = {
       employee_id: self.id,
       erp_id: self.erp_id,
       head_erpid: headErpId,
-    }));
+    };
+
+    setData((prev) => ({ ...prev, ...selfDefaults.current }));
   }, [employeesData]);
 
   const selectedEmployee = employeesData.find(
@@ -318,21 +341,15 @@ export default function OfficialWork() {
       } else {
         return;
       }
-        setData({
-          erp_id: 0,
-          employee_id: 0,
-          leave_type: "",
-          reason: "",
-          status: "",
-          head_erpid: "",
-          start_date: moment().format("YYYY-MM-DD").toString(),
-          end_date: moment().format("YYYY-MM-DD").toString(),
-        });
+
+      resetForm();
       getEmployeesLeaves();
-      toast.success("Leave application submitted successfully");
-    } catch (error) {
+      toast.success("Official work application submitted successfully");
+    } catch (error: any) {
       console.error("Error applying for leave:", error);
-      toast.error("Failed to submit leave application");
+      toast.error(
+        error?.response?.data?.error || "Failed to submit leave application"
+      );
     }
   };
 
@@ -435,6 +452,9 @@ export default function OfficialWork() {
                   value: type,
                 }))}
                 placeholder="Select an option"
+                // Controlled so clearing `data` after a submission also
+                // clears what the user sees.
+                value={data.leave_type}
                 onChange={(value) => {
                   setData({ ...data, leave_type: value?.toString() || "" });
                 }}
@@ -502,6 +522,7 @@ export default function OfficialWork() {
                   value: type,
                 }))}
                 placeholder="Select an option"
+                value={data.approved_by}
                 onChange={(value) => {
                   setData({ ...data, approved_by: value?.toString() || "" });
                 }}

@@ -6,6 +6,8 @@ import Label from "../form/Label";
 import Input from "../form/input/InputField";
 
 import DatePicker from "../form/date-picker";
+import PasswordStrengthMeter from "../form/PasswordStrengthMeter";
+import { evaluatePassword } from "../../utils/passwordPolicy";
 import { toast, ToastContainer } from "react-toastify";
 import axios from "../../api/axios";
 
@@ -31,6 +33,16 @@ export default function SignUpForm() {
     if (errors[field]) setErrors((prev) => ({ ...prev, [field]: "" }));
   };
 
+  // Re-evaluated on every render so the checklist tracks what the user types,
+  // and so the personal-details rule reacts to the name/email fields too.
+  const passwordCheck = evaluatePassword(data.password, {
+    username: data.username,
+    email: data.email,
+    firstName: data.first_name,
+    lastName: data.last_name,
+    erpId: data.erpid,
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const fieldErrors: Record<string, string> = {};
@@ -40,9 +52,13 @@ export default function SignUpForm() {
     if (!data.last_name) fieldErrors.last_name = "Last name is required";
     if (!data.email) fieldErrors.email = "Email is required";
     if (!data.password) fieldErrors.password = "Password is required";
+    // Enforce the shared policy, not just presence.
+    else if (!passwordCheck.isValid)
+      fieldErrors.password =
+        passwordCheck.firstError || "Password does not meet the requirements";
     if (!data.verify_password)
       fieldErrors.verify_password = "Confirm your password";
-    if (data.password !== data.verify_password)
+    else if (data.password !== data.verify_password)
       fieldErrors.verify_password = "Passwords do not match";
     if (!data.erpid) fieldErrors.erpid = "ERP ID is required";
 
@@ -178,6 +194,10 @@ export default function SignUpForm() {
                     )}
                   </span>
                 </div>
+                <PasswordStrengthMeter
+                  password={data.password}
+                  evaluation={passwordCheck}
+                />
               </div>
 
               <Input
@@ -187,8 +207,18 @@ export default function SignUpForm() {
                 onChange={(e) =>
                   handleChange("verify_password", e.target.value)
                 }
-                error={!!errors.verify_password}
-                hint={errors.verify_password}
+                error={
+                  !!errors.verify_password ||
+                  (!!data.verify_password &&
+                    data.verify_password !== data.password)
+                }
+                hint={
+                  errors.verify_password ||
+                  (data.verify_password &&
+                  data.verify_password !== data.password
+                    ? "Passwords do not match"
+                    : "")
+                }
               />
 
               <Input
