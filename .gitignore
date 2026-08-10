@@ -2,3 +2,6 @@ backend/.env
 backend/venv/
 frontend/.env
 frontend/node_modules/
+chatbot-backend/venv/
+chatbot-backend/**/__pycache__/
+chatbot-backend/**/*.pyc
