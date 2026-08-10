@@ -12,6 +12,8 @@ export type OfficialWorkRow = {
   days?: number;
   status?: string;
   reason?: string;
+  /** Which table the record came from. */
+  source?: string;
 };
 
 export type OfficialWorkSummaryRow = {
@@ -77,6 +79,21 @@ export default function OfficialWorkBreakdown({
         );
       },
     },
+    {
+      header: "Source",
+      accessorKey: "source",
+      cell: ({ getValue }) => {
+        const value = getValue<string>();
+        // Historical rows came from the leave form before official work moved
+        // to its own module; flagged so the two are never confused.
+        const isHistorical = (value || "").toLowerCase().includes("historical");
+        return (
+          <Badge size="sm" color={isHistorical ? "warning" : "info"}>
+            {value || "—"}
+          </Badge>
+        );
+      },
+    },
     { header: "Reason", accessorKey: "reason" },
   ];
 
@@ -88,8 +105,11 @@ export default function OfficialWorkBreakdown({
         Official Work Records
       </h4>
       <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">
-        Official work is recorded separately from leaves and split across
-        several types. Every matching record is listed below.
+        Official work is recorded in its own module and split across several
+        types. Entries made through the leave form before that module existed
+        are included too, marked <span className="font-medium">Leave form
+        (historical)</span> — the leave form no longer offers Official Work.
+        Day totals count each calendar day once, even if both sources record it.
       </p>
 
       {records.length === 0 ? (
