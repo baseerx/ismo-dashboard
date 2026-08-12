@@ -174,6 +174,8 @@ export default function OfficialWork() {
       await axios.post("/officialwork/handle/", {
         recordid: leaveId,
         action: action,
+        // Recorded on the notification sent to the applicant.
+        actor_erp_id: user.erpid,
       });
       toast.success(`Leave request ${action}d successfully`);
       getEmployeesLeaves();

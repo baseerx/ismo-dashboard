@@ -347,6 +347,8 @@ export default function IndividualAttendance() {
         const response = await axios.post("/leaves/approve/", {
           recordid: Number(empid),
           action: action,
+          // Recorded on the notification sent to the applicant.
+          actor_erp_id: user.erpid,
         });
         console.log("Leave approval response:", response.data);
         getEmployeesLeaves();

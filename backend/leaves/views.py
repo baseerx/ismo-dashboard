@@ -14,6 +14,10 @@ from db import SessionLocal
 from datetime import datetime,date,timedelta
 from holidays.models import Holiday
 from officialwork.models import OfficialWorkModel
+from notifications.service import (
+    notify_leave_decision,
+    notify_leave_submitted,
+)
 from users.models import Employees
 from addtouser.models import CustomUser
 from django.contrib.auth.models import User
@@ -1712,6 +1716,9 @@ def create_leave_request(request):
                 save=True,
             )
 
+        # Let the section head know something is waiting on them.
+        notify_leave_submitted(leave)
+
         return JsonResponse(
             {
                 "message": "Leave request created successfully",
@@ -1738,6 +1745,16 @@ def handle_leave_request(request):
         LeaveModel.objects.filter(pk=leave_id).update(status="approved")
     elif action == "reject":
         LeaveModel.objects.filter(pk=leave_id).update(status="rejected")
+
+    # Tell the applicant. Read back after the update so the notification
+    # reflects what was actually stored, and so a bad id simply produces no
+    # notification instead of an error.
+    if action in ("approve", "reject"):
+        leave = LeaveModel.objects.filter(pk=leave_id).first()
+        if leave is not None:
+            notify_leave_decision(
+                leave, action, actor_erp_id=data.get("actor_erp_id")
+            )
 
     return JsonResponse({"message": "Leave request updated successfully"})
 

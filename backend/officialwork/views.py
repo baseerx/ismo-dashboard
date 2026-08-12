@@ -10,6 +10,10 @@ from db import SessionLocal
 from datetime import datetime, date, timedelta
 from leaves.models import LeaveModel
 from holidays.models import Holiday
+from notifications.service import (
+    notify_official_work_decision,
+    notify_official_work_submitted,
+)
 # Create your views here.
 
 @require_GET
@@ -226,6 +230,9 @@ def create_official_work_request(request):
             end_date=end_date,
         )
 
+        # Let the section head know something is waiting on them.
+        notify_official_work_submitted(official_work)
+
         return JsonResponse(
             {"message": "Official Work request created successfully", "id": official_work.pk},
             status=201
@@ -246,5 +253,14 @@ def handle_leave_request(request):
         OfficialWorkModel.objects.filter(pk=leave_id).update(status="approved")
     elif action == "reject":
         OfficialWorkModel.objects.filter(pk=leave_id).update(status="rejected")
+
+    # Tell the applicant. Read back after the update so a bad id simply
+    # produces no notification rather than an error.
+    if action in ("approve", "reject"):
+        record = OfficialWorkModel.objects.filter(pk=leave_id).first()
+        if record is not None:
+            notify_official_work_decision(
+                record, action, actor_erp_id=data.get("actor_erp_id")
+            )
 
     return JsonResponse({"message": "Leave request updated successfully"})

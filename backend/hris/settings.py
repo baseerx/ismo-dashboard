@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     'assignrights',
     'addtouser',
     'officialwork',
+    'notifications',  # In-app notifications shown in the top navbar
     'rest_framework',  # If you're using Django REST Framework
 ]
 

@@ -40,6 +40,9 @@ export const AuthProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }
         
         localStorage.removeItem("user");
         localStorage.removeItem("token");
+        // Clear the once-per-session flag so the notification panel pops up
+        // again on the next login rather than staying suppressed.
+        sessionStorage.removeItem("ismo:notifications:popupShown");
         // Implement logout logic here
     };
     
