@@ -151,6 +151,18 @@ USE_I18N = True
 
 STATIC_URL = 'static/'
 
+# Uploaded files (currently: medical records attached to leave applications).
+# Served through leaves.views.download_leave_attachment rather than as plain
+# static files, so the stored name never has to be guessable.
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# Attachment limits, applied in leaves.views.create_leave_request.
+LEAVE_ATTACHMENT_MAX_MB = 5
+LEAVE_ATTACHMENT_ALLOWED_EXTENSIONS = [
+    '.pdf', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.doc', '.docx',
+]
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
