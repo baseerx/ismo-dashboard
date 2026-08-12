@@ -399,7 +399,7 @@ def official_work_day_sets(records):
 
 
 def fetch_official_work_module_rows(
-    session, erp_id, range_start, range_end, include_pending=True
+    session, erp_id, range_start, range_end, include_pending=False
 ):
     """Official work module rows for one employee, for the detail reports.
 
@@ -866,11 +866,12 @@ def individual_report(request):
     if range_error:
         return JsonResponse({"error": range_error}, status=400)
 
-    # This report reserves days that are approved *or* still awaiting
-    # approval, so "remaining leaves" never promises a balance an employee
-    # has already committed. The section report deliberately differs — see
-    # section_leave_report.
-    include_pending = True
+    # A leave only counts once it is approved. Pending applications are
+    # excluded from both `leave_count` and `remaining_leaves`, so an
+    # application awaiting a decision does not consume a balance it may never
+    # use. All the leave reports now agree on this — see section_leave_report,
+    # individual_detail_report and leavetype_detail_report.
+    include_pending = False
 
     sessions = SessionLocal()
 
@@ -1005,13 +1006,14 @@ def individual_detail_report(request):
     years_of_service = get_employee_years_of_service(emp[1])
 
     # Casual leave is charged an extra 10 days whenever the employee has taken
-    # Rest & Recreational leave in the period (mirrors get_leave_balance).
+    # Rest & Recreational leave in the period. Only an *approved* R&R leave
+    # triggers the charge, matching the approved-only rule below.
     has_rr_leave = LeaveModel.objects.filter(
         erp_id=emp[1],
         leave_type="Rest & Recreational Leave",
         start_date__lte=end_date,
         end_date__gte=start_date,
-        status__in=["approved", "pending"],
+        status__iexact="approved",
     ).exists()
 
     # Master list of every configured leave type with its annual allocation.
@@ -1021,11 +1023,12 @@ def individual_detail_report(request):
         ORDER BY leave_type
     """)).fetchall()
 
+    # Approved only: a pending application is not a taken leave.
     filtered_leaves_query = text("""
         SELECT start_date, end_date
         FROM leaves
         WHERE erp_id = :erp_id
-          AND status IN ('approved', 'pending')
+          AND LOWER(status) = 'approved'
           AND leave_type = :leave_type
           AND start_date <= :end_date
           AND end_date >= :start_date
@@ -1037,7 +1040,7 @@ def individual_detail_report(request):
     official_work_module_days = set()
     if any(is_official_work(row[0]) for row in all_types):
         for ow_row in fetch_official_work_module_rows(
-            sessions, emp[1], start_date, end_date
+            sessions, emp[1], start_date, end_date, include_pending=False
         ):
             official_work_module_days.update(
                 clipped_days(ow_row[1], ow_row[2], start_date, end_date)
@@ -1177,12 +1180,13 @@ def leavetype_detail_report(request):
     # Process each employee
     for emp in employees:
         # Get all leaves of specific type for this employee in date range
-        leaves_query = text(""" 
+        # Approved only: a pending application is not a taken leave.
+        leaves_query = text("""
             SELECT id, start_date, end_date, reason, status
             FROM leaves
             WHERE erp_id = :erp_id
               AND leave_type = :leave_type
-              AND status IN ('approved', 'pending')
+              AND LOWER(status) = 'approved'
               AND start_date <= :end_date
               AND end_date >= :start_date
             ORDER BY start_date ASC
@@ -1219,7 +1223,7 @@ def leavetype_detail_report(request):
         # historical entries made before the module existed.
         if is_official_work(leave_type):
             for ow_row in fetch_official_work_module_rows(
-                sessions, emp[1], start_date, end_date
+                sessions, emp[1], start_date, end_date, include_pending=False
             ):
                 days = clipped_days(ow_row[1], ow_row[2], start_date, end_date)
                 if not days:
