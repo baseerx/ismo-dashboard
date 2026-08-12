@@ -16,6 +16,19 @@ class LeaveModel(models.Model):
     status = models.CharField(max_length=20, default='pending')  # e.g., Pending, Approved, Rejected
     created_at = models.DateTimeField(default=timezone.now)
 
+    # Supporting document for medical / sick leave. Stored under a generated
+    # name rather than the uploaded one: these are medical records, and the
+    # original filename often carries the patient's name.
+    attachment = models.FileField(
+        upload_to='leave_attachments/%Y/%m/',
+        null=True,
+        blank=True,
+    )
+    # The name the employee uploaded, kept for display only.
+    attachment_original_name = models.CharField(
+        max_length=255, null=True, blank=True
+    )
+
     class Meta:
         db_table = 'leaves'
 

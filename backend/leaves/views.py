@@ -1,10 +1,14 @@
 from django.shortcuts import render
-from django.http import JsonResponse
+from django.http import JsonResponse, FileResponse
+from django.conf import settings
+from django.core.files.base import ContentFile
 from .models import LeaveModel, LeaveTypeCountModel
 from django.views.decorators.http import require_GET,require_POST
 from django.views.decorators.csrf import csrf_exempt
 from django.db.models import Q
 import json
+import os
+import uuid
 from sqlalchemy import text, bindparam
 from db import SessionLocal
 from datetime import datetime,date,timedelta
@@ -78,7 +82,20 @@ def get_leave_requests(request,erpid):
         ORDER BY l.created_at DESC
     """)
     result = sessions.execute(query, {"epid": erpid}).fetchall()
-    
+
+    # Attachment details come from the ORM so the download URL is built the
+    # same way everywhere. One query for the whole page, not one per row.
+    leave_ids = [row[0] for row in result]
+    attachments = {
+        leave.pk: attachment_payload(leave, request)
+        for leave in LeaveModel.objects.filter(pk__in=leave_ids)
+    } if leave_ids else {}
+    no_attachment = {
+        "has_attachment": False,
+        "attachment_name": None,
+        "attachment_url": None,
+    }
+
     for row in result:
         data.append({
             "id": row[0],
@@ -92,7 +109,8 @@ def get_leave_requests(request,erpid):
             "status": row[10],
             "created_at": row[11].strftime('%Y-%m-%d %H:%M:%S'),
             "head_erpid": '-' if row[5]==0 else row[5],
-            "head_name": row[6]
+            "head_name": row[6],
+            **attachments.get(row[0], no_attachment),
         })
     sessions.close()
     return JsonResponse({"leaves": data},status=200)
@@ -413,6 +431,116 @@ def fetch_official_work_module_rows(
 
 def is_official_work(leave_type):
     return (leave_type or "").strip().lower() == OFFICIAL_WORK_LEAVE_TYPE.lower()
+
+
+# ==========================================================================
+# Medical / sick leave attachments
+# ==========================================================================
+
+# Leave types that may carry a supporting medical document. Matched
+# case-insensitively; "Sick Leave" is included because some sections use that
+# wording even though the configured type is "Medical Leave".
+MEDICAL_LEAVE_TYPES = {"medical leave", "sick leave"}
+
+
+def allows_attachment(leave_type):
+    return (leave_type or "").strip().lower() in MEDICAL_LEAVE_TYPES
+
+
+def build_attachment_name(original_name):
+    """A random storage name that keeps only the extension.
+
+    Medical filenames routinely contain the patient's name and the clinic, so
+    the uploaded name is never used on disk — it is kept in a separate column
+    for display and the stored file gets an unguessable name instead.
+    """
+    extension = os.path.splitext(original_name or "")[1].lower()
+    return f"{uuid.uuid4().hex}{extension}"
+
+
+def validate_attachment(upload, leave_type):
+    """Returns an error string, or None when the upload is acceptable."""
+    if upload is None:
+        return None
+
+    if not allows_attachment(leave_type):
+        return (
+            "Attachments are only accepted for medical or sick leave."
+        )
+
+    extension = os.path.splitext(upload.name or "")[1].lower()
+    allowed = [
+        ext.lower()
+        for ext in getattr(settings, "LEAVE_ATTACHMENT_ALLOWED_EXTENSIONS", [])
+    ]
+    if allowed and extension not in allowed:
+        return (
+            "Unsupported file type. Allowed: " + ", ".join(sorted(allowed))
+        )
+
+    max_mb = getattr(settings, "LEAVE_ATTACHMENT_MAX_MB", 5)
+    if upload.size > max_mb * 1024 * 1024:
+        return f"Attachment must be {max_mb} MB or smaller."
+
+    return None
+
+
+def attachment_payload(leave, request=None):
+    """Attachment fields for a leave row, or empty values when there is none.
+
+    `has_attachment` lets the record table render a View link without having
+    to reason about whether the URL is usable.
+    """
+    name = getattr(leave, "attachment", None)
+    if not name:
+        return {
+            "has_attachment": False,
+            "attachment_name": None,
+            "attachment_url": None,
+        }
+
+    path = f"/api/leaves/attachment/{leave.pk}/"
+    return {
+        "has_attachment": True,
+        "attachment_name": (
+            getattr(leave, "attachment_original_name", None)
+            or os.path.basename(str(name))
+        ),
+        # Absolute so the frontend never has to derive a media host.
+        "attachment_url": (
+            request.build_absolute_uri(path) if request is not None else path
+        ),
+    }
+
+
+@require_GET
+def download_leave_attachment(request, leave_id):
+    """Stream a leave attachment.
+
+    Routed through a view rather than exposed under MEDIA_URL so the stored
+    filename stays unguessable and access can be restricted here later — see
+    the note in the handover: these are medical records and this project's API
+    currently has no authentication layer to hook into.
+    """
+    leave = LeaveModel.objects.filter(pk=leave_id).first()
+    if leave is None or not leave.attachment:
+        return JsonResponse({"error": "Attachment not found"}, status=404)
+
+    try:
+        handle = leave.attachment.open("rb")
+    except (FileNotFoundError, ValueError):
+        # Row references a file that is no longer on disk.
+        return JsonResponse({"error": "Attachment file is missing"}, status=404)
+
+    display_name = (
+        leave.attachment_original_name
+        or os.path.basename(leave.attachment.name)
+    )
+    response = FileResponse(handle, as_attachment=False)
+    # Quotes escaped so a filename containing one cannot break the header.
+    safe_name = display_name.replace('"', "")
+    response["Content-Disposition"] = f'inline; filename="{safe_name}"'
+    return response
 
 
 def strip_internal_fields(records):
@@ -1278,7 +1406,16 @@ def get_leave_balance(request):
 @require_POST
 def create_leave_request(request):
     try:
-        data = json.loads(request.body.decode("utf-8"))
+        # The form posts multipart/form-data when a medical record is attached
+        # and JSON otherwise, so accept both.
+        upload = None
+        if request.content_type and request.content_type.startswith(
+            "multipart/form-data"
+        ):
+            data = {key: value for key, value in request.POST.items()}
+            upload = request.FILES.get("attachment")
+        else:
+            data = json.loads(request.body.decode("utf-8"))
 
         erp_id = data.get("erp_id")
         employee_id = data.get("employee_id")
@@ -1302,7 +1439,7 @@ def create_leave_request(request):
         # offers the option; this rejects it server side too, so no new
         # 'Official Work' rows can land in `leaves` by any route. Existing
         # historical rows are left untouched and still appear in the reports.
-        if (leave_type or "").strip().lower() == OFFICIAL_WORK_LEAVE_TYPE.lower():
+        if is_official_work(leave_type):
             return JsonResponse(
                 {
                     "error": (
@@ -1312,6 +1449,13 @@ def create_leave_request(request):
                 },
                 status=400
             )
+
+        # --------------------------------------------------
+        # ATTACHMENT VALIDATION (medical / sick leave only)
+        # --------------------------------------------------
+        attachment_error = validate_attachment(upload, leave_type)
+        if attachment_error:
+            return JsonResponse({"error": attachment_error}, status=400)
 
         # --------------------------------------------------
         # DATE PARSING
@@ -1537,6 +1681,10 @@ def create_leave_request(request):
         # --------------------------------------------------
         # CREATE LEAVE REQUEST, Entry made by is erp id of logged in user
         # --------------------------------------------------
+        # Every application starts as pending and goes to the section head for
+        # approval — the same rule for grade 9 and above as for everyone else.
+        # The status is fixed here rather than taken from the request, so it
+        # cannot be set by whatever the client posts.
         leave = LeaveModel.objects.create(
             erp_id=erp_id,
             employee_id=employee_id,
@@ -1545,18 +1693,29 @@ def create_leave_request(request):
             leave_type=leave_type,
             reason=data.get("reason", ""),
             total_days=requested_days,
-            status=data.get("status", "pending"),
+            status="pending",
             approved_by=data.get("approved_by", ""),
             start_date=start_date,
             end_date=end_date,
         )
 
+        if upload is not None:
+            # Stored under a generated name; the uploaded one is display only.
+            leave.attachment_original_name = upload.name
+            leave.attachment.save(
+                build_attachment_name(upload.name),
+                ContentFile(upload.read()),
+                save=True,
+            )
+
         return JsonResponse(
             {
                 "message": "Leave request created successfully",
                 "leave_id": leave.pk,
+                "status": leave.status,
                 "financial_year": f"{fy_start} to {fy_end}",
                 "remaining_leaves": remaining_leaves - requested_days,
+                **attachment_payload(leave, request),
             },
             status=201
         )
