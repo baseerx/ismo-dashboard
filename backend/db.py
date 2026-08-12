@@ -7,7 +7,7 @@ username = "sa"
 password = quote_plus("Sa@157")
 host = "192.168.157.51"
 port = "9090"
-database = "Attendance_Stage"
+database = "Attendance_System"
 driver = "ODBC+Driver+17+for+SQL+Server"
 
 # Build SQLAlchemy DSN
