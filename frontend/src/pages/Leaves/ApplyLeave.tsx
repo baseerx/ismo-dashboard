@@ -17,9 +17,23 @@ import TextArea from "../../components/form/input/TextArea";
 import Badge from "../../components/ui/badge/Badge";
 import { LeaveIcon, InfoIcon } from "../../icons";
 
+// Leave types that may carry a supporting medical document. Kept in step with
+// MEDICAL_LEAVE_TYPES in leaves/views.py, which enforces the same rule.
+const MEDICAL_LEAVE_TYPES = ["medical leave", "sick leave"];
+
+// Mirrors LEAVE_ATTACHMENT_* in hris/settings.py. Checked here for immediate
+// feedback; the backend re-checks because this can be bypassed.
+const ATTACHMENT_EXTENSIONS = [
+  ".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".doc", ".docx",
+];
+const ATTACHMENT_MAX_MB = 5;
+
 type AttendanceRow = {
   id?: number;
   employee_id: any;
+  has_attachment?: boolean;
+  attachment_name?: string | null;
+  attachment_url?: string | null;
   erp_id: any;
   entry_made_by?: any;
   leave_type: string;
@@ -104,9 +118,13 @@ export default function IndividualAttendance() {
     entry_made_by: user.erpid,
     leave_type: "",
     reason: "",
-    status: user.grade_id >= 9 ? "approved" : "pending",
+    // Same approval rule for every grade: an application is created as
+    // pending and goes to the section head. Grade 9 and above used to be
+    // auto-approved with themselves as the approver. The backend now fixes
+    // the status regardless of what is posted.
+    status: "pending",
     approved_by: "",
-    head: user.grade_id >= 9 ? user.erpid : "",
+    head: "",
     start_date: moment().format("YYYY-MM-DD").toString(),
     end_date: moment().format("YYYY-MM-DD").toString(),
   });
@@ -127,6 +145,42 @@ export default function IndividualAttendance() {
   const [fielderror, setFieldError] =
     useState<AttendanceRow>(buildBlankFieldErrors);
 
+  // Supporting medical record, only offered for medical / sick leave.
+  const [attachment, setAttachment] = useState<File | null>(null);
+  const [attachmentError, setAttachmentError] = useState("");
+  // Bumped on reset to clear the native file input, which cannot be
+  // controlled from state.
+  const [attachmentKey, setAttachmentKey] = useState(0);
+
+  const attachmentAllowed = MEDICAL_LEAVE_TYPES.includes(
+    (data.leave_type || "").trim().toLowerCase()
+  );
+
+  const pickAttachment = (file: File | null) => {
+    if (!file) {
+      setAttachment(null);
+      setAttachmentError("");
+      return;
+    }
+
+    const extension = `.${(file.name.split(".").pop() || "").toLowerCase()}`;
+    if (!ATTACHMENT_EXTENSIONS.includes(extension)) {
+      setAttachment(null);
+      setAttachmentError(
+        `Unsupported file type. Allowed: ${ATTACHMENT_EXTENSIONS.join(", ")}`
+      );
+      return;
+    }
+    if (file.size > ATTACHMENT_MAX_MB * 1024 * 1024) {
+      setAttachment(null);
+      setAttachmentError(`File must be ${ATTACHMENT_MAX_MB} MB or smaller.`);
+      return;
+    }
+
+    setAttachment(file);
+    setAttachmentError("");
+  };
+
   // Return the form to exactly the state a fresh page load produces.
   //
   // The previous reset rebuilt `data` from a partial literal that omitted
@@ -139,7 +193,21 @@ export default function IndividualAttendance() {
     setData({ ...buildBlankForm(), ...selfDefaults.current });
     setFieldError(buildBlankFieldErrors());
     setBalance(null);
+    setAttachment(null);
+    setAttachmentError("");
+    // Remounts the file input; its value cannot be cleared from state.
+    setAttachmentKey((key) => key + 1);
   };
+
+  // Drop a chosen file if the leave type changes to one that cannot carry an
+  // attachment, so a medical record is never posted against another type.
+  useEffect(() => {
+    if (!attachmentAllowed && (attachment || attachmentError)) {
+      setAttachment(null);
+      setAttachmentError("");
+      setAttachmentKey((key) => key + 1);
+    }
+  }, [attachmentAllowed]);
 
   useEffect(() => {
     fetchEmployeesOptions();
@@ -158,20 +226,22 @@ export default function IndividualAttendance() {
 
     initializedSelf.current = true;
 
-    let headErpId: any = user.grade_id >= 9 ? user.erpid : "";
-    if (user.grade_id < 9) {
-      const sectionHeads = employeesData.filter(
-        (e: any) =>
-          Number(e.section_id) === Number(self.section_id) &&
-          Number(e.grade_id) >= 9 &&
-          Number(e.erp_id) !== Number(self.erp_id)
+    // Derived for every grade now, not only below grade 9. A grade 9+
+    // applicant gets the highest-graded *other* person in their section, so
+    // nobody is proposed as their own approver. If the section has no one
+    // senior, this stays blank and the visible dropdown lets them choose.
+    let headErpId: any = "";
+    const sectionHeads = employeesData.filter(
+      (e: any) =>
+        Number(e.section_id) === Number(self.section_id) &&
+        Number(e.grade_id) >= 9 &&
+        Number(e.erp_id) !== Number(self.erp_id)
+    );
+    if (sectionHeads.length > 0) {
+      const topHead = sectionHeads.reduce((max: any, e: any) =>
+        Number(e.grade_id) > Number(max.grade_id) ? e : max
       );
-      if (sectionHeads.length > 0) {
-        const topHead = sectionHeads.reduce((max: any, e: any) =>
-          Number(e.grade_id) > Number(max.grade_id) ? e : max
-        );
-        headErpId = topHead.erp_id;
-      }
+      headErpId = topHead.erp_id;
     }
 
     selfDefaults.current = {
@@ -305,6 +375,11 @@ export default function IndividualAttendance() {
             "reason",
             "status",
             "created_at",
+            // Needed by the Attachment column — this pick list is a
+            // whitelist, so new fields must be added here to survive.
+            "has_attachment",
+            "attachment_name",
+            "attachment_url",
           ]);
           return picked;
         }
@@ -353,6 +428,24 @@ export default function IndividualAttendance() {
     {
       header: "Reason",
       accessorKey: "reason",
+    },
+    {
+      header: "Attachment",
+      id: "attachment",
+      cell: ({ row }) =>
+        row.original.has_attachment && row.original.attachment_url ? (
+          <a
+            href={row.original.attachment_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={row.original.attachment_name || "Attachment"}
+            className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-0.5 text-sm font-medium text-blue-600 hover:underline dark:bg-blue-500/15 dark:text-blue-400"
+          >
+            View
+          </a>
+        ) : (
+          <span className="text-gray-400 dark:text-gray-500">—</span>
+        ),
     },
     {
       header: "Status",
@@ -438,9 +531,31 @@ export default function IndividualAttendance() {
         return;
       }
 
+      if (attachmentError) {
+        toast.error(attachmentError);
+        return;
+      }
+
       if (window.confirm("Are you sure you want to apply for this leave?")) {
         try {
-          const response = await axios.post("/leaves/apply/", data);
+          let response;
+          if (attachment && attachmentAllowed) {
+            // Multipart when a medical record is attached. Content-Type is
+            // left unset so the browser adds the multipart boundary — the
+            // shared axios instance otherwise forces application/json.
+            const form = new FormData();
+            Object.entries(data).forEach(([key, value]) => {
+              if (value !== undefined && value !== null) {
+                form.append(key, String(value));
+              }
+            });
+            form.append("attachment", attachment);
+            response = await axios.post("/leaves/apply/", form, {
+              headers: { "Content-Type": undefined },
+            });
+          } else {
+            response = await axios.post("/leaves/apply/", data);
+          }
           console.log("Leave application response:", response.data);
         } catch (error: any) {
           const errorMessage = error.response?.data?.error || "Failed to submit leave application, Either limit exceeded or leave limit not found";
@@ -561,11 +676,7 @@ export default function IndividualAttendance() {
               <SearchableDropdown
                 options={options}
                 placeholder="Select a employee"
-                label={
-                  user.grade_id < 9
-                    ? `Employees`
-                    : `Employee  (Status for Grade 9 and above is auto approved)`
-                }
+                label="Employees"
                 id="employee-dropdown"
                 value={
                   options.find(
@@ -630,31 +741,29 @@ export default function IndividualAttendance() {
                 }}
               />
             </div>
-            <div className="flex justify-center items-center gap-4 my-3">
-              {user.grade_id < 9 && (
-                <div className="w-full">
-                  <SearchableDropdown
-                    options={options}
-                    placeholder="select approving authority"
-                    label="Section Head"
-                    id="head-dropdown"
-                    value={
-                      options.find(
-                        (opt) => opt.value.split("-")[0] === `${data.head}`
-                      )?.value || ""
-                    }
-                    onChange={(value) => {
-                      const vals = value?.toString().split("-");
-                      setData({
-                        ...data,
-                        head: parseInt(vals[0]),
-                      });
-                    }}
-                    error={!!fielderror.head}
-                    hint={fielderror.head}
-                  />
-                </div>
-              )}
+            {/* Shown for every grade — grade 9 and above used to have this
+                field hidden and were auto-approved. */}
+            <div className="w-full my-3">
+              <SearchableDropdown
+                options={options}
+                placeholder="select approving authority"
+                label="Section Head"
+                id="head-dropdown"
+                value={
+                  options.find(
+                    (opt) => opt.value.split("-")[0] === `${data.head}`
+                  )?.value || ""
+                }
+                onChange={(value) => {
+                  const vals = value?.toString().split("-");
+                  setData({
+                    ...data,
+                    head: parseInt(vals[0]),
+                  });
+                }}
+                error={!!fielderror.head}
+                hint={fielderror.head}
+              />
             </div>
             <div className="w-full my-3">
               <Label>Approved By</Label>
@@ -673,6 +782,40 @@ export default function IndividualAttendance() {
                 hint={fielderror.approved_by}
               />
             </div>
+            {/* Medical record upload — only for medical / sick leave. */}
+            {attachmentAllowed && (
+              <div className="w-full my-3">
+                <Label>
+                  Medical Record{" "}
+                  <span className="text-gray-400">(optional)</span>
+                </Label>
+                <input
+                  key={attachmentKey}
+                  type="file"
+                  accept={ATTACHMENT_EXTENSIONS.join(",")}
+                  onChange={(e) => pickAttachment(e.target.files?.[0] ?? null)}
+                  className={`h-11 w-full rounded-lg border px-4 py-2.5 text-sm text-gray-800 file:mr-3 file:rounded file:border-0 file:bg-brand-50 file:px-3 file:py-1 file:text-sm file:text-brand-600 dark:bg-gray-900 dark:text-white/90 dark:file:bg-brand-500/15 dark:file:text-brand-400 ${
+                    attachmentError
+                      ? "border-error-500"
+                      : "border-gray-300 dark:border-gray-700"
+                  }`}
+                />
+                {attachmentError ? (
+                  <p className="mt-1 text-xs text-error-600 dark:text-error-500">
+                    {attachmentError}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {attachment
+                      ? `Selected: ${attachment.name}`
+                      : `Attach a prescription or medical certificate. ${ATTACHMENT_EXTENSIONS.join(
+                          ", "
+                        )} up to ${ATTACHMENT_MAX_MB} MB.`}
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="my-5">
               <TextArea
                 value={data.reason}
