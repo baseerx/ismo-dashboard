@@ -39,6 +39,19 @@ MIN_SERVICE_YEARS_LEAVE_TYPES = {
 }
 
 
+def current_financial_year(today=None):
+    """The Pakistan financial year containing `today`: 1 July -> 30 June.
+
+    The same rule get_leaves_count and get_leave_balance apply inline; kept
+    here so anything new shares one definition instead of another copy.
+    """
+    today = today or date.today()
+
+    if today.month >= 7:
+        return date(today.year, 7, 1), date(today.year + 1, 6, 30)
+    return date(today.year - 1, 7, 1), date(today.year, 6, 30)
+
+
 def get_employee_years_of_service(erp_id):
     """Returns years of service for an employee (based on their account's
     date_joined), or None if it cannot be determined."""
@@ -61,6 +74,12 @@ def get_leave_requests(request,erpid):
     leaves = LeaveModel.objects.all()
     data=[]
     sessions= SessionLocal()
+
+    # The table shows the current financial year only. Overlap rather than
+    # start_date alone, so a leave that straddles 30 June still appears in
+    # both years it touches — the same rule the reports use.
+    fy_start, fy_end = current_financial_year()
+
     query = text("""
         SELECT
             l.id,
@@ -82,10 +101,16 @@ def get_leave_requests(request,erpid):
             ON l.head_erpid = h.erp_id
         WHERE e.flag = 1
           AND e.section_id = (SELECT section_id FROM employees WHERE erp_id = :epid)
-    
+          AND l.start_date IS NOT NULL
+          AND l.end_date IS NOT NULL
+          AND l.start_date <= :fy_end
+          AND l.end_date >= :fy_start
         ORDER BY l.created_at DESC
     """)
-    result = sessions.execute(query, {"epid": erpid}).fetchall()
+    result = sessions.execute(
+        query,
+        {"epid": erpid, "fy_start": fy_start, "fy_end": fy_end},
+    ).fetchall()
 
     # Attachment details come from the ORM so the download URL is built the
     # same way everywhere. One query for the whole page, not one per row.
@@ -117,7 +142,19 @@ def get_leave_requests(request,erpid):
             **attachments.get(row[0], no_attachment),
         })
     sessions.close()
-    return JsonResponse({"leaves": data},status=200)
+    return JsonResponse(
+        {
+            "leaves": data,
+            # Returned so the table can state which year it is showing,
+            # rather than looking as though older records were lost.
+            "financial_year": {
+                "start": fy_start.strftime("%d-%m-%Y"),
+                "end": fy_end.strftime("%d-%m-%Y"),
+                "label": f"{fy_start.year}-{fy_end.year}",
+            },
+        },
+        status=200,
+    )
 
 
 

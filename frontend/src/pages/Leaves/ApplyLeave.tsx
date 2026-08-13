@@ -145,6 +145,14 @@ export default function IndividualAttendance() {
   const [fielderror, setFieldError] =
     useState<AttendanceRow>(buildBlankFieldErrors);
 
+  // The table lists the current financial year only; the server decides which
+  // year that is and reports it back so the heading can say so.
+  const [financialYear, setFinancialYear] = useState<{
+    start: string;
+    end: string;
+    label: string;
+  } | null>(null);
+
   // Supporting medical record, only offered for medical / sick leave.
   const [attachment, setAttachment] = useState<File | null>(null);
   const [attachmentError, setAttachmentError] = useState("");
@@ -387,6 +395,7 @@ export default function IndividualAttendance() {
         }
       );
       setLeaves(cleanedData);
+      setFinancialYear(response.data.financial_year ?? null);
     } catch (error) {
       console.error("Error fetching employee leaves:", error);
       toast.error("Failed to load employee leaves");
@@ -842,6 +851,17 @@ export default function IndividualAttendance() {
             >
               Apply
             </Button>
+          </div>
+          <div className="mt-8 mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h4 className="text-lg font-semibold text-gray-800 dark:text-white/90">
+              Leave Records
+            </h4>
+            {financialYear && (
+              <span className="text-sm text-gray-500 dark:text-gray-400">
+                Financial year {financialYear.label} ({financialYear.start} to{" "}
+                {financialYear.end})
+              </span>
+            )}
           </div>
           <EnhancedDataTable<AttendanceRow> data={leaves} columns={columns} />
         </ComponentCard>

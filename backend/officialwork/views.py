@@ -10,6 +10,10 @@ from db import SessionLocal
 from datetime import datetime, date, timedelta
 from leaves.models import LeaveModel
 from holidays.models import Holiday
+# The 1 July -> 30 June rule lives with the leave views, which own the
+# financial-year concept in this project. Imported rather than copied so the
+# two tables can never disagree on the year they are showing.
+from leaves.views import current_financial_year
 from notifications.service import (
     notify_official_work_decision,
     notify_official_work_submitted,
@@ -21,6 +25,12 @@ def get_leave_requests(request,erpid):
     leaves = OfficialWorkModel.objects.all()
     data=[]
     sessions= SessionLocal()
+
+    # Current financial year only, matching the leave table. Overlap rather
+    # than start_date alone, so a tour straddling 30 June still shows in both
+    # years it touches.
+    fy_start, fy_end = current_financial_year()
+
     query = text("""
         SELECT
             l.id,
@@ -40,9 +50,16 @@ def get_leave_requests(request,erpid):
         LEFT JOIN employees h ON l.head_erpid = h.erp_id
         WHERE e.flag = 1
           AND e.section_id = (SELECT section_id FROM employees WHERE erp_id = :epid)
+          AND l.start_date IS NOT NULL
+          AND l.end_date IS NOT NULL
+          AND l.start_date <= :fy_end
+          AND l.end_date >= :fy_start
         ORDER BY l.created_at DESC
     """)
-    result = sessions.execute(query, {"epid": erpid}).fetchall()
+    result = sessions.execute(
+        query,
+        {"epid": erpid, "fy_start": fy_start, "fy_end": fy_end},
+    ).fetchall()
     
     for row in result:
         data.append({
@@ -59,7 +76,16 @@ def get_leave_requests(request,erpid):
             "head_erpid": '-' if row[5] == 0 else row[5],
         })
     sessions.close()
-    return JsonResponse({"leaves": data})
+    return JsonResponse({
+        "leaves": data,
+        # Returned so the table can state which year it is showing, rather
+        # than looking as though older records were lost.
+        "financial_year": {
+            "start": fy_start.strftime("%d-%m-%Y"),
+            "end": fy_end.strftime("%d-%m-%Y"),
+            "label": f"{fy_start.year}-{fy_end.year}",
+        },
+    })
 
 
 @csrf_exempt

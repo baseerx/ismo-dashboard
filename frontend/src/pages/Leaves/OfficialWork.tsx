@@ -47,6 +47,14 @@ export default function OfficialWork() {
   } | null>(null);
   const initializedSelf = useRef(false);
 
+  // The table lists the current financial year only; the server decides which
+  // year that is and reports it back so the heading can say so.
+  const [financialYear, setFinancialYear] = useState<{
+    start: string;
+    end: string;
+    label: string;
+  } | null>(null);
+
   useEffect(() => {
     fetchEmployeesOptions();
     getEmployeesLeaves();
@@ -215,6 +223,7 @@ export default function OfficialWork() {
         }
       );
       setLeaves(cleanedData);
+      setFinancialYear(response.data.financial_year ?? null);
       toast.dismiss(loadingToastId);
     } catch (error) {
       console.error("Error fetching employee leaves:", error);
@@ -557,6 +566,17 @@ export default function OfficialWork() {
             >
               Apply
             </Button>
+          </div>
+          <div className="mt-8 mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h4 className="text-lg font-semibold text-gray-800 dark:text-white/90">
+              Official Work Records
+            </h4>
+            {financialYear && (
+              <span className="text-sm text-gray-500 dark:text-gray-400">
+                Financial year {financialYear.label} ({financialYear.start} to{" "}
+                {financialYear.end})
+              </span>
+            )}
           </div>
           <EnhancedDataTable<AttendanceRow> data={leaves} columns={columns} />
         </ComponentCard>
