@@ -5,6 +5,8 @@ pulling in request handling, and so the routes a notification points at are
 defined in exactly one place.
 """
 
+from users.models import Employees
+
 from .models import Notification
 
 
@@ -12,6 +14,64 @@ from .models import Notification
 # a notification whose link does not resolve just lands on a blank page.
 ROUTE_MY_LEAVES = "/leaves/apply"
 ROUTE_OFFICIAL_WORK = "/leaves/official-work"
+
+
+def _erp(erp_id):
+    """An ERP id as a positive int, or None if it is unset or not a number."""
+    try:
+        erp = int(erp_id or 0)
+    except (TypeError, ValueError):
+        return None
+
+    # 0 is the "unset" value used across these tables for head_erpid.
+    return erp if erp > 0 else None
+
+
+def employee_name(erp_id):
+    """Name held against an ERP id, or None when it cannot be resolved.
+
+    Never raises: a notification is written as a side effect of the real
+    action, so a missing or duplicated employees row must degrade the text,
+    not the request.
+    """
+    erp = _erp(erp_id)
+    if erp is None:
+        return None
+
+    try:
+        # An ERP id can appear more than once in `employees` when someone has
+        # been re-entered; the current row is the one carrying flag=1, so
+        # order by flag descending and take that one.
+        name = (
+            Employees.objects.filter(erp_id=erp)
+            .order_by('-flag')
+            .values_list('name', flat=True)
+            .first()
+        )
+    except Exception:
+        return None
+
+    return (name or "").strip() or None
+
+
+def employee_label(erp_id, with_erp=True):
+    """How a person is named inside notification text.
+
+    "Ali Khan (ERP 1234)" by default — the head still needs the ERP id to
+    find the row in the leave table — and the bare "Ali Khan" with
+    `with_erp=False`, for the trailing "approved by ..." where the id adds
+    nothing. Degrades to "ERP 1234" when the name cannot be resolved, and to
+    "" when there is no usable id at all.
+    """
+    erp = _erp(erp_id)
+    if erp is None:
+        return ""
+
+    name = employee_name(erp)
+    if not name:
+        return f"ERP {erp}"
+
+    return f"{name} (ERP {erp})" if with_erp else name
 
 
 def notify(
@@ -30,13 +90,8 @@ def notify(
     real action (approving a leave, applying for one), and failing to record
     it must never roll back or 500 the action itself.
     """
-    try:
-        recipient = int(recipient_erp_id or 0)
-    except (TypeError, ValueError):
-        return None
-
-    # 0 is the "unset" value used across these tables for head_erpid.
-    if recipient <= 0:
+    recipient = _erp(recipient_erp_id)
+    if recipient is None:
         return None
 
     try:
@@ -64,6 +119,16 @@ def _describe(leave_type, start_date, end_date):
     return f"{leave_type or 'Leave'}{span}"
 
 
+def _by_actor(actor_erp_id):
+    """" by Ali Khan" for the approver, or "" when no actor was recorded.
+
+    Older records were written without one, so the sentence has to read
+    correctly with the clause absent.
+    """
+    actor = employee_label(actor_erp_id, with_erp=False)
+    return f" by {actor}" if actor else ""
+
+
 def notify_leave_decision(leave, action, actor_erp_id=None):
     """Tell the applicant their leave was approved or rejected."""
     decided = "approved" if action == "approve" else "rejected"
@@ -74,7 +139,7 @@ def notify_leave_decision(leave, action, actor_erp_id=None):
         category="leave",
         event=decided,
         title=f"Your leave was {decided}",
-        message=f"{detail} has been {decided}.",
+        message=f"{detail} has been {decided}{_by_actor(actor_erp_id)}.",
         link=ROUTE_MY_LEAVES,
         related_id=leave.pk,
         actor_erp_id=actor_erp_id,
@@ -90,7 +155,7 @@ def notify_leave_submitted(leave):
         category="leave",
         event="awaiting_approval",
         title="A leave request needs your approval",
-        message=f"ERP {leave.erp_id} applied for {detail}.",
+        message=f"{employee_label(leave.erp_id)} applied for {detail}.",
         link=ROUTE_MY_LEAVES,
         related_id=leave.pk,
         actor_erp_id=leave.erp_id,
@@ -106,7 +171,7 @@ def notify_official_work_decision(record, action, actor_erp_id=None):
         category="official_work",
         event=decided,
         title=f"Your official work was {decided}",
-        message=f"{detail} has been {decided}.",
+        message=f"{detail} has been {decided}{_by_actor(actor_erp_id)}.",
         link=ROUTE_OFFICIAL_WORK,
         related_id=record.pk,
         actor_erp_id=actor_erp_id,
@@ -121,7 +186,7 @@ def notify_official_work_submitted(record):
         category="official_work",
         event="awaiting_approval",
         title="An official work request needs your approval",
-        message=f"ERP {record.erp_id} applied for {detail}.",
+        message=f"{employee_label(record.erp_id)} applied for {detail}.",
         link=ROUTE_OFFICIAL_WORK,
         related_id=record.pk,
         actor_erp_id=record.erp_id,
