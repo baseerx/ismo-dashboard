@@ -1,23 +1,26 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.rag.retriever import retrieve_top_chunks
 
 logger = logging.getLogger(__name__)
 
 
-async def search_documents(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-    """Searches HR policy documents/SOPs via the existing RAG pipeline."""
-    logger.info("search_documents: query=%r top_k=%d", query, top_k)
+async def search_documents(
+    query: str, top_k: Optional[int] = None, document_id: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Search the trained HR documents.
 
-    chunks = retrieve_top_chunks(query, top_k=top_k)
+    Returns [] when nothing is close enough to be relevant, which the caller
+    must treat as "not in the documents" rather than filling the gap from the
+    model's own knowledge of HR practice elsewhere.
+    """
+    if not (query or "").strip():
+        return []
 
-    distances = [c.get("distance") for c in chunks]
-    logger.info("search_documents: query=%r retrieved %d chunk(s), distances=%s",
-                query, len(chunks), distances)
+    chunks = retrieve_top_chunks(query, top_k=top_k, document_id=document_id)
 
     if not chunks:
-        logger.warning("search_documents: query=%r returned 0 chunks - check that "
-                        "documents are actually indexed (status=indexed) for this collection", query)
+        logger.info("search_documents: nothing relevant for %r", query[:80])
 
     return chunks

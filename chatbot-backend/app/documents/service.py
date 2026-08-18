@@ -52,6 +52,7 @@ def create_document_record(
     content_type: str,
     file_size: int,
     content_hash: str,
+    uploaded_by_erp_id: Optional[int] = None,
 ) -> Document:
     document = Document(
         filename=filename,
@@ -59,6 +60,7 @@ def create_document_record(
         content_type=content_type,
         file_size=file_size,
         content_hash=content_hash,
+        uploaded_by_erp_id=uploaded_by_erp_id,
         status="uploaded",
     )
     db.add(document)

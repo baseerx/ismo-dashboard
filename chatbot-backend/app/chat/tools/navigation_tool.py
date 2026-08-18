@@ -1,29 +1,32 @@
+"""Where in the dashboard a request can be sent.
+
+The paths are the ones registered in the frontend's `App.tsx`. A link that does
+not resolve drops the user on a blank page, so this map is the only place they
+are written down and it is checked against the router when routes change.
+"""
+
 import logging
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# PLACEHOLDER routes - replace these with your actual React Router paths.
-# Could later be replaced by querying /api/mainmenu/get/ and /api/submenu/get/
-# dynamically since that's already your menu system, but a static map is
-# simpler to start with.
 ROUTE_MAP = {
-    "leave_application": {"path": "/leaves/apply", "label": "Apply for Leave"},
-    "attendance": {"path": "/attendance", "label": "Attendance"},
-    "profile": {"path": "/profile", "label": "My Profile"},
-    "amendments": {"path": "/amendments", "label": "Amendments"},
-    "compliance": {"path": "/compliance", "label": "Compliance"},
-    "document_upload": {"path": "/documents/upload", "label": "Upload Document"},
+    "leave_application": {"path": "/leaves/apply", "label": "Apply for leave"},
+    "leave_history": {"path": "/leaves/leave-history", "label": "Leave history"},
+    "official_work": {"path": "/leaves/official-work", "label": "Official work"},
+    "attendance": {"path": "/attendance/overview", "label": "My attendance"},
+    "attendance_today": {"path": "/attendance/today", "label": "Today's attendance"},
+    "public_holidays": {"path": "/leaves/public-holidays", "label": "Public holidays"},
+    "profile": {"path": "/profile", "label": "My profile"},
+    "dashboard": {"path": "/dashboard", "label": "Dashboard"},
+    "change_password": {"path": "/change-password", "label": "Change password"},
 }
 
 
 def resolve_navigation(destination: str) -> Optional[dict]:
-    logger.info("resolve_navigation: destination=%r", destination)
-    entry = ROUTE_MAP.get(destination)
+    entry = ROUTE_MAP.get((destination or "").strip())
     if not entry:
-        logger.warning("resolve_navigation: unknown destination=%r (not in ROUTE_MAP keys=%s)",
-                        destination, list(ROUTE_MAP.keys()))
+        logger.info("resolve_navigation: no route for %r", destination)
         return None
-    result = {"type": "navigate", "path": entry["path"], "label": entry["label"]}
-    logger.info("resolve_navigation: resolved to %s", result)
-    return result
+
+    return {"type": "navigate", "path": entry["path"], "label": entry["label"]}

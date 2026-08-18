@@ -1,11 +1,53 @@
-from typing import List
+"""The Chroma collection holding the trained document chunks.
+
+The collection is created with cosine distance rather than Chroma's default
+squared-L2. With unnormalised embeddings, L2 distances land in the hundreds and
+the gap between "relevant" and "unrelated" moves with document length, so no
+fixed relevance threshold holds. Cosine distance is bounded (0 = identical,
+1 = unrelated, 2 = opposite), which makes `RETRIEVAL_MAX_DISTANCE` meaningful.
+
+Changing the space is a property of the collection, not of a query: a store
+built under the old setting has to be rebuilt, which `python -m app.cli
+reindex` does from the files in `uploads/`.
+"""
+
+import logging
+from typing import Dict, List, Optional
 
 import chromadb
 
 from app.config.settings import settings
 
+logger = logging.getLogger(__name__)
+
+COLLECTION_NAME = "documents"
+DISTANCE_SPACE = "cosine"
+
 _client = chromadb.PersistentClient(path=settings.CHROMA_PATH)
-_collection = _client.get_or_create_collection(name="documents")
+
+
+def _open_collection():
+    return _client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": DISTANCE_SPACE},
+    )
+
+
+_collection = _open_collection()
+
+
+def collection_info() -> Dict:
+    return {
+        "name": COLLECTION_NAME,
+        "chunks": _collection.count(),
+        "space": (_collection.metadata or {}).get("hnsw:space", "unknown"),
+        "path": settings.CHROMA_PATH,
+    }
+
+
+def uses_cosine() -> bool:
+    """False for a store built before the switch, which needs a reindex."""
+    return (_collection.metadata or {}).get("hnsw:space") == DISTANCE_SPACE
 
 
 def add_chunks(
@@ -14,7 +56,7 @@ def add_chunks(
     chunks: List[str],
     embeddings: List[List[float]],
     start_index: int = 0,
-    page_numbers: List[int] | None = None,
+    page_numbers: Optional[List[int]] = None,
 ) -> None:
     if not chunks:
         return
@@ -22,7 +64,11 @@ def add_chunks(
     ids = [f"doc{document_id}_chunk{start_index + i}" for i in range(len(chunks))]
     metadatas = []
     for i in range(len(chunks)):
-        meta = {"document_id": document_id, "filename": filename, "chunk_index": start_index + i}
+        meta = {
+            "document_id": document_id,
+            "filename": filename,
+            "chunk_index": start_index + i,
+        }
         if page_numbers is not None:
             meta["page_number"] = page_numbers[i]
         metadatas.append(meta)
@@ -40,15 +86,21 @@ def delete_document_chunks(document_id: int) -> None:
 
 
 def reset_collection() -> None:
-    """Drops and recreates the collection - use when switching embedding
-    models, since Chroma locks a collection's vector dimension on first
-    insert and mixing dimensions causes InvalidArgumentError."""
+    """Drop and recreate the collection.
+
+    Needed when the embedding model changes (Chroma fixes a collection's vector
+    dimension on first insert) or when the distance space changes.
+    """
     global _collection
-    _client.delete_collection(name="documents")
-    _collection = _client.get_or_create_collection(name="documents")
+    try:
+        _client.delete_collection(name=COLLECTION_NAME)
+    except Exception:  # nothing to delete on a fresh store
+        logger.info("reset_collection: no existing collection to drop")
+    _collection = _open_collection()
+    logger.info("reset_collection: collection recreated with %s distance", DISTANCE_SPACE)
 
 
-def query(query_embedding: List[float], top_k: int = 5, where: dict | None = None) -> dict:
+def query(query_embedding: List[float], top_k: int = 5, where: Optional[dict] = None) -> dict:
     kwargs = {"query_embeddings": [query_embedding], "n_results": top_k}
     if where:
         kwargs["where"] = where

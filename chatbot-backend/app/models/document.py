@@ -27,4 +27,9 @@ class Document(Base):
 
     # uploaded -> extracting -> embedding -> indexed  (or -> failed at any step)
     status = Column(String(20), default="uploaded")
+
+    # Which administrator trained it. Null for documents ingested from the
+    # command line during a deployment.
+    uploaded_by_erp_id = Column(Integer, nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -1,15 +1,33 @@
-fastapi
-uvicorn
-python-dotenv
-python-multipart
-sqlalchemy
-pymysql
-cryptography
-pypdf
-python-docx
-chromadb
-langchain-text-splitters
-langchain
-ollama
-pyodbc
-httpx
+# Versions are pinned: the vector store's embedding dimension and Chroma's
+# on-disk format are both tied to the library that wrote them, so an
+# unconstrained "pip install -r" on a new host can produce an index the running
+# service cannot read.
+
+# --- web ---
+fastapi==0.141.1
+uvicorn==0.52.1
+python-multipart==0.0.32
+httpx==0.28.1
+
+# --- config ---
+python-dotenv==1.2.2
+
+# --- database (SQL Server, same instance as the Django dashboard) ---
+SQLAlchemy==2.0.51
+pyodbc==5.3.0
+
+# --- identity: verifies the dashboard's login JWT ---
+PyJWT==2.13.0
+
+# --- documents and retrieval ---
+pypdf==6.14.2
+python-docx==1.2.0
+chromadb==1.5.9
+langchain-text-splitters==1.1.2
+
+# --- local models (Ollama: mistral + nomic-embed-text) ---
+ollama==0.6.2
+
+# --- reports ---
+openpyxl==3.1.5
+reportlab==5.0.0

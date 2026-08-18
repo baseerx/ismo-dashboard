@@ -1,58 +1,48 @@
-import { useEffect, useState } from "react";
 import type { DocumentRecord } from "../../types/chat";
-import { listDocuments } from "../../api/api";
 
 interface Props {
+  documents: DocumentRecord[];
   selectedDocumentId: number | null;
   onSelect: (documentId: number | null) => void;
 }
 
-export default function DocumentSelector({ selectedDocumentId, onSelect }: Props) {
-  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    listDocuments()
-      .then(setDocuments)
-      .finally(() => setLoading(false));
-  }, []);
-
-  const indexedDocs = documents.filter((d) => d.status === "indexed");
-
+/**
+ * Narrows retrieval to one trained document.
+ *
+ * Only worth showing once more than one document is trained, which is why the
+ * widget renders it conditionally — the parent owns the list so the selector
+ * does not fetch it a second time.
+ */
+export default function DocumentSelector({
+  documents,
+  selectedDocumentId,
+  onSelect,
+}: Props) {
   return (
-    <div className="flex items-center gap-2 border border-[var(--rule)] rounded-md pl-2.5 pr-1 py-1 bg-white">
+    <label className="flex items-center gap-2 text-[11px] text-[var(--chat-dim)]">
       <BookIcon />
+      <span className="shrink-0">Search in</span>
       <select
         value={selectedDocumentId ?? ""}
-        onChange={(e) => onSelect(e.target.value ? Number(e.target.value) : null)}
-        disabled={loading}
-        className="text-sm text-[var(--ink)] bg-transparent border-none outline-none py-0.5 pr-1 max-w-[220px] disabled:opacity-50 appearance-none"
+        onChange={(event) => onSelect(event.target.value ? Number(event.target.value) : null)}
+        className="min-w-0 flex-1 truncate rounded-md border border-[var(--chat-rule)] bg-[var(--chat-card)] px-1.5 py-1 text-[11px] text-[var(--chat-text)] outline-none transition-colors focus:border-[var(--chat-accent)]"
       >
-        <option value="">General — search all documents</option>
-        {indexedDocs.map((d) => (
-          <option key={d.id} value={d.id}>
-            {d.filename}
+        <option value="">All documents</option>
+        {documents.map((document) => (
+          <option key={document.id} value={document.id}>
+            {document.filename.replace(/^[0-9a-f]{16,}_/i, "")}
           </option>
         ))}
       </select>
-      <ChevronIcon />
-    </div>
+    </label>
   );
 }
 
 function BookIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink-faint)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
       <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
       <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" />
-    </svg>
-  );
-}
-
-function ChevronIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ink-faint)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-      <path d="m6 9 6 6 6-6" />
     </svg>
   );
 }

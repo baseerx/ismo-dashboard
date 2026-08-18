@@ -1,166 +1,496 @@
+"""Answering one question.
+
+The shape of a turn:
+
+    verified identity + question
+        -> understand()            what is being asked, about whom, for when
+        -> authorise               is the asker allowed to see that person
+        -> SQL or retrieval        facts, from the database or the manual
+        -> answer                  templated for data, model-written for policy
+
+Authorisation happens before any lookup, on the ERP id from the signed token.
+An employee asking about a colleague is refused outright rather than quietly
+shown their own record, because a quietly wrong answer is worse than a refusal.
+"""
+
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from datetime import date
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from app.chat.context import build_user_context_block
-from app.chat.tools.registry import TOOL_DEFINITIONS, dispatch_tool_call
+from app.auth.identity import Identity
+from app.chat import answers
+from app.chat.dates import default_range
+from app.chat.intent import Intent, Subject, Understanding, is_about_the_asker, understand
+from app.chat.schemas import Action, DataBlock, ReportOffer, SourceChunk
+from app.chat.tools.navigation_tool import resolve_navigation
+from app.chat.tools.registry import DATA_TOOLS, TOOL_DEFINITIONS, dispatch_tool_call
+from app.config.settings import settings
+from app.hr import queries as hr
 from app.models.chat import Conversation, Message
-from app.services.llm import chat_with_tools
+from app.rag.prompt import NO_CONTEXT_ANSWER, build_messages
+from app.rag.retriever import retrieve_top_chunks
+from app.services.llm import chat_with_tools, generate_reply
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT_TEMPLATE = """You are the HR Assistant for this company's internal system.
+# One round is enough for the fallback path: fetch, then answer. More rounds
+# mostly produce a small model talking itself in circles.
+MAX_TOOL_ROUNDS = 1
 
-{user_context}
+REFUSAL = (
+    "I can only show you your own records. Another employee's leave or attendance "
+    "can be looked up by an administrator, or through the section reports on the "
+    "dashboard if you are their section head."
+)
 
-IMPORTANT: If the user asks about their own name, ID, or department (e.g.
-"what is my name", "who am I"), answer DIRECTLY from the information above
-in your very next sentence. Do not say you lack a way to know this, and do
-not suggest navigating anywhere to find it - it is already given to you.
+FALLBACK_SYSTEM_PROMPT = """You are the HR Assistant for ISMO's employee dashboard.
 
-You have tools available to look up the current user's own leave balance,
-attendance, and official work balance - use them when asked about "my"
-data. Use search_documents for policy/SOP questions. Use navigate when
-the user wants to DO something (apply for leave, go to attendance, etc)
-rather than just ask about it.
+You are speaking with:
+{identity}
 
-For casual conversation or general questions about what you can do, just
-answer directly - do not call any tool unless the question actually needs
-one. Keep answers natural and concise."""
+What you can do: answer questions from the organisation's HR policy manual, and
+report this person's own leave balance, leave records, official work and
+attendance (including date ranges, and Excel or PDF reports of them).
 
-MAX_TOOL_ROUNDS = 3
+Rules:
+- Never state a figure for someone's leave or attendance unless a tool gave it
+  to you in this conversation. If you do not have it, say what you can look up
+  and invite them to ask for it.
+- Never discuss another employee's records.
+- Keep replies to a few sentences unless asked for detail. Markdown is fine.
+"""
 
 
-def _get_or_create_conversation(db: Session, conversation_id: Optional[int]) -> Conversation:
+# --------------------------------------------------------------- persistence
+
+def _get_or_create_conversation(
+    db: Session, conversation_id: Optional[int], identity: Identity, question: str
+) -> Conversation:
     if conversation_id:
-        conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
-        if conversation:
-            logger.info("answer_question: continuing conversation_id=%s", conversation.id)
+        conversation = (
+            db.query(Conversation)
+            .filter(Conversation.id == conversation_id)
+            .first()
+        )
+        # An id belonging to someone else is treated as absent rather than
+        # refused: the asker gets a new thread and learns nothing about theirs.
+        if conversation and conversation.owner_erp_id in (identity.erp_id, None):
+            if conversation.owner_erp_id is None:
+                conversation.owner_erp_id = identity.erp_id
+                db.commit()
             return conversation
+        logger.info(
+            "conversation %s is not owned by erp=%s, starting a new one",
+            conversation_id, identity.erp_id,
+        )
 
-    conversation = Conversation()
+    conversation = Conversation(
+        owner_erp_id=identity.erp_id,
+        # The first question makes a better thread title than "New chat", and
+        # costs nothing to derive.
+        title=(question or "").strip()[:120] or None,
+    )
     db.add(conversation)
     db.commit()
     db.refresh(conversation)
-    logger.info("answer_question: created new conversation_id=%s", conversation.id)
     return conversation
 
 
-def _load_history(db: Session, conversation: Conversation, limit: int = 10) -> List[Dict[str, str]]:
-    """Feeds recent turns back into the LLM so follow-up questions work."""
+def _load_history(db: Session, conversation: Conversation, limit: int = 6) -> List[Dict[str, str]]:
     recent = (
         db.query(Message)
         .filter(Message.conversation_id == conversation.id)
-        .order_by(Message.created_at.desc())
+        .order_by(Message.created_at.desc(), Message.id.desc())
         .limit(limit)
         .all()
     )
     recent.reverse()
-    logger.info("answer_question: loaded %d prior message(s) as history", len(recent))
-    return [{"role": m.role, "content": m.content} for m in recent]
+    return [{"role": message.role, "content": message.content} for message in recent]
 
 
-async def answer_question(
-    db: Session,
-    question: str,
-    conversation_id: Optional[int],
-    user_context: Optional[Dict[str, Any]],
-    auth_header: Optional[str],
-) -> Dict:
-    logger.info("answer_question: question=%r user=%s auth_present=%s",
-                question,
-                (user_context or {}).get("username", "unknown"),
-                bool(auth_header))
-    logger.info("answer_question: RAW user_context received=%s", user_context)
-
-    conversation = _get_or_create_conversation(db, conversation_id)
-
-    db.add(Message(conversation_id=conversation.id, role="user", content=question))
+def _save(db: Session, conversation: Conversation, role: str, content: str, sources=None) -> None:
+    db.add(
+        Message(
+            conversation_id=conversation.id,
+            role=role,
+            content=content,
+            sources_json=json.dumps(sources, default=str) if sources else None,
+        )
+    )
     db.commit()
 
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        user_context=build_user_context_block(user_context)
+
+# ------------------------------------------------------------- authorisation
+
+def _resolve_subject(
+    db: Session, identity: Identity, understanding: Understanding
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Whose record the question is about.
+
+    Returns (employee, refusal). Exactly one is set: an employee to report on,
+    or the reply to send instead.
+    """
+    me = hr.get_employee(db, identity.erp_id) or {
+        "erp_id": identity.erp_id,
+        "name": identity.name,
+        "section": identity.section_name,
+    }
+
+    # An explicit ERP id in the question.
+    if understanding.target_erp_id and understanding.target_erp_id != identity.erp_id:
+        if not identity.is_admin:
+            return None, REFUSAL
+
+        target = hr.get_employee(db, understanding.target_erp_id)
+        if not target:
+            return None, (
+                f"I could not find an active employee with ERP ID "
+                f"{understanding.target_erp_id}."
+            )
+        return target, None
+
+    # A name that may or may not belong to a colleague - the employee table
+    # decides, so a word that merely looks like a name costs one lookup.
+    for candidate in understanding.target_name_candidates:
+        matches = hr.find_employees(db, candidate)
+        if not matches:
+            continue
+
+        if len(matches) > 1 and identity.is_admin:
+            names = ", ".join(f"{m['name']} (ERP {m['erp_id']})" for m in matches[:5])
+            return None, (
+                f'Several employees match "{candidate}": {names}. '
+                "Which ERP ID did you mean?"
+            )
+
+        found = matches[0]
+        if found["erp_id"] == identity.erp_id:
+            return me, None
+        if not identity.is_admin:
+            return None, REFUSAL
+        return found, None
+
+    # "his attendance" with nobody named.
+    if understanding.about_someone_else and understanding.needs_data:
+        if not identity.is_admin:
+            return None, REFUSAL
+        return None, (
+            "Which employee do you mean? Give me a name or an ERP ID, for example "
+            '"attendance of ERP 786 last week".'
+        )
+
+    return me, None
+
+
+# ---------------------------------------------------------------- data paths
+
+def _leave_balance(db, employee, understanding, is_self):
+    leave_type = (
+        hr.resolve_leave_type(db, understanding.leave_type_hint)
+        if understanding.leave_type_hint
+        else None
     )
-    logger.info("answer_question: system prompt built (%d chars)", len(system_prompt))
-    logger.info("answer_question: FULL system prompt:\n%s", system_prompt)
+    balance = hr.leave_balance(db, employee["erp_id"], leave_type=leave_type)
+    answer, block = answers.leave_balance(employee, balance, is_self, leave_type)
+    return answer, block, None
 
-    messages = [{"role": "system", "content": system_prompt}]
-    messages += _load_history(db, conversation)
-    messages.append({"role": "user", "content": question})
 
-    sources: List[Dict] = []
+def _leave_history(db, employee, understanding, is_self):
+    period = understanding.date_range or default_range()
+    period = period.clamped(settings.REPORT_MAX_RANGE_DAYS)
+    records = hr.leave_history(db, employee["erp_id"], period.start, period.end)
+    answer, block = answers.leave_history(employee, records, period, is_self)
+    offer = answers.report_offer("leave", employee, period) if records else None
+    return answer, block, offer
+
+
+def _attendance_day(db, employee, understanding, is_self):
+    period = understanding.date_range
+    day = period.start if period else date.today()
+    snapshot = hr.attendance_day(db, employee["erp_id"], day)
+    answer, block = answers.attendance_day(employee, snapshot, day, is_self)
+    return answer, block, None
+
+
+def _attendance_range(db, employee, understanding, is_self):
+    period = (understanding.date_range or default_range()).until_today()
+    period = period.clamped(settings.REPORT_MAX_RANGE_DAYS)
+    ranged = hr.attendance_range(db, employee["erp_id"], period.start, period.end)
+    answer, block = answers.attendance_range(employee, ranged, period, is_self)
+    offer = answers.report_offer("attendance", employee, period) if ranged.get("days") else None
+    return answer, block, offer
+
+
+def _official_work(db, employee, understanding, is_self):
+    period = (understanding.date_range or default_range()).clamped(settings.REPORT_MAX_RANGE_DAYS)
+    records = hr.official_work(db, employee["erp_id"], period.start, period.end)
+    answer, block = answers.official_work(employee, records, period, is_self)
+    offer = answers.report_offer("official_work", employee, period) if records else None
+    return answer, block, offer
+
+
+def _report(db, employee, understanding, is_self):
+    """A file, rather than a table on screen."""
+    subject = {
+        Subject.ATTENDANCE: "attendance",
+        Subject.OFFICIAL_WORK: "official_work",
+        Subject.LEAVE: "leave",
+    }.get(understanding.subject, "leave")
+
+    period = understanding.date_range
+    if period is None:
+        return (
+            f"Which period should the {subject.replace('_', ' ')} report cover? "
+            'Give me a range, for example "from 1 July 2026 to 31 July 2026" or "last month".',
+            None,
+            None,
+        )
+
+    if subject == "attendance":
+        # A report of future days would list them all as absent.
+        period = period.until_today()
+    period = period.clamped(settings.REPORT_MAX_RANGE_DAYS)
+
+    if subject == "attendance":
+        ranged = hr.attendance_range(db, employee["erp_id"], period.start, period.end)
+        rows = ranged.get("days", [])
+        _, block = answers.attendance_range(employee, ranged, period, is_self)
+    elif subject == "official_work":
+        rows = hr.official_work(db, employee["erp_id"], period.start, period.end)
+        _, block = answers.official_work(employee, rows, period, is_self)
+    else:
+        rows = hr.leave_history(db, employee["erp_id"], period.start, period.end)
+        _, block = answers.leave_history(employee, rows, period, is_self)
+
+    answer = answers.report_answer(
+        subject, employee, period, len(rows), is_self, understanding.report_format
+    )
+    offer = (
+        answers.report_offer(subject, employee, period, understanding.report_format)
+        if rows or subject == "attendance"
+        else None
+    )
+    return answer, block, offer
+
+
+DATA_HANDLERS = {
+    Intent.LEAVE_BALANCE: _leave_balance,
+    Intent.LEAVE_HISTORY: _leave_history,
+    Intent.ATTENDANCE_DAY: _attendance_day,
+    Intent.ATTENDANCE_RANGE: _attendance_range,
+    Intent.OFFICIAL_WORK: _official_work,
+    Intent.REPORT: _report,
+}
+
+
+# ---------------------------------------------------------------- rag / llm
+
+def _policy_answer(
+    question: str, history: List[Dict[str, str]], document_id: Optional[int]
+) -> Tuple[str, List[Dict]]:
+    chunks = retrieve_top_chunks(question, document_id=document_id)
+    if not chunks:
+        return NO_CONTEXT_ANSWER, []
+
+    answer = generate_reply(build_messages(question, chunks, history))
+    return (answer or "").strip() or NO_CONTEXT_ANSWER, chunks
+
+
+async def _fallback_answer(
+    db: Session,
+    identity: Identity,
+    question: str,
+    history: List[Dict[str, str]],
+    document_id: Optional[int],
+) -> Tuple[str, List[Dict], Optional[DataBlock], List[Dict]]:
+    """For questions the router did not recognise.
+
+    Which source is tried first depends on who the question is about. A
+    retrieval store always returns its nearest passages, so asking the manual
+    "am I running low on days off?" yields the policy maximum - a number that
+    reads like an answer about this person and is not one. Questions phrased
+    about the asker therefore go to the tools, which return their actual
+    record; everything else goes to the manual.
+    """
+    chunks: List[Dict] = []
+
+    if not is_about_the_asker(question):
+        chunks = retrieve_top_chunks(question, document_id=document_id)
+        if chunks:
+            answer = generate_reply(build_messages(question, chunks, history))
+            if answer and answer.strip():
+                return answer.strip(), chunks, None, []
+
+    messages = [
+        {"role": "system", "content": FALLBACK_SYSTEM_PROMPT.format(identity=identity.describe())},
+        *history,
+        {"role": "user", "content": question},
+    ]
+
+    block: Optional[DataBlock] = None
     actions: List[Dict] = []
-    answer = "I wasn't able to finish processing that - could you try rephrasing?"
+    answer = ""
 
-    for round_num in range(MAX_TOOL_ROUNDS):
-        logger.info("answer_question: round %d - calling LLM with %d message(s), %d tool(s) available",
-                    round_num, len(messages), len(TOOL_DEFINITIONS))
-
+    for _ in range(MAX_TOOL_ROUNDS + 1):
         message = chat_with_tools(messages, tools=TOOL_DEFINITIONS)
-        tool_calls = message.get("tool_calls")
+        tool_calls = message.get("tool_calls") or []
 
         if not tool_calls:
-            answer = message.get("content", "")
-            logger.info("answer_question: round %d - no tool calls, final answer (%d chars): %r",
-                        round_num, len(answer), answer[:200])
+            answer = (message.get("content") or "").strip()
             break
-
-        tool_names = [c["function"]["name"] for c in tool_calls]
-        logger.info("answer_question: round %d - model requested %d tool call(s): %s",
-                    round_num, len(tool_calls), tool_names)
 
         messages.append(message)
 
         for call in tool_calls:
             name = call["function"]["name"]
-            args = call["function"].get("arguments", {})
-            logger.info("answer_question: dispatching tool=%s args=%s", name, args)
+            arguments = call["function"].get("arguments") or {}
+            result = await dispatch_tool_call(name, arguments, db, identity, document_id)
 
-            result = await dispatch_tool_call(name, args, auth_header)
-            logger.info("answer_question: tool=%s returned: %s", name,
-                        _summarize_for_log(result))
-
-            if name == "search_documents" and isinstance(result, list):
-                sources.extend(
-                    {
-                        "document_id": c["document_id"],
-                        "filename": c["filename"],
-                        "chunk_index": c["chunk_index"],
-                        "distance": c["distance"],
-                    }
-                    for c in result
-                )
-            elif name == "navigate" and result:
+            if name == "navigate" and result:
                 actions.append(result)
+            elif name == "search_documents" and isinstance(result, list):
+                chunks = result
+            elif name in DATA_TOOLS and isinstance(result, dict):
+                block = _block_from_tool(name, result)
 
-            messages.append({
-                "role": "tool",
-                "content": json.dumps(result, default=str),
-            })
+            messages.append({"role": "tool", "content": json.dumps(result, default=str)[:6000]})
+
+    if not answer:
+        answer = (
+            "I could not work that one out. I can answer questions from the HR manual, and "
+            "show your leave balance, leave records, official work or attendance for any "
+            "period — including an Excel or PDF report."
+        )
+
+    return answer, chunks, block, actions
+
+
+def _block_from_tool(name: str, result: Dict[str, Any]) -> Optional[DataBlock]:
+    """Show the model's tool result as a table, so the figures on screen are the
+    ones the database returned rather than the ones it chose to repeat."""
+    key = DATA_TOOLS[name]
+    rows = result.get(key) or []
+    if not rows:
+        return None
+
+    columns = list(rows[0].keys())
+    return DataBlock(
+        title={
+            "get_leave_balance": "Leave balance",
+            "get_leave_history": "Leave records",
+            "get_attendance": "Attendance",
+            "get_official_work": "Official work",
+        }[name],
+        columns=[{"key": column, "label": column.replace("_", " ").title()} for column in columns],
+        rows=[{column: _plain(row.get(column)) for column in columns} for row in rows],
+        summary=result.get("summary") or {},
+    )
+
+
+def _plain(value: Any) -> Any:
+    if isinstance(value, (str, int, float)) or value is None:
+        return value
+    if hasattr(value, "isoformat"):
+        return value.isoformat()[:10]
+    return str(value)
+
+
+# ----------------------------------------------------------------- entry point
+
+async def answer_question(
+    db: Session,
+    question: str,
+    identity: Identity,
+    conversation_id: Optional[int] = None,
+    document_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    conversation = _get_or_create_conversation(db, conversation_id, identity, question)
+    history = _load_history(db, conversation)
+    _save(db, conversation, "user", question)
+
+    understanding = understand(question)
+    logger.info(
+        "answer_question: erp=%s admin=%s intent=%s subject=%s range=%s",
+        identity.erp_id,
+        identity.is_admin,
+        understanding.intent.value,
+        understanding.subject.value if understanding.subject else None,
+        understanding.date_range.label if understanding.date_range else None,
+    )
+
+    sources: List[Dict] = []
+    actions: List[Dict] = []
+    block: Optional[DataBlock] = None
+    offer: Optional[ReportOffer] = None
+
+    if understanding.navigate_to:
+        navigation = resolve_navigation(understanding.navigate_to)
+        if navigation:
+            actions.append(navigation)
+
+    if understanding.intent in DATA_HANDLERS:
+        employee, refusal = _resolve_subject(db, identity, understanding)
+        if refusal:
+            answer = refusal
+            actions = []
+        else:
+            is_self = employee["erp_id"] == identity.erp_id
+            answer, block, offer = DATA_HANDLERS[understanding.intent](
+                db, employee, understanding, is_self
+            )
+
+    elif understanding.intent is Intent.PROFILE:
+        employee = hr.get_employee(db, identity.erp_id) or {
+            "erp_id": identity.erp_id, "name": identity.name
+        }
+        answer, block = answers.profile(employee, identity.name, identity.is_admin)
+
+    elif understanding.intent is Intent.POLICY:
+        answer, sources = _policy_answer(question, history, document_id)
+
+    elif understanding.intent is Intent.SMALLTALK:
+        answer = (
+            answers.courtesy()
+            if understanding.is_courtesy
+            else answers.greeting(identity.name, identity.is_admin)
+        )
+
+    elif understanding.intent is Intent.NAVIGATE:
+        label = actions[0]["label"] if actions else "that page"
+        answer = (
+            f"Opening **{label}** for you — use the button below if it does not switch over."
+            if actions
+            else "I am not sure which page you mean. Try \"apply for leave\" or \"open attendance\"."
+        )
+
     else:
-        logger.warning("answer_question: hit MAX_TOOL_ROUNDS=%d without a final answer", MAX_TOOL_ROUNDS)
+        answer, sources, block, tool_actions = await _fallback_answer(
+            db, identity, question, history, document_id
+        )
+        actions.extend(tool_actions)
 
-    db.add(Message(
-        conversation_id=conversation.id,
-        role="assistant",
-        content=answer,
-        sources_json=json.dumps(sources) if sources else None,
-    ))
-    db.commit()
+    trimmed_sources = [
+        SourceChunk(
+            document_id=chunk.get("document_id"),
+            filename=chunk.get("filename"),
+            chunk_index=chunk.get("chunk_index"),
+            page_number=chunk.get("page_number"),
+            distance=chunk.get("distance"),
+        ).model_dump()
+        for chunk in sources
+    ]
 
-    logger.info("answer_question: done - %d source(s), %d action(s)", len(sources), len(actions))
+    _save(db, conversation, "assistant", answer, trimmed_sources or None)
 
     return {
         "conversation_id": conversation.id,
         "answer": answer,
-        "sources": sources,
-        "actions": actions,
+        "intent": understanding.intent.value,
+        "sources": trimmed_sources,
+        "actions": [Action(**action).model_dump() for action in actions],
+        "data": block.model_dump() if block else None,
+        "report": offer.model_dump() if offer else None,
     }
-
-
-def _summarize_for_log(result: Any, max_len: int = 300) -> str:
-    """Keeps tool-result log lines readable instead of dumping full chunk text."""
-    text = json.dumps(result, default=str)
-    return text if len(text) <= max_len else text[:max_len] + f"... ({len(text)} chars total)"

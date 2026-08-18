@@ -1,107 +1,194 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ChangeEvent } from "react";
-import type { ChatMessage } from "../../types/chat";
-import { sendChatMessage, uploadDocument, getDocumentStatus } from "../../api/api";
-
-const COLORS = {
-  panelBg: "#1B2544",
-  headerBg: "#0F1B38",
-  bg: "#0F1729",
-  border: "rgba(34,184,207,0.22)",
-  text: "#E6E9F0",
-  textMuted: "#8B94A8",
-  accent: "#22B8CF",
-  accentHover: "#1B9AAD",
-  bubbleUser: "#22B8CF",
-  bubbleAssistant: "#232E52",
-  danger: "#EF4444",
-};
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from "react";
+import {
+  deleteConversation,
+  describeError,
+  getConversationMessages,
+  getDocumentStatus,
+  listConversations,
+  listDocuments,
+  sendChatMessage,
+  uploadDocument,
+} from "../../api/api";
+import type {
+  ChatMessage,
+  ConversationSummary,
+  DocumentRecord,
+  UploadingFile,
+} from "../../types/chat";
+import DocumentSelector from "./DocumentSelector";
+import MessageBubble from "./MessageBubble";
 
 const POLL_INTERVAL_MS = 1500;
 
-// Chips shown before the user has asked anything.
-const SUGGESTED_QUESTIONS = [
-  "What is the leave policy?",
-  "How many sick days do I get?",
-  "What are the office hours?",
-  "How do I apply for leave?",
+// Keeping the thread id here means walking to another page and back continues
+// the same conversation, while a new sign-in starts fresh.
+const THREAD_KEY = "ismo:chat:conversation";
+
+const SUGGESTIONS = [
+  "How many casual leaves do I have left?",
+  "My attendance last month",
+  "What is the medical leave policy?",
+  "Leave report for this financial year",
 ];
 
-// Pool used for both the inline ghost-text completion and the dropdown
-// matches as the user types. Expand this list as your HR docs grow.
+// Completions offered as the user types. Data questions first: they are the
+// ones where exact phrasing helps the assistant answer precisely.
 const QUESTION_BANK = [
+  "How many casual leaves do I have left?",
+  "What is my leave balance?",
+  "My medical leave balance",
+  "My leave history for this financial year",
+  "My attendance today",
+  "Was I late today?",
+  "My attendance last month",
+  "My attendance last 7 days",
+  "My attendance from 01-07-2026 to 31-07-2026",
+  "My official work this year",
+  "Attendance report for last month in Excel",
+  "Leave report for this financial year as PDF",
   "What is the leave policy?",
-  "How many sick days do I get per year?",
-  "How do I apply for leave?",
+  "What is the medical leave policy?",
   "What is the maternity leave policy?",
-  "What are the office hours?",
-  "What is the attendance policy?",
-  "How is attendance calculated?",
-  "What is the public holiday schedule?",
-  "Who do I contact for HR questions?",
-  "What is the remote work policy?",
-  "What is the dress code policy?",
-  "How do I update my personal information?",
+  "What is the probation period?",
+  "How do I apply for leave?",
+  "What are the office timings?",
+  "What is the policy on official tours?",
+  "Who approves my leave?",
 ];
 
-type UploadStatus =
-  | "uploading"
-  | "uploaded"
-  | "extracting"
-  | "embedding"
-  | "indexed"
-  | "failed"
-  | "error";
+// Shown in turn while a reply is being prepared, so a slow model still looks
+// like it is doing something specific.
+const WAITING_STAGES = [
+  "Thinking…",
+  "Checking your records…",
+  "Reading the HR manual…",
+  "Putting the answer together…",
+];
 
-interface UploadingFile {
-  documentId: number | null;
-  filename: string;
-  status: UploadStatus;
-  progressPercent: number;
-  error?: string;
-}
-
-interface Props {
-  // Optional override - if you ever want to force it from a parent that
-  // already has the user object, pass it explicitly and it wins.
-  // Otherwise the widget reads localStorage("user") itself, same pattern
-  // your AttendanceOverview.tsx already uses.
-  isAdmin?: boolean;
-}
-
-function getIsAdminFromStorage(): boolean {
+function readUser(): { name?: string; erpid?: number; is_superuser?: boolean } {
   try {
-    const user = JSON.parse(localStorage.getItem("user") || "{}");
-    return Boolean(user?.is_superuser);
+    return JSON.parse(localStorage.getItem("user") || "{}");
   } catch {
-    return false;
+    return {};
   }
 }
 
+interface Props {
+  /** Overrides the cached profile's flag; the service enforces this regardless. */
+  isAdmin?: boolean;
+}
+
 export default function ChatWidget({ isAdmin }: Props) {
-  const resolvedIsAdmin = isAdmin ?? getIsAdminFromStorage();
+  const user = useMemo(readUser, []);
+  const resolvedIsAdmin = isAdmin ?? Boolean(user.is_superuser);
+  const signedIn = Boolean(user.erpid);
 
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [conversationId, setConversationId] = useState<number | null>(null);
+  const [conversationId, setConversationId] = useState<number | null>(() => {
+    const stored = sessionStorage.getItem(THREAD_KEY);
+    return stored ? Number(stored) : null;
+  });
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [stage, setStage] = useState(0);
   const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([]);
-
-  // Autocomplete state
+  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+  const [documentId, setDocumentId] = useState<number | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  // An attendance table is six columns wide; the default panel is sized for
+  // conversation, so give the reader a way to widen it for the tables.
+  const [wide, setWide] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const pollTimers = useRef<number[]>([]);
+
+  // ---- scrolling -------------------------------------------------------
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const node = scrollRef.current;
+    if (node) node.scrollTo({ top: node.scrollHeight, behavior });
+  }, []);
 
   useEffect(() => {
-    if (isOpen) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, isOpen, isSending]);
+    if (isOpen && pinnedToBottom) scrollToBottom();
+  }, [messages, isOpen, isSending, pinnedToBottom, scrollToBottom]);
 
-  // ---- Autocomplete derived values ----
+  const handleScroll = () => {
+    const node = scrollRef.current;
+    if (!node) return;
+    const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
+    setPinnedToBottom(distance < 80);
+  };
+
+  // ---- waiting stages --------------------------------------------------
+  useEffect(() => {
+    if (!isSending) {
+      setStage(0);
+      return;
+    }
+    const timer = window.setInterval(
+      () => setStage((current) => Math.min(current + 1, WAITING_STAGES.length - 1)),
+      2200,
+    );
+    return () => window.clearInterval(timer);
+  }, [isSending]);
+
+  // ---- opening ---------------------------------------------------------
+  useEffect(() => {
+    if (!isOpen || !signedIn) return;
+
+    listDocuments()
+      .then(setDocuments)
+      .catch(() => setDocuments([]));
+
+    // Re-attach to the thread this browser tab was already using.
+    if (conversationId && messages.length === 0) {
+      getConversationMessages(conversationId)
+        .then((history) =>
+          setMessages(
+            history.map((entry) => ({
+              role: entry.role as ChatMessage["role"],
+              content: entry.content,
+              sources: entry.sources,
+            })),
+          ),
+        )
+        .catch(() => {
+          sessionStorage.removeItem(THREAD_KEY);
+          setConversationId(null);
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, signedIn]);
+
+  useEffect(
+    () => () => {
+      pollTimers.current.forEach(window.clearInterval);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (conversationId) sessionStorage.setItem(THREAD_KEY, String(conversationId));
+  }, [conversationId]);
+
+  // ---- autocomplete ----------------------------------------------------
   const topMatch =
-    input.length > 0
+    input.length > 1
       ? QUESTION_BANK.find(
           (q) => q.toLowerCase().startsWith(input.toLowerCase()) && q.length > input.length,
         )
@@ -110,21 +197,22 @@ export default function ChatWidget({ isAdmin }: Props) {
   const ghostRemainder = topMatch ? topMatch.slice(input.length) : "";
 
   const dropdownMatches =
-    input.trim().length > 0
-      ? QUESTION_BANK.filter((q) => q.toLowerCase().includes(input.trim().toLowerCase())).slice(0, 5)
+    input.trim().length > 1
+      ? QUESTION_BANK.filter((q) =>
+          q.toLowerCase().includes(input.trim().toLowerCase()),
+        ).slice(0, 5)
       : [];
 
   const acceptSuggestion = (text?: string) => {
     const value = text ?? topMatch;
-    if (value) {
-      setInput(value);
-      setShowDropdown(false);
-      setActiveIndex(-1);
-      textareaRef.current?.focus();
-    }
+    if (!value) return;
+    setInput(value);
+    setShowDropdown(false);
+    setActiveIndex(-1);
+    textareaRef.current?.focus();
   };
 
-  // ---- Sending ----
+  // ---- sending ---------------------------------------------------------
   const handleSend = async (text?: string) => {
     const question = (text ?? input).trim();
     if (!question || isSending) return;
@@ -132,273 +220,371 @@ export default function ChatWidget({ isAdmin }: Props) {
     setMessages((prev) => [...prev, { role: "user", content: question }]);
     setInput("");
     setShowDropdown(false);
+    setPinnedToBottom(true);
     setIsSending(true);
 
     try {
-      const response = await sendChatMessage(question, conversationId, null);
+      const response = await sendChatMessage(question, conversationId, documentId);
       setConversationId(response.conversation_id);
-      setMessages((prev) => [...prev, { role: "assistant", content: response.answer }]);
-    } catch {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: "Something went wrong reaching the server. Please try again." },
+        {
+          role: "assistant",
+          content: response.answer,
+          sources: response.sources,
+          actions: response.actions,
+          data: response.data ?? null,
+          report: response.report ?? null,
+        },
+      ]);
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: describeError(error), isError: true },
       ]);
     } finally {
       setIsSending(false);
     }
   };
 
-  const handleInputChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
-    setShowDropdown(true);
-    setActiveIndex(-1);
-  };
-
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const dropdownVisible = showDropdown && dropdownMatches.length > 0;
 
-    if (dropdownVisible && e.key === "ArrowDown") {
-      e.preventDefault();
+    if (dropdownVisible && event.key === "ArrowDown") {
+      event.preventDefault();
       setActiveIndex((prev) => (prev + 1) % dropdownMatches.length);
       return;
     }
-
-    if (dropdownVisible && e.key === "ArrowUp") {
-      e.preventDefault();
+    if (dropdownVisible && event.key === "ArrowUp") {
+      event.preventDefault();
       setActiveIndex((prev) => (prev - 1 + dropdownMatches.length) % dropdownMatches.length);
       return;
     }
-
-    if (dropdownVisible && e.key === "Escape") {
-      setShowDropdown(false);
-      setActiveIndex(-1);
+    if (event.key === "Escape") {
+      if (dropdownVisible) {
+        setShowDropdown(false);
+        setActiveIndex(-1);
+      } else {
+        setIsOpen(false);
+      }
       return;
     }
-
-    if (e.key === "Tab" && topMatch) {
-      e.preventDefault();
+    if (event.key === "Tab" && topMatch) {
+      event.preventDefault();
       acceptSuggestion(topMatch);
       return;
     }
-
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
       if (dropdownVisible && activeIndex >= 0) {
         acceptSuggestion(dropdownMatches[activeIndex]);
         return;
       }
-
       setShowDropdown(false);
-      handleSend();
+      void handleSend();
     }
   };
 
-  // ---- Document upload: plus button (admin only) -> file picker -> upload -> poll status ----
+  const handleInputChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(event.target.value);
+    setShowDropdown(true);
+    setActiveIndex(-1);
+  };
 
-  const pollStatus = (documentId: number) => {
-    const interval = setInterval(async () => {
+  // ---- conversations ---------------------------------------------------
+  const openHistory = async () => {
+    setShowHistory(true);
+    try {
+      setConversations(await listConversations());
+    } catch {
+      setConversations([]);
+    }
+  };
+
+  const loadConversation = async (id: number) => {
+    setShowHistory(false);
+    setIsSending(true);
+    try {
+      const history = await getConversationMessages(id);
+      setMessages(
+        history.map((entry) => ({
+          role: entry.role as ChatMessage["role"],
+          content: entry.content,
+          sources: entry.sources,
+        })),
+      );
+      setConversationId(id);
+      setPinnedToBottom(true);
+    } catch (error) {
+      setMessages([{ role: "assistant", content: describeError(error), isError: true }]);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const removeConversation = async (id: number) => {
+    try {
+      await deleteConversation(id);
+      setConversations((prev) => prev.filter((item) => item.id !== id));
+      if (id === conversationId) startNewChat();
+    } catch {
+      /* leaving the row in place is a fair signal that it did not delete */
+    }
+  };
+
+  const startNewChat = () => {
+    setMessages([]);
+    setConversationId(null);
+    sessionStorage.removeItem(THREAD_KEY);
+    setShowHistory(false);
+    setUploadingFiles([]);
+  };
+
+  // ---- training (admin) ------------------------------------------------
+  const pollStatus = (id: number) => {
+    const timer = window.setInterval(async () => {
       try {
-        const status = await getDocumentStatus(documentId);
+        const status = await getDocumentStatus(id);
         setUploadingFiles((prev) =>
-          prev.map((f) =>
-            f.documentId === documentId
-              ? { ...f, status: status.status, progressPercent: status.progress_percent }
-              : f,
+          prev.map((file) =>
+            file.documentId === id
+              ? { ...file, status: status.status, progressPercent: status.progress_percent }
+              : file,
           ),
         );
         if (status.status === "indexed" || status.status === "failed") {
-          clearInterval(interval);
+          window.clearInterval(timer);
+          listDocuments().then(setDocuments).catch(() => undefined);
+          if (status.status === "indexed") {
+            // Clear the finished row after a moment so the panel does not
+            // accumulate green bars for the rest of the session.
+            window.setTimeout(
+              () =>
+                setUploadingFiles((prev) => prev.filter((file) => file.documentId !== id)),
+              4000,
+            );
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant",
+                content: `**${status.filename}** is trained and ready — ${status.total_chunks} passages indexed. Everyone can now ask about it.`,
+              },
+            ]);
+          }
         }
       } catch {
-        clearInterval(interval);
+        window.clearInterval(timer);
         setUploadingFiles((prev) =>
-          prev.map((f) =>
-            f.documentId === documentId
-              ? { ...f, status: "error", error: "Lost connection while checking status" }
-              : f,
+          prev.map((file) =>
+            file.documentId === id
+              ? { ...file, status: "error", error: "Lost contact while training" }
+              : file,
           ),
         );
       }
     }, POLL_INTERVAL_MS);
+
+    pollTimers.current.push(timer);
   };
 
   const handleFilesSelected = async (fileList: FileList) => {
     const files = Array.from(fileList);
-    const newEntries: UploadingFile[] = files.map((file) => ({
-      documentId: null,
-      filename: file.name,
-      status: "uploading",
-      progressPercent: 0,
-    }));
-    setUploadingFiles((prev) => [...prev, ...newEntries]);
+    setUploadingFiles((prev) => [
+      ...prev,
+      ...files.map((file) => ({
+        documentId: null,
+        filename: file.name,
+        status: "uploading" as const,
+        progressPercent: 0,
+      })),
+    ]);
 
     for (const file of files) {
       try {
-        const doc = await uploadDocument(file);
+        const document = await uploadDocument(file);
         setUploadingFiles((prev) =>
-          prev.map((f) =>
-            f.filename === file.name && f.documentId === null
-              ? { ...f, documentId: doc.id, status: doc.status as UploadStatus }
-              : f,
+          prev.map((entry) =>
+            entry.filename === file.name && entry.documentId === null
+              ? { ...entry, documentId: document.id, status: document.status as UploadingFile["status"] }
+              : entry,
           ),
         );
-        pollStatus(doc.id);
-      } catch {
+        pollStatus(document.id);
+      } catch (error) {
+        const reason = describeError(error);
         setUploadingFiles((prev) =>
-          prev.map((f) =>
-            f.filename === file.name && f.documentId === null
-              ? { ...f, status: "error", error: "Upload failed" }
-              : f,
+          prev.map((entry) =>
+            entry.filename === file.name && entry.documentId === null
+              ? { ...entry, status: "error", error: reason }
+              : entry,
           ),
         );
       }
     }
   };
 
-  const uploadStatusColor = (status: UploadStatus) => {
-    if (status === "indexed") return COLORS.accent;
-    if (status === "failed" || status === "error") return COLORS.danger;
-    return COLORS.textMuted;
-  };
+  const indexedDocuments = documents.filter((document) => document.status === "indexed");
+
+  if (!signedIn) return null;
 
   return (
-    <div style={{ fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" }}>
+    <div className="ismo-chat">
       {isOpen && (
         <div
-          className="fixed bottom-24 right-6 z-50 flex flex-col overflow-hidden widget-in"
-          style={{
-            width: 380,
-            height: "min(560px, 72vh)",
-            background: COLORS.panelBg,
-            border: `1px solid ${COLORS.border}`,
-            borderRadius: 18,
-            boxShadow: "0 20px 48px rgba(0,0,0,0.5), 0 0 0 1px rgba(34,184,207,0.08)",
-          }}
+          role="dialog"
+          aria-label="HR Assistant"
+          className={`fixed bottom-24 right-5 z-[60] flex flex-col overflow-hidden rounded-2xl border border-[var(--chat-rule)] bg-[var(--chat-panel)] shadow-[0_24px_60px_-12px_rgba(15,27,56,0.45)] panel-in transition-[width,height] duration-300 ${
+            wide
+              ? "w-[min(720px,calc(100vw-2.5rem))]"
+              : "w-[min(408px,calc(100vw-2.5rem))]"
+          }`}
+          // Kept clear of the dashboard's own sticky header, which sits above
+          // this panel in the stacking order.
+          style={{ height: wide ? "min(720px, 80vh)" : "min(620px, 78vh)" }}
         >
           {/* Header */}
-          <div
-            className="header-glow flex items-center justify-between px-4 py-3.5 shrink-0"
-            style={{
-              background: COLORS.headerBg,
-              borderBottom: `2px solid ${COLORS.accent}33`,
-              boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
-              position: "relative",
-              zIndex: 1,
-            }}
-          >
-            <div className="flex items-center gap-2">
-              <div
-                className="w-8 h-8 rounded-full flex items-center justify-center"
-                style={{ background: COLORS.accent }}
-              >
-                <BotIcon />
-              </div>
-              <div>
-                <p className="text-sm font-semibold" style={{ color: COLORS.text }}>
-                  HR Assistant
-                </p>
-                <p className="text-[11px]" style={{ color: COLORS.textMuted }}>
-                  Ask about policies, leave, attendance…
-                </p>
-              </div>
+          <div className="relative flex shrink-0 items-center gap-2.5 border-b border-[var(--chat-rule)] bg-[var(--chat-header)] px-3.5 py-3">
+            <div className="relative flex h-9 w-9 items-center justify-center rounded-full bg-[var(--chat-accent)] text-[var(--chat-on-accent)]">
+              <BotIcon />
+              <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--chat-header)] bg-[var(--chat-good)]" />
             </div>
-            <button
-              onClick={() => setIsOpen(false)}
-              className="w-8 h-8 rounded-md flex items-center justify-center hover:bg-white/5 transition-colors"
-              style={{ color: COLORS.textMuted }}
+
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13.5px] font-semibold text-[var(--chat-strong)]">
+                HR Assistant
+              </p>
+              <p className="truncate text-[10.5px] text-[var(--chat-dim)]">
+                {indexedDocuments.length > 0
+                  ? `Policy, leave & attendance · ${indexedDocuments.length} document${
+                      indexedDocuments.length === 1 ? "" : "s"
+                    } trained`
+                  : "Policy, leave & attendance"}
+              </p>
+            </div>
+
+            <HeaderButton
+              label={wide ? "Shrink panel" : "Widen panel"}
+              onClick={() => setWide((current) => !current)}
             >
+              {wide ? <ShrinkIcon /> : <ExpandIcon />}
+            </HeaderButton>
+            <HeaderButton label="New chat" onClick={startNewChat}>
+              <PlusCircleIcon />
+            </HeaderButton>
+            <HeaderButton label="Past chats" onClick={openHistory}>
+              <HistoryIcon />
+            </HeaderButton>
+            <HeaderButton label="Close" onClick={() => setIsOpen(false)}>
               <CloseIcon />
-            </button>
+            </HeaderButton>
           </div>
+
+          {indexedDocuments.length > 1 && (
+            <div className="shrink-0 border-b border-[var(--chat-rule)] bg-[var(--chat-header)] px-3.5 py-2">
+              <DocumentSelector
+                documents={indexedDocuments}
+                selectedDocumentId={documentId}
+                onSelect={setDocumentId}
+              />
+            </div>
+          )}
 
           {/* Messages */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-            {messages.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-center px-4 gap-3">
-                <div
-                  className="w-12 h-12 rounded-full flex items-center justify-center"
-                  style={{ background: COLORS.accent }}
-                >
-                  <BotIcon />
-                </div>
-                <p className="text-sm" style={{ color: COLORS.text }}>
-                  Hi! Ask me anything about HR policy.
-                </p>
-                <div className="flex flex-wrap gap-1.5 justify-center max-w-[280px]">
-                  {SUGGESTED_QUESTIONS.map((q) => (
-                    <button
-                      key={q}
-                      onClick={() => handleSend(q)}
-                      className="chip-in text-[11px] px-2.5 py-1.5 rounded-full transition-colors hover:brightness-110"
-                      style={{
-                        background: COLORS.bubbleAssistant,
-                        color: COLORS.text,
-                        border: `1px solid ${COLORS.border}`,
-                      }}
-                    >
-                      {q}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              messages.map((m, i) => {
-                const isUser = m.role === "user";
-                return (
-                  <div key={i} className={`flex msg-in ${isUser ? "justify-end" : "justify-start"}`}>
-                    <div
-                      className="max-w-[80%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap"
-                      style={{
-                        background: isUser ? COLORS.bubbleUser : COLORS.bubbleAssistant,
-                        color: isUser ? "#04222A" : COLORS.text,
-                        borderTopRightRadius: isUser ? 4 : undefined,
-                        borderTopLeftRadius: !isUser ? 4 : undefined,
-                      }}
-                    >
-                      {m.content}
-                    </div>
+          <div className="relative flex-1 overflow-hidden">
+            <div
+              ref={scrollRef}
+              onScroll={handleScroll}
+              className="h-full space-y-3 overflow-y-auto px-3.5 py-4 custom-scrollbar"
+            >
+              {messages.length === 0 ? (
+                <EmptyState
+                  name={user.name}
+                  isAdmin={resolvedIsAdmin}
+                  onPick={(question) => void handleSend(question)}
+                />
+              ) : (
+                messages.map((message, index) => (
+                  <MessageBubble key={index} message={message} />
+                ))
+              )}
+
+              {isSending && (
+                <div className="flex items-center gap-2 msg-in">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--chat-accent)] text-[var(--chat-on-accent)]">
+                    <BotIcon small />
                   </div>
-                );
-              })
+                  <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-[var(--chat-rule)] bg-[var(--chat-bubble)] px-3 py-2">
+                    <span className="flex gap-1">
+                      <Dot delay="0ms" />
+                      <Dot delay="140ms" />
+                      <Dot delay="280ms" />
+                    </span>
+                    <span className="text-[11.5px] text-[var(--chat-dim)]">
+                      {WAITING_STAGES[stage]}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {!pinnedToBottom && messages.length > 0 && (
+              <button
+                onClick={() => {
+                  setPinnedToBottom(true);
+                  scrollToBottom();
+                }}
+                aria-label="Jump to latest"
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-[var(--chat-rule)] bg-[var(--chat-card)] p-1.5 text-[var(--chat-dim)] shadow-md transition-transform hover:scale-105 fade-in"
+              >
+                <ChevronDownIcon />
+              </button>
             )}
 
-            {isSending && (
-              <div className="flex justify-start msg-in">
-                <div
-                  className="rounded-xl px-3.5 py-2.5 flex items-center gap-1"
-                  style={{ background: COLORS.bubbleAssistant, borderTopLeftRadius: 4 }}
-                >
-                  <Dot color={COLORS.textMuted} delay="0ms" />
-                  <Dot color={COLORS.textMuted} delay="120ms" />
-                  <Dot color={COLORS.textMuted} delay="240ms" />
-                </div>
-              </div>
+            {showHistory && (
+              <HistoryPanel
+                conversations={conversations}
+                activeId={conversationId}
+                onClose={() => setShowHistory(false)}
+                onPick={loadConversation}
+                onDelete={removeConversation}
+              />
             )}
           </div>
 
-          {/* Uploading files - admin only, only shows while something is in flight */}
+          {/* Training progress (admin) */}
           {resolvedIsAdmin && uploadingFiles.length > 0 && (
-            <div
-              className="px-4 py-2 shrink-0 space-y-1.5 max-h-28 overflow-y-auto"
-              style={{ borderTop: `1px solid ${COLORS.border}` }}
-            >
-              {uploadingFiles.map((f, i) => (
-                <div key={`${f.filename}-${i}`}>
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="truncate max-w-[60%]" style={{ color: COLORS.text }}>
-                      {f.filename}
-                    </span>
-                    <span style={{ color: uploadStatusColor(f.status) }}>
-                      {f.status === "error" ? f.error ?? "error" : f.status}
+            <div className="max-h-28 shrink-0 space-y-2 overflow-y-auto border-t border-[var(--chat-rule)] bg-[var(--chat-header)] px-3.5 py-2 custom-scrollbar">
+              {uploadingFiles.map((file, index) => (
+                <div key={`${file.filename}-${index}`}>
+                  <div className="flex items-center justify-between gap-2 text-[10.5px]">
+                    <span className="truncate text-[var(--chat-text)]">{file.filename}</span>
+                    <span
+                      className={
+                        file.status === "failed" || file.status === "error"
+                          ? "text-[var(--chat-bad)]"
+                          : file.status === "indexed"
+                            ? "text-[var(--chat-good)]"
+                            : "text-[var(--chat-dim)]"
+                      }
+                    >
+                      {file.status === "error"
+                        ? (file.error ?? "failed")
+                        : file.status === "embedding"
+                          ? `training ${file.progressPercent}%`
+                          : file.status}
                     </span>
                   </div>
-                  <div className="h-1 w-full rounded-full overflow-hidden mt-0.5" style={{ background: COLORS.bg }}>
+                  <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-[var(--chat-rule)]">
                     <div
-                      className="h-full rounded-full transition-all"
+                      className="h-full rounded-full transition-all duration-500"
                       style={{
-                        width: `${f.progressPercent}%`,
-                        background: f.status === "failed" || f.status === "error" ? COLORS.danger : COLORS.accent,
+                        width: `${file.status === "uploading" ? 8 : file.progressPercent}%`,
+                        background:
+                          file.status === "failed" || file.status === "error"
+                            ? "var(--chat-bad)"
+                            : file.status === "indexed"
+                              ? "var(--chat-good)"
+                              : "var(--chat-accent)",
                       }}
                     />
                   </div>
@@ -407,25 +593,22 @@ export default function ChatWidget({ isAdmin }: Props) {
             </div>
           )}
 
-          {/* Input */}
-          <div className="relative p-3 shrink-0" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+          {/* Composer */}
+          <div className="relative shrink-0 border-t border-[var(--chat-rule)] bg-[var(--chat-header)] p-3">
             {showDropdown && dropdownMatches.length > 0 && (
-              <div
-                className="dropdown-in absolute bottom-full left-3 right-3 mb-2 rounded-lg overflow-hidden shadow-lg"
-                style={{ background: COLORS.headerBg, border: `1px solid ${COLORS.border}` }}
-              >
-                {dropdownMatches.map((match, i) => (
+              <div className="dropdown-in absolute bottom-full left-3 right-3 mb-2 overflow-hidden rounded-xl border border-[var(--chat-rule)] bg-[var(--chat-card)] shadow-lg">
+                {dropdownMatches.map((match, index) => (
                   <button
                     key={match}
                     type="button"
-                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={() => acceptSuggestion(match)}
-                    onMouseEnter={() => setActiveIndex(i)}
-                    className="w-full text-left px-3 py-2 text-xs transition-colors"
-                    style={{
-                      background: i === activeIndex ? `${COLORS.accent}22` : "transparent",
-                      color: i === activeIndex ? COLORS.accent : COLORS.text,
-                    }}
+                    onMouseEnter={() => setActiveIndex(index)}
+                    className={`block w-full px-3 py-2 text-left text-[11.5px] transition-colors ${
+                      index === activeIndex
+                        ? "bg-[var(--chat-accent-soft)] text-[var(--chat-accent-ink)]"
+                        : "text-[var(--chat-text)]"
+                    }`}
                   >
                     {match}
                   </button>
@@ -433,19 +616,16 @@ export default function ChatWidget({ isAdmin }: Props) {
               </div>
             )}
 
-            <div
-              className="flex items-end gap-2 rounded-lg px-2 py-1.5"
-              style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
-            >
+            <div className="flex items-end gap-1.5 rounded-xl border border-[var(--chat-rule)] bg-[var(--chat-card)] px-1.5 py-1.5 transition-colors focus-within:border-[var(--chat-accent)]">
               {resolvedIsAdmin && (
                 <>
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    title="Upload a document"
-                    className="w-8 h-8 rounded-md flex items-center justify-center shrink-0 hover:bg-white/5 transition-colors"
-                    style={{ color: COLORS.textMuted }}
+                    title="Train a document (PDF, DOCX, TXT, MD)"
+                    aria-label="Train a document"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--chat-dim)] transition-colors hover:bg-[var(--chat-accent-soft)] hover:text-[var(--chat-accent-ink)]"
                   >
-                    <PlusIcon />
+                    <PaperclipIcon />
                   </button>
                   <input
                     ref={fileInputRef}
@@ -453,25 +633,23 @@ export default function ChatWidget({ isAdmin }: Props) {
                     multiple
                     accept=".pdf,.docx,.txt,.md"
                     className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files) handleFilesSelected(e.target.files);
-                      e.target.value = "";
+                    onChange={(event) => {
+                      if (event.target.files) void handleFilesSelected(event.target.files);
+                      event.target.value = "";
                     }}
                   />
                 </>
               )}
 
-              <div className="relative flex-1">
-                {/* Ghost overlay: shows the greyed-out remainder of the top
-                    matching question. The typed part is rendered transparent
-                    just to keep the spacing lined up with the real textarea
-                    sitting on top of it. */}
+              <div className="relative min-w-0 flex-1">
+                {/* The typed part is transparent here purely to line the ghost
+                    remainder up with the real text in the textarea above it. */}
                 <div
                   aria-hidden="true"
-                  className="absolute inset-0 pointer-events-none whitespace-pre-wrap break-words text-sm py-1.5 px-1"
+                  className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words px-1.5 py-1.5 text-[13px]"
                 >
-                  <span style={{ color: "transparent" }}>{input}</span>
-                  <span style={{ color: COLORS.textMuted }}>{ghostRemainder}</span>
+                  <span className="text-transparent">{input}</span>
+                  <span className="text-[var(--chat-ghost)]">{ghostRemainder}</span>
                 </div>
 
                 <textarea
@@ -479,21 +657,19 @@ export default function ChatWidget({ isAdmin }: Props) {
                   value={input}
                   onChange={handleInputChange}
                   onKeyDown={handleKeyDown}
-                  onBlur={() => setTimeout(() => setShowDropdown(false), 100)}
-                  placeholder="Type a question…"
+                  onBlur={() => window.setTimeout(() => setShowDropdown(false), 120)}
+                  placeholder="Ask about policy, your leave or attendance…"
                   rows={1}
                   disabled={isSending}
-                  className="relative w-full resize-none bg-transparent border-none outline-none text-sm py-1.5 px-1"
-                  style={{ color: COLORS.text }}
+                  className="relative max-h-24 w-full resize-none bg-transparent px-1.5 py-1.5 text-[13px] text-[var(--chat-text)] outline-none placeholder:text-[var(--chat-ghost)] disabled:opacity-60"
                 />
 
                 {ghostRemainder && (
                   <button
                     type="button"
-                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={() => acceptSuggestion(topMatch)}
-                    className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] px-1.5 py-0.5 rounded"
-                    style={{ background: COLORS.panelBg, color: COLORS.textMuted, border: `1px solid ${COLORS.border}` }}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 rounded border border-[var(--chat-rule)] bg-[var(--chat-head)] px-1.5 py-0.5 text-[9.5px] text-[var(--chat-dim)]"
                   >
                     Tab ⇥
                   </button>
@@ -501,139 +677,317 @@ export default function ChatWidget({ isAdmin }: Props) {
               </div>
 
               <button
-                onClick={() => handleSend()}
+                onClick={() => void handleSend()}
                 disabled={isSending || !input.trim()}
-                className="w-8 h-8 rounded-md flex items-center justify-center shrink-0 transition-colors disabled:opacity-40"
-                style={{ background: COLORS.accent }}
+                aria-label="Send"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--chat-accent)] text-[var(--chat-on-accent)] transition-all hover:brightness-110 disabled:opacity-40"
               >
                 <SendIcon />
               </button>
             </div>
+
+            <p className="mt-1.5 text-center text-[9.5px] text-[var(--chat-ghost)]">
+              Answers come from your own records and ISMO's trained HR documents.
+            </p>
           </div>
         </div>
       )}
 
-      {/* Floating trigger button */}
-      <div className="fixed bottom-6 right-6 z-50">
+      {/* Launcher */}
+      <div className="fixed bottom-5 right-5 z-[60]">
         {!isOpen && (
           <span
-            className="absolute inset-0 rounded-full"
-            style={{ background: COLORS.accent, animation: "pulse-ring 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite" }}
+            aria-hidden="true"
+            className="absolute inset-0 rounded-full bg-[var(--chat-accent)] pulse-ring"
           />
         )}
         <button
-          onClick={() => setIsOpen((o) => !o)}
-          className="relative w-16 h-16 rounded-full flex items-center justify-center transition-transform hover:scale-105"
-          style={{
-            background: COLORS.accent,
-            boxShadow: "0 10px 28px rgba(34,184,207,0.5)",
-            animation: isOpen ? undefined : "fab-float 3s ease-in-out infinite",
-          }}
+          onClick={() => setIsOpen((open) => !open)}
+          aria-label={isOpen ? "Close HR Assistant" : "Open HR Assistant"}
+          className={`relative flex h-14 w-14 items-center justify-center rounded-full bg-[var(--chat-accent)] text-[var(--chat-on-accent)] shadow-[0_10px_30px_-6px_var(--chat-accent)] transition-transform hover:scale-105 ${
+            isOpen ? "" : "fab-float"
+          }`}
         >
           <span
-            style={{
-              display: "inline-flex",
-              transition: "transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
-              transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
-            }}
+            className="inline-flex transition-transform duration-300"
+            style={{ transform: isOpen ? "rotate(90deg) scale(0.92)" : "none" }}
           >
-            {isOpen ? <CloseIconLarge /> : <BotIcon large />}
+            {isOpen ? <CloseIcon large /> : <BotIcon large />}
           </span>
         </button>
       </div>
 
       <style>{`
-        .widget-in {
-          animation: widget-in 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-          transform-origin: bottom right;
+        .ismo-chat {
+          --chat-panel: #ffffff;
+          --chat-header: #f7f9fc;
+          --chat-card: #ffffff;
+          --chat-bubble: #ffffff;
+          --chat-head: #eef2f8;
+          --chat-row: #fafbfd;
+          --chat-rule: #dfe4ec;
+          --chat-text: #29323f;
+          --chat-strong: #101828;
+          --chat-dim: #6b7787;
+          --chat-ghost: #9aa5b4;
+          --chat-accent: #1d7f92;
+          --chat-accent-ink: #14636f;
+          --chat-accent-soft: #e6f4f7;
+          --chat-on-accent: #ffffff;
+          --chat-good: #16a34a;
+          --chat-warn: #d97706;
+          --chat-bad: #dc2626;
+          --chat-bad-soft: #fef2f2;
+          --chat-excel: #157a45;
+          --chat-excel-soft: #e9f6ee;
+          --chat-pdf: #c0392b;
+          --chat-pdf-soft: #fdeceb;
         }
-        @keyframes widget-in {
-          from { opacity: 0; transform: scale(0.85) translateY(24px); }
+        :is(.dark) .ismo-chat {
+          --chat-panel: #151d2e;
+          --chat-header: #101725;
+          --chat-card: #1a2334;
+          --chat-bubble: #1c2537;
+          --chat-head: #212c40;
+          --chat-row: #1b2434;
+          --chat-rule: #2c3850;
+          --chat-text: #dde3ec;
+          --chat-strong: #f4f7fb;
+          --chat-dim: #93a0b4;
+          --chat-ghost: #64728a;
+          --chat-accent: #22b8cf;
+          --chat-accent-ink: #7fe0ee;
+          --chat-accent-soft: rgba(34,184,207,0.14);
+          --chat-on-accent: #04222a;
+          --chat-good: #34d399;
+          --chat-warn: #fbbf24;
+          --chat-bad: #f87171;
+          --chat-bad-soft: rgba(248,113,113,0.12);
+          --chat-excel: #4ade80;
+          --chat-excel-soft: rgba(74,222,128,0.12);
+          --chat-pdf: #fb8f7f;
+          --chat-pdf-soft: rgba(251,143,127,0.12);
+        }
+
+        .panel-in { animation: panel-in .34s cubic-bezier(.34,1.4,.64,1) both; transform-origin: bottom right; }
+        @keyframes panel-in {
+          from { opacity: 0; transform: scale(.9) translateY(20px); }
           to { opacity: 1; transform: scale(1) translateY(0); }
         }
-        .msg-in {
-          animation: msg-in 0.22s ease-out both;
-        }
+        .msg-in { animation: msg-in .26s cubic-bezier(.22,1,.36,1) both; }
         @keyframes msg-in {
-          from { opacity: 0; transform: translateY(6px); }
+          from { opacity: 0; transform: translateY(8px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        .chip-in {
-          animation: chip-in 0.25s ease-out both;
-        }
-        .chip-in:nth-child(1) { animation-delay: 0.05s; }
-        .chip-in:nth-child(2) { animation-delay: 0.12s; }
-        .chip-in:nth-child(3) { animation-delay: 0.19s; }
-        .chip-in:nth-child(4) { animation-delay: 0.26s; }
-        @keyframes chip-in {
-          from { opacity: 0; transform: translateY(4px) scale(0.96); }
-          to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        .dropdown-in {
-          animation: dropdown-in 0.15s ease-out both;
-          transform-origin: bottom center;
-        }
-        @keyframes dropdown-in {
-          from { opacity: 0; transform: translateY(4px) scaleY(0.95); }
+        .table-in { animation: table-in .3s ease-out both; }
+        @keyframes table-in {
+          from { opacity: 0; transform: translateY(-4px) scaleY(.98); }
           to { opacity: 1; transform: translateY(0) scaleY(1); }
         }
-        .header-glow {
-          animation: header-glow 3.5s ease-in-out infinite;
+        .fade-in { animation: fade-in .2s ease-out both; }
+        @keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+        .chip-in { animation: chip-in .3s ease-out both; }
+        @keyframes chip-in {
+          from { opacity: 0; transform: translateY(6px) scale(.97); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
         }
-        @keyframes header-glow {
-          0%, 100% { border-bottom-color: rgba(34,184,207,0.2); }
-          50% { border-bottom-color: rgba(34,184,207,0.5); }
+        .dropdown-in { animation: dropdown-in .16s ease-out both; transform-origin: bottom center; }
+        @keyframes dropdown-in {
+          from { opacity: 0; transform: translateY(6px) scaleY(.96); }
+          to { opacity: 1; transform: translateY(0) scaleY(1); }
         }
-        @keyframes pulse-dot {
-          0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-          40% { opacity: 1; transform: scale(1); }
+        .history-in { animation: history-in .24s cubic-bezier(.22,1,.36,1) both; }
+        @keyframes history-in {
+          from { opacity: 0; transform: translateX(14px); }
+          to { opacity: 1; transform: translateX(0); }
         }
+        .pulse-ring { animation: pulse-ring 2.4s cubic-bezier(.4,0,.6,1) infinite; }
         @keyframes pulse-ring {
-          0% { opacity: 0.55; transform: scale(1); }
-          100% { opacity: 0; transform: scale(1.7); }
+          0% { opacity: .5; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.65); }
         }
+        .fab-float { animation: fab-float 3.4s ease-in-out infinite; }
         @keyframes fab-float {
           0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-6px); }
+          50% { transform: translateY(-5px); }
+        }
+        .typing-dot { animation: typing-dot 1s infinite ease-in-out; }
+        @keyframes typing-dot {
+          0%, 80%, 100% { opacity: .3; transform: scale(.75); }
+          40% { opacity: 1; transform: scale(1); }
+        }
+
+        /* Respect the visitor's motion preference: the widget still works, it
+           simply stops moving. */
+        @media (prefers-reduced-motion: reduce) {
+          .ismo-chat *, .ismo-chat *::before, .ismo-chat *::after {
+            animation-duration: .01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: .01ms !important;
+          }
         }
       `}</style>
     </div>
   );
 }
 
-function Dot({ color, delay }: { color: string; delay: string }) {
+// ------------------------------------------------------------------ pieces
+
+function EmptyState({
+  name,
+  isAdmin,
+  onPick,
+}: {
+  name?: string;
+  isAdmin: boolean;
+  onPick: (question: string) => void;
+}) {
+  const firstName = (name ?? "").replace(/^(Mr\.|Ms\.|Mrs\.)\s*/i, "").split(" ")[0];
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-3 text-center">
+      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--chat-accent-soft)] text-[var(--chat-accent-ink)] chip-in">
+        <BotIcon large />
+      </div>
+      <div>
+        <p className="text-[14px] font-semibold text-[var(--chat-strong)]">
+          {firstName ? `Hello ${firstName.charAt(0)}${firstName.slice(1).toLowerCase()}` : "Hello"} 👋
+        </p>
+        <p className="mt-1 text-[11.5px] leading-relaxed text-[var(--chat-dim)]">
+          Ask about HR policy, your leave balance or your attendance.
+          {isAdmin && " As an administrator you can also train new documents."}
+        </p>
+      </div>
+      <div className="flex flex-wrap justify-center gap-1.5">
+        {SUGGESTIONS.map((question, index) => (
+          <button
+            key={question}
+            onClick={() => onPick(question)}
+            style={{ animationDelay: `${60 + index * 70}ms` }}
+            className="chip-in rounded-full border border-[var(--chat-rule)] bg-[var(--chat-card)] px-2.5 py-1.5 text-[11px] text-[var(--chat-text)] transition-all hover:-translate-y-px hover:border-[var(--chat-accent)] hover:text-[var(--chat-accent-ink)]"
+          >
+            {question}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HistoryPanel({
+  conversations,
+  activeId,
+  onClose,
+  onPick,
+  onDelete,
+}: {
+  conversations: ConversationSummary[];
+  activeId: number | null;
+  onClose: () => void;
+  onPick: (id: number) => void;
+  onDelete: (id: number) => void;
+}) {
+  return (
+    <div className="absolute inset-0 flex flex-col bg-[var(--chat-panel)] history-in">
+      <div className="flex items-center justify-between border-b border-[var(--chat-rule)] px-3.5 py-2.5">
+        <p className="text-[12px] font-semibold text-[var(--chat-strong)]">Past chats</p>
+        <button
+          onClick={onClose}
+          aria-label="Back to chat"
+          className="rounded-md p-1 text-[var(--chat-dim)] transition-colors hover:bg-[var(--chat-head)]"
+        >
+          <CloseIcon />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
+        {conversations.length === 0 ? (
+          <p className="px-2 py-6 text-center text-[11.5px] text-[var(--chat-dim)]">
+            No earlier conversations yet.
+          </p>
+        ) : (
+          conversations.map((conversation) => (
+            <div
+              key={conversation.id}
+              className={`group flex items-center gap-1 rounded-lg px-2 py-2 transition-colors hover:bg-[var(--chat-head)] ${
+                conversation.id === activeId ? "bg-[var(--chat-accent-soft)]" : ""
+              }`}
+            >
+              <button
+                onClick={() => onPick(conversation.id)}
+                className="min-w-0 flex-1 text-left"
+              >
+                <span className="block truncate text-[11.5px] text-[var(--chat-text)]">
+                  {conversation.title || `Conversation ${conversation.id}`}
+                </span>
+                <span className="block text-[9.5px] text-[var(--chat-dim)]">
+                  {new Date(conversation.created_at.replace(" ", "T")).toLocaleString()}
+                </span>
+              </button>
+              <button
+                onClick={() => onDelete(conversation.id)}
+                aria-label="Delete conversation"
+                className="rounded p-1 text-[var(--chat-dim)] opacity-0 transition-opacity hover:text-[var(--chat-bad)] group-hover:opacity-100"
+              >
+                <TrashIcon />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HeaderButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--chat-dim)] transition-colors hover:bg-[var(--chat-head)] hover:text-[var(--chat-strong)]"
+    >
+      {children}
+    </button>
+  );
+}
+
+function Dot({ delay }: { delay: string }) {
   return (
     <span
-      className="w-1.5 h-1.5 rounded-full inline-block"
-      style={{ background: color, animation: `pulse-dot 1s ${delay} infinite ease-in-out` }}
+      className="typing-dot inline-block h-1.5 w-1.5 rounded-full bg-[var(--chat-dim)]"
+      style={{ animationDelay: delay }}
     />
   );
 }
 
-function BotIcon({ large }: { large?: boolean }) {
-  const size = large ? 26 : 16;
+// -------------------------------------------------------------------- icons
+
+function BotIcon({ large, small }: { large?: boolean; small?: boolean }) {
+  const size = large ? 24 : small ? 12 : 17;
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#04222A" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="4" y="8" width="16" height="12" rx="2" />
-      <path d="M12 8V4" />
-      <circle cx="12" cy="3" r="1" />
-      <path d="M8 13h.01M16 13h.01" />
-      <path d="M9 17h6" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="8" width="16" height="12" rx="2.5" />
+      <path d="M12 8V4.5" />
+      <circle cx="12" cy="3.2" r="1.2" />
+      <path d="M8.5 13h.01M15.5 13h.01" />
+      <path d="M9.5 17h5" />
     </svg>
   );
 }
 
-function CloseIcon() {
+function CloseIcon({ large }: { large?: boolean }) {
+  const size = large ? 22 : 15;
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <path d="M18 6 6 18M6 6l12 12" />
-    </svg>
-  );
-}
-
-function CloseIconLarge() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#04222A" strokeWidth="2.2" strokeLinecap="round">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
       <path d="M18 6 6 18M6 6l12 12" />
     </svg>
   );
@@ -641,17 +995,68 @@ function CloseIconLarge() {
 
 function SendIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#04222A" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
       <path d="m22 2-7 20-4-9-9-4Z" />
       <path d="M22 2 11 13" />
     </svg>
   );
 }
 
-function PlusIcon() {
+function PaperclipIcon() {
   return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 5v14M5 12h14" />
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
+function HistoryIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 3v5h5" />
+      <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+      <path d="M12 7v5l4 2" />
+    </svg>
+  );
+}
+
+function PlusCircleIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 8v8M8 12h8" />
+    </svg>
+  );
+}
+
+function ExpandIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+    </svg>
+  );
+}
+
+function ShrinkIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
     </svg>
   );
 }
