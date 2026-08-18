@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+python-dotenv
+python-multipart
+sqlalchemy
+pymysql
+cryptography
+pypdf
+python-docx
+chromadb
+langchain-text-splitters
+langchain
+ollama
+pyodbc
+httpx
