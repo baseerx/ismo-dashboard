@@ -40,11 +40,21 @@ export async function sendChatMessage(
   conversationId: number | null,
   documentId: number | null,
 ): Promise<ChatResponse> {
-  const { data } = await api.post<ChatResponse>("/chat/", {
-    question,
-    conversation_id: conversationId,
-    document_id: documentId,
-  });
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  const token = localStorage.getItem("token");
+
+  const { data } = await api.post<ChatResponse>(
+    "/chat/",
+    {
+      question,
+      conversation_id: conversationId,
+      document_id: documentId,
+      user_context: user,
+    },
+    {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    },
+  );
   return data;
 }
 

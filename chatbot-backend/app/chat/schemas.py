@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -11,24 +11,33 @@ class SourceChunk(BaseModel):
     distance: Optional[float] = None
 
 
+class Action(BaseModel):
+    type: str  # "navigate" for now, extensible later
+    path: str
+    label: str
+
+
 class ChatRequest(BaseModel):
     question: str
-    top_k: int = 5
-    conversation_id: Optional[int] = None  # omit to start a new conversation
-    document_id: Optional[int] = None  # omit to search across all documents
+    conversation_id: Optional[int] = None
+    document_id: Optional[int] = None
+    # The frontend's cached user object (localStorage "user") - name,
+    # erpid, department, role, manager, whatever fields you already have.
+    user_context: Optional[Dict[str, Any]] = None
 
 
 class ChatResponse(BaseModel):
     conversation_id: int
     answer: str
-    sources: List[SourceChunk]
+    sources: List[SourceChunk] = []
+    actions: List[Action] = []
 
 
 class MessageResponse(BaseModel):
     id: int
-    role: str  # "user" | "assistant"
+    role: str
     content: str
-    sources: List[SourceChunk]
+    sources: List[SourceChunk] = []
     created_at: datetime
 
 
@@ -39,6 +48,3 @@ class ConversationResponse(BaseModel):
 
     class Config:
         from_attributes = True
-
-class ConversationUpdate(BaseModel):
-    title: str        
