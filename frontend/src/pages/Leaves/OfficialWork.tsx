@@ -38,7 +38,7 @@ export default function OfficialWork() {
     []
   );
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const leavetype = ["Meetings", "ACT Test","Work From Home", "Official Tour", "Foreign Tour"];
+  const leavetype = ["Meetings", "ACT Test","Work From Home","Training", "Official Tour", "Foreign Tour"];
 
   const [employeesData, setEmployeesData] = useState<any[]>([]);
   const [balance, setBalance] = useState<{
