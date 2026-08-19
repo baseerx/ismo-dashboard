@@ -68,9 +68,13 @@ class Settings:
     # ==========================
     # HTTP
     # ==========================
+    # 5174 is included because Vite silently falls back to it when 5173 is
+    # already taken by another project on the same machine, and a widget that
+    # cannot reach the service looks broken rather than misconfigured.
     CORS_ORIGINS = _csv(
         "CORS_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:5174,http://127.0.0.1:5174,"
         "http://192.168.157.55:9000,http://192.168.157.55:9002",
     )
 

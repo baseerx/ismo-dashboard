@@ -69,6 +69,35 @@ def create_document_record(
     return document
 
 
+def remove_stored_file(document: Document) -> bool:
+    """Delete the uploaded file an untrained document points at.
+
+    Without this the file survives in `uploads/`, and the next
+    `python -m app.cli reindex` would train it straight back in - an
+    administrator who removed a superseded policy would find it answering
+    questions again after the next deployment.
+
+    Only files inside the upload folder are touched, so a path that somehow
+    points elsewhere is left alone rather than deleted.
+    """
+    if not document.filepath:
+        return False
+
+    target = Path(document.filepath).resolve()
+    folder = Path(settings.UPLOAD_FOLDER).resolve()
+
+    if folder not in target.parents:
+        return False
+
+    try:
+        target.unlink(missing_ok=True)
+        return True
+    except OSError:
+        # A locked file must not turn an untrain into a 500; the row and the
+        # vectors are already gone, which is what makes it stop answering.
+        return False
+
+
 def process_document(db: Session, document: Document) -> Document:
     """Extracts and cleans text, then updates the document's status."""
     document.status = "extracting"

@@ -183,8 +183,12 @@ def delete_document(
     # Chunks first: a document row without its vectors is recoverable, whereas
     # orphaned vectors would keep being cited with no document to point at.
     delete_document_chunks(document_id)
+    removed = service.remove_stored_file(document)
     db.delete(document)
     db.commit()
 
-    logger.info("training: document %s deleted by erp=%s", document_id, identity.erp_id)
+    logger.info(
+        "training: document %s deleted by erp=%s (file removed: %s)",
+        document_id, identity.erp_id, removed,
+    )
     return {"detail": "Document deleted"}

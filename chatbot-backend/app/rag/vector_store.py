@@ -35,6 +35,30 @@ def _open_collection():
 
 _collection = _open_collection()
 
+# Chunks this process knows about. Chroma shares its metadata between
+# processes but not the in-memory vector index: a document added by another
+# process (`python -m app.cli ingest` while the service is running) raises the
+# count here yet is never returned by a search until the service restarts.
+# Tracking the number we wrote ourselves is what lets `index_is_stale` notice.
+_known_chunks = _collection.count()
+
+
+def _remember_size() -> None:
+    global _known_chunks
+    _known_chunks = _collection.count()
+
+
+def index_is_stale() -> bool:
+    """True when another process has written to the store since startup.
+
+    Those documents are invisible to search in this process, so the honest
+    thing is to report it rather than quietly answer without them.
+    """
+    try:
+        return _collection.count() != _known_chunks
+    except Exception:
+        return False
+
 
 def collection_info() -> Dict:
     return {
@@ -42,6 +66,8 @@ def collection_info() -> Dict:
         "chunks": _collection.count(),
         "space": (_collection.metadata or {}).get("hnsw:space", "unknown"),
         "path": settings.CHROMA_PATH,
+        "searchable_chunks": _known_chunks,
+        "stale": index_is_stale(),
     }
 
 
@@ -79,10 +105,12 @@ def add_chunks(
         documents=chunks,
         metadatas=metadatas,
     )
+    _remember_size()
 
 
 def delete_document_chunks(document_id: int) -> None:
     _collection.delete(where={"document_id": document_id})
+    _remember_size()
 
 
 def reset_collection() -> None:
@@ -97,6 +125,7 @@ def reset_collection() -> None:
     except Exception:  # nothing to delete on a fresh store
         logger.info("reset_collection: no existing collection to drop")
     _collection = _open_collection()
+    _remember_size()
     logger.info("reset_collection: collection recreated with %s distance", DISTANCE_SPACE)
 
 

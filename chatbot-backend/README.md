@@ -46,15 +46,24 @@ differ, everything returns 401.
 ## Training documents
 
 The vector store (`chroma_db/`) is derived data and is deliberately **not** in
-version control — it is large, binary, and changes on every upload. The source
-documents in `uploads/` are tracked instead, so a new deployment builds its own
-index:
+version control — it is large, binary, and changes on every upload. The seeded
+HR manual in `uploads/` is committed, so a new deployment can build its own
+index from it. Anything trained later through the widget stays on that host
+(`uploads/` is git-ignored), which is why each environment is trained
+separately:
 
 ```bat
 train_documents.bat            REM index what is in uploads\
 train_documents.bat --reset    REM drop the collection and rebuild
 train_documents.bat status     REM what is indexed right now
 ```
+
+**Restart the service after training from the command line.** Chroma shares its
+metadata between processes but not its search index, so a service that was
+already running keeps answering from the documents it loaded at startup and
+silently omits anything the CLI added. The CLI prints this reminder, the service
+logs a warning when it notices, and `GET /` reports `"stale": true`. Training
+through the chat widget is unaffected — that happens inside the service itself.
 
 Day to day, an administrator trains documents from the paperclip button in the
 chat widget; PDF, DOCX, TXT and MD are accepted. Duplicate uploads are rejected

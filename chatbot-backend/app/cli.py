@@ -50,7 +50,13 @@ def _ingest_path(db, path: Path) -> bool:
         record = existing
         print(f"  = {path.name}: already registered as document {record.id}, re-indexing")
     else:
-        stored_path, size = service.save_upload_file(path.name, payload)
+        if path.resolve().parent == Path(settings.UPLOAD_FOLDER).resolve():
+            # Already in the upload folder - registering it in place, rather
+            # than copying, keeps `reindex` from leaving a second copy of every
+            # document behind on a fresh database.
+            stored_path, size = str(path), len(payload)
+        else:
+            stored_path, size = service.save_upload_file(path.name, payload)
         record = service.create_document_record(
             db=db,
             filename=path.name,
@@ -122,7 +128,21 @@ def command_reindex(reset: bool) -> int:
         return 1
 
     print(f"re-indexing {len(files)} file(s) from {folder.resolve()}")
-    return command_ingest([str(path) for path in files])
+    result = command_ingest([str(path) for path in files])
+    _restart_notice()
+    return result
+
+
+def _restart_notice() -> None:
+    """Chroma shares its metadata between processes but not its search index.
+
+    A running service therefore keeps answering from the documents it loaded at
+    startup, and silently omits anything trained here until it is restarted.
+    """
+    print()
+    print("NOTE: if the assistant service is running, restart it now -")
+    print("      documents trained from the command line are not searchable")
+    print("      by a process that started before them.")
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -146,7 +166,9 @@ def main(argv: List[str] | None = None) -> int:
     if args.command == "status":
         return command_status()
     if args.command == "ingest":
-        return command_ingest(args.paths)
+        result = command_ingest(args.paths)
+        _restart_notice()
+        return result
     if args.command == "reindex":
         return command_reindex(args.reset)
 

@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 
 from app.config.settings import settings
 from app.rag.embeddings import embed_query
+from app.rag.vector_store import index_is_stale
 from app.rag.vector_store import query as vector_query
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,13 @@ def retrieve_top_chunks(
     unrelated, and passing that to the model is how a chatbot ends up quoting
     the holiday schedule at somebody asking about probation.
     """
+    if index_is_stale():
+        logger.warning(
+            "The document index has been written to by another process (most "
+            "likely `app.cli ingest`). Those documents cannot be searched until "
+            "this service is restarted."
+        )
+
     top_k = top_k or settings.RETRIEVAL_TOP_K
     ceiling = settings.RETRIEVAL_MAX_DISTANCE if max_distance is None else max_distance
 

@@ -41,5 +41,12 @@ if errorlevel 1 (
 
 echo.
 "venv\Scripts\python.exe" -m app.cli status
+
+echo.
+echo ===========================================================================
+echo  If the assistant service is already running, restart it now (run_server.bat).
+echo  Documents trained here are not searchable by a process that started before
+echo  them. Training through the chat widget does not need a restart.
+echo ===========================================================================
 pause
 endlocal
