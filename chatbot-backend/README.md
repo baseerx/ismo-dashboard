@@ -111,6 +111,59 @@ from `leave_type_counts`, pending leave counted as spent, the 10-day Casual
 Leave reduction once Rest & Recreational leave is taken, and the day-status
 precedence `present > leave > official work > holiday > weekend > absent`.
 
+## Read-only by construction
+
+The assistant answers questions about HR records and **never changes them**. No
+code path writes to `leaves`, `attendance`, `employees`, `official_work_leaves`,
+`public_holidays` or `leave_type_counts`, and that is enforced rather than
+assumed: [`app/database/guard.py`](app/database/guard.py) inspects every
+statement before it reaches SQL Server and refuses any INSERT, UPDATE, DELETE,
+MERGE, TRUNCATE, DDL, EXEC or GRANT that names a table other than the
+assistant's own three. Unrecognised write statements are refused too — it fails
+closed.
+
+The three tables it does write are its own bookkeeping:
+
+| Table | Written when | Turn it off with |
+|---|---|---|
+| `conversations`, `messages` | a question is asked and answered | `PERSIST_CHAT_HISTORY=false` |
+| `documents` | an administrator trains or removes a document | — (that is the training feature) |
+
+`PERSIST_CHAT_HISTORY=false` makes the service write nothing at all while
+answering. Answers are identical; what is lost is follow-up context ("and for
+medical leave?" no longer knows what came before) and the "past chats" panel.
+
+**Recommended: make it read-only at the server too.** The in-process guard stops
+mistakes, not someone who can already run code here. The connection currently
+ships configured for `sa`, which can do anything. Create a least-privilege login
+instead and set `DB_USER` / `DB_PASSWORD` to it:
+
+```sql
+CREATE LOGIN ismo_assistant WITH PASSWORD = 'a strong password here';
+USE Attendance_System;
+CREATE USER ismo_assistant FOR LOGIN ismo_assistant;
+
+-- read everything the assistant answers from
+ALTER ROLE db_datareader ADD MEMBER ismo_assistant;
+
+-- write only its own three tables
+GRANT INSERT, UPDATE, DELETE ON dbo.conversations TO ismo_assistant;
+GRANT INSERT, UPDATE, DELETE ON dbo.messages      TO ismo_assistant;
+GRANT INSERT, UPDATE, DELETE ON dbo.documents     TO ismo_assistant;
+
+-- and nothing else
+DENY INSERT, UPDATE, DELETE ON dbo.leaves               TO ismo_assistant;
+DENY INSERT, UPDATE, DELETE ON dbo.attendance           TO ismo_assistant;
+DENY INSERT, UPDATE, DELETE ON dbo.employees            TO ismo_assistant;
+DENY INSERT, UPDATE, DELETE ON dbo.official_work_leaves TO ismo_assistant;
+DENY INSERT, UPDATE, DELETE ON dbo.leave_type_counts    TO ismo_assistant;
+DENY INSERT, UPDATE, DELETE ON dbo.public_holidays      TO ismo_assistant;
+```
+
+Create the three tables once (start the service as a user that may create them,
+or run the DDL by hand) before switching the login over, since a read-only user
+cannot create them itself.
+
 ## Privacy
 
 - The ERP id used for every lookup comes from the **verified** token, never from
@@ -157,6 +210,7 @@ Interactive docs while the service is running: <http://localhost:8000/docs>
 | `RETRIEVAL_MAX_DISTANCE` | `0.45` | cosine ceiling for relevance. Real matches on the HR manual measure 0.20–0.37; unrelated questions 0.45+. Raising it invites confident answers from passages that merely look similar |
 | `RETRIEVAL_TOP_K` | `6` | passages per question |
 | `MODEL_TEMPERATURE` | `0.1` | this assistant quotes policy; it should not improvise |
+| `PERSIST_CHAT_HISTORY` | `true` | `false` stops the service writing anything at all while answering, at the cost of follow-up context and the past-chats panel |
 | `REPORT_MAX_RANGE_DAYS` | `800` | longest period one report may cover |
 
 ## Troubleshooting

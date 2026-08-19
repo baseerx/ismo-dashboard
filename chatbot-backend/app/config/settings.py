@@ -101,6 +101,14 @@ class Settings:
     REPORT_MAX_ROWS = int(os.getenv("REPORT_MAX_ROWS", "5000"))
     REPORT_MAX_RANGE_DAYS = int(os.getenv("REPORT_MAX_RANGE_DAYS", "800"))
 
+    # The assistant never writes HR data - that is enforced in
+    # app/database/guard.py, not merely intended. What it does write is its own
+    # chat log, which is what makes follow-up questions and the "past chats"
+    # panel work. Set this false for a service that writes nothing at all
+    # during a conversation; answers are unchanged, but each question is then
+    # answered on its own with no memory of the last one.
+    PERSIST_CHAT_HISTORY = _flag("PERSIST_CHAT_HISTORY", "true")
+
     DEBUG_SQL = _flag("DEBUG_SQL")
 
     def __init__(self):

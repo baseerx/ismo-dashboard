@@ -451,7 +451,7 @@ export default function ChatWidget({ isAdmin }: Props) {
 
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13.5px] font-semibold text-[var(--chat-strong)]">
-                HR Assistant
+                HR Assistant | Baseer
               </p>
               <p className="truncate text-[10.5px] text-[var(--chat-dim)]">
                 {indexedDocuments.length > 0

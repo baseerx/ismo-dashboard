@@ -443,9 +443,14 @@ def report_answer(
     whose = "your" if is_self else f"{employee.get('name')}'s"
 
     if row_count == 0 and subject != "attendance":
-        return (
+        empty = (
             f"There are no {what} records for {whose} account in **{period.label}** "
-            f"({period.describe()}), so a report would come out empty. Try another period."
+            f"({period.describe()}), so the report will be a nil return."
+        )
+        return (
+            f"{empty} Preparing it as **{preferred_format.upper()}** now."
+            if preferred_format
+            else f"{empty} Would you still like it as **Excel** or **PDF**?"
         )
 
     if preferred_format:

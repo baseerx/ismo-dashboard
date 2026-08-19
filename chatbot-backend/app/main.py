@@ -15,6 +15,7 @@ from app.auth.identity import Identity, current_identity
 from app.chat.router import router as chat_router
 from app.config.settings import settings
 from app.database.db import Base, engine
+from app.database.guard import OWN_TABLES
 from app.database.schema import ensure_schema
 from app.documents.router import router as documents_router
 from app.models import chat, document  # noqa: F401  # registers the tables
@@ -53,6 +54,11 @@ async def lifespan(_: FastAPI):
         "HR assistant ready | db=%s@%s | model=%s | embeddings=%s | %s chunks (%s)",
         settings.DB_NAME, settings.DB_HOST, settings.MODEL_NAME,
         settings.EMBEDDING_MODEL, store["chunks"], store["space"],
+    )
+    logger.info(
+        "HR data is read-only; writes allowed only to %s | chat history: %s",
+        ", ".join(sorted(OWN_TABLES)),
+        "stored" if settings.PERSIST_CHAT_HISTORY else "not stored",
     )
     if not uses_cosine():
         logger.warning(

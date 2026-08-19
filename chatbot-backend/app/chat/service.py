@@ -68,7 +68,11 @@ Rules:
 
 def _get_or_create_conversation(
     db: Session, conversation_id: Optional[int], identity: Identity, question: str
-) -> Conversation:
+) -> Optional[Conversation]:
+    # With history off the service keeps no record of the conversation at all.
+    if not settings.PERSIST_CHAT_HISTORY:
+        return None
+
     if conversation_id:
         conversation = (
             db.query(Conversation)
@@ -99,7 +103,12 @@ def _get_or_create_conversation(
     return conversation
 
 
-def _load_history(db: Session, conversation: Conversation, limit: int = 6) -> List[Dict[str, str]]:
+def _load_history(
+    db: Session, conversation: Optional[Conversation], limit: int = 6
+) -> List[Dict[str, str]]:
+    if conversation is None:
+        return []
+
     recent = (
         db.query(Message)
         .filter(Message.conversation_id == conversation.id)
@@ -111,7 +120,12 @@ def _load_history(db: Session, conversation: Conversation, limit: int = 6) -> Li
     return [{"role": message.role, "content": message.content} for message in recent]
 
 
-def _save(db: Session, conversation: Conversation, role: str, content: str, sources=None) -> None:
+def _save(
+    db: Session, conversation: Optional[Conversation], role: str, content: str, sources=None
+) -> None:
+    if conversation is None:
+        return
+
     db.add(
         Message(
             conversation_id=conversation.id,
@@ -268,11 +282,10 @@ def _report(db, employee, understanding, is_self):
     answer = answers.report_answer(
         subject, employee, period, len(rows), is_self, understanding.report_format
     )
-    offer = (
-        answers.report_offer(subject, employee, period, understanding.report_format)
-        if rows or subject == "attendance"
-        else None
-    )
+    # Offered even when the period is empty: "no leave taken between these
+    # dates" is a document people are asked to produce, and the builders
+    # already render an empty period properly.
+    offer = answers.report_offer(subject, employee, period, understanding.report_format)
     return answer, block, offer
 
 
@@ -486,7 +499,8 @@ async def answer_question(
     _save(db, conversation, "assistant", answer, trimmed_sources or None)
 
     return {
-        "conversation_id": conversation.id,
+        # 0 means "not stored" - the widget treats it as a fresh thread.
+        "conversation_id": conversation.id if conversation else 0,
         "answer": answer,
         "intent": understanding.intent.value,
         "sources": trimmed_sources,
