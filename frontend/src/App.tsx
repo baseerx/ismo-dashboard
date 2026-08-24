@@ -23,6 +23,7 @@ import { ScrollToTop } from "./components/common/ScrollToTop";
 import SectionAttendanceReport from "./pages/Tables/SectionAttendanceReport";
 import ApplyLeave from "./pages/Leaves/ApplyLeave";
 import InternalJobApplication from "./pages/Jobs/InternalJobApplication";
+import JobRequisitions from "./pages/Jobs/JobRequisitions";
 import PublicHoliday from "./pages/Leaves/PublicHolidays";
 // import TodaysAttendance from "./pages/Tables/TodaysAttendance";
 import IndividualAttendance from "./pages/Tables/IndividualAttendance";
@@ -168,6 +169,7 @@ export default function App() {
                 path="/internal-job-application"
                 element={<InternalJobApplication />}
               />
+              <Route path="/job-requisitions" element={<JobRequisitions />} />
               <Route
                 path="/leaves/public-holidays"
                 element={<PublicHoliday />}

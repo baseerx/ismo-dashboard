@@ -7,8 +7,10 @@ submission with its education rows.
 
 import json
 import logging
+from datetime import date
 
 from django.db import transaction
+from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
@@ -30,9 +32,16 @@ logger = logging.getLogger(__name__)
 
 @require_GET
 def requisitions(request):
-    """Open vacancies, newest first, for the dropdown."""
-    rows = JobRequisition.objects.filter(is_open=True).values(
-        "id", "title", "department", "location", "closing_date"
+    """Vacancies that can still be applied for, newest first.
+
+    Open, and either without a closing date or not yet past it - a post whose
+    closing date has gone by should not appear on the form even if nobody has
+    got round to closing it.
+    """
+    rows = (
+        JobRequisition.objects.filter(is_open=True)
+        .filter(Q(closing_date__isnull=True) | Q(closing_date__gte=date.today()))
+        .values("id", "title", "department", "location", "closing_date")
     )
 
     return JsonResponse(
