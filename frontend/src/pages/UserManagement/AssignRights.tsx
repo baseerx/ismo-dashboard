@@ -62,6 +62,9 @@ export default function AssignRights() {
   // its selection from defaultSelected only on first render.
   const [chatbotFormKey, setChatbotFormKey] = useState(0);
   const [savingChatbot, setSavingChatbot] = useState(false);
+  // Set when the saved rule could not be read, so the card can say the setting
+  // is unavailable instead of showing a default that then fails to save.
+  const [chatbotUnavailable, setChatbotUnavailable] = useState<string | null>(null);
 
  
 
@@ -80,10 +83,15 @@ export default function AssignRights() {
         Array.isArray(response.data?.user_ids) ? response.data.user_ids : []
       );
       setChatbotFormKey((key) => key + 1);
-    } catch (error) {
-      // Leave the form on its default rather than blocking the page; saving
-      // will report the real problem if the endpoint is genuinely missing.
+      setChatbotUnavailable(null);
+    } catch (error: any) {
+      // Say so on the card rather than showing a default that cannot be saved.
       console.error("Error fetching chatbot visibility:", error);
+      setChatbotUnavailable(
+        error?.response?.status === 404
+          ? "This setting needs the latest backend deployed on the API server."
+          : "The API server did not answer, so the current setting is unknown."
+      );
     }
   };
 
@@ -111,8 +119,16 @@ export default function AssignRights() {
       setChatbotFormKey((key) => key + 1);
       toast.success("Chatbot visibility saved");
     } catch (error: any) {
+      // Prefer the server's own words; it explains 403s and validation
+      // failures far better than a generic message can.
+      const status = error?.response?.status;
       toast.error(
-        error?.response?.data?.error ?? "Failed to save chatbot visibility"
+        error?.response?.data?.error ??
+          (status === 404
+            ? "This setting needs the latest backend deployed on the API server."
+            : !error?.response
+              ? "Could not reach the API server. Check that it is running."
+              : `Failed to save chatbot visibility (HTTP ${status})`)
       );
     } finally {
       setSavingChatbot(false);
@@ -335,6 +351,12 @@ export default function AssignRights() {
           title="HR Assistant (Chatbot)"
           desc="Controls whether the assistant's launcher appears in the corner of the dashboard. It does not change what the assistant can answer, or who its answers are scoped to."
         >
+          {chatbotUnavailable && (
+            <div className="mb-4 rounded-xl border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/15 dark:text-orange-400">
+              {chatbotUnavailable}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             {CHATBOT_MODES.map((option) => {
               const active = chatbotMode === option.value;

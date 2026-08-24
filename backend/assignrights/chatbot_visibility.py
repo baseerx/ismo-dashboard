@@ -8,11 +8,14 @@ answers questions is affected.
 Reading the rule is open, like the rest of this API — it reveals only whether a
 feature is switched on. Changing it is not: a policy that governs every user
 should not be rewritable by an unauthenticated POST, so the write verifies the
-dashboard's own login token and requires a superuser. That is the same token
-and the same signing key the chat service verifies.
+signature on the dashboard's own login token and requires a superuser. That is
+the same token and the same signing key the chat service verifies.
+
+It does not enforce the token's one-hour `expires` stamp, because nothing else
+in this API does and the frontend does not sign people out - see
+`_admin_from_token`.
 """
 
-import datetime
 import json
 import logging
 
@@ -76,18 +79,17 @@ def _admin_from_token(request):
     except jwt.PyJWTError:
         return None, "That session is not valid any more. Sign in again."
 
-    # The dashboard stamps its own `expires` rather than a JWT `exp`, so PyJWT
-    # cannot enforce it.
-    expires = payload.get("expires")
-    if expires:
-        try:
-            deadline = datetime.datetime.fromisoformat(str(expires))
-            if deadline.tzinfo is None:
-                deadline = deadline.replace(tzinfo=datetime.timezone.utc)
-            if datetime.datetime.now(datetime.timezone.utc) > deadline:
-                return None, "That session has expired. Sign in again."
-        except ValueError:
-            return None, "That session is not valid any more. Sign in again."
+    # The token's stamped `expires` is deliberately not enforced. The dashboard
+    # sets it an hour out but nothing else in this API checks it, and the
+    # frontend keeps the session until the user signs out - so enforcing it here
+    # rejected administrators who had simply been logged in since the morning,
+    # while every other endpoint kept working. Being stricter than the
+    # application's own idea of a session made this feature look broken.
+    #
+    # A real session lifetime belongs in one place - an axios interceptor plus a
+    # middleware - rather than in this one view. Until then the signature is
+    # what is checked, which still refuses anything not issued by this
+    # dashboard.
 
     if not payload.get("is_superuser"):
         return None, "Only an administrator can change this."
