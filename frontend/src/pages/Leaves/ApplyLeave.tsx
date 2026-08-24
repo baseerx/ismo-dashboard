@@ -16,6 +16,7 @@ import Select from "../../components/form/Select";
 import TextArea from "../../components/form/input/TextArea";
 import Badge from "../../components/ui/badge/Badge";
 import { LeaveIcon, InfoIcon } from "../../icons";
+import { findSectionHead, sortedApprovers } from "../../utils/sectionHead";
 
 // Leave types that may carry a supporting medical document. Kept in step with
 // MEDICAL_LEAVE_TYPES in leaves/views.py, which enforces the same rule.
@@ -46,48 +47,6 @@ type AttendanceRow = {
   approved_by?: string;
   created_at?: string;
 };
-
-/**
- * Seniority as a number: G-11 is 11, G-01 is 1, higher is more senior.
- *
- * Reads the grade's own label when the API supplies it and falls back to
- * `grade_id`, which carries the same number. Anything unrecognised ranks last
- * rather than accidentally ranking top.
- */
-function gradeRank(employee: any): number {
-  const fromName = String(employee?.grade ?? "").replace(/\D/g, "");
-  if (fromName) return Number(fromName);
-
-  const fromId = Number(employee?.grade_id);
-  return Number.isFinite(fromId) ? fromId : -1;
-}
-
-/**
- * The section head for an applicant: the most senior active employee in their
- * own section, excluding themselves.
- *
- * Seniority alone decides it. This used to require grade 9 or above, which left
- * anyone in a section topping out at grade 8 with no head proposed at all. Ties
- * are broken by the lower ERP id, so the same name is offered on every visit
- * rather than shuffling between equally-graded colleagues.
- */
-function findSectionHead(employees: any[], self: any): any | null {
-  const candidates = employees.filter(
-    (e: any) =>
-      Number(e.section_id) === Number(self.section_id) &&
-      Number(e.erp_id) !== Number(self.erp_id) &&
-      (e.flag === undefined || Number(e.flag) === 1)
-  );
-
-  if (candidates.length === 0) return null;
-
-  return candidates.reduce((best: any, e: any) => {
-    const difference = gradeRank(e) - gradeRank(best);
-    if (difference > 0) return e;
-    if (difference === 0 && Number(e.erp_id) < Number(best.erp_id)) return e;
-    return best;
-  });
-}
 
 export default function IndividualAttendance() {
   const [leaves, setLeaves] = useState<AttendanceRow[]>([]);
@@ -265,7 +224,8 @@ export default function IndividualAttendance() {
   }, []);
 
   // Auto-select the logged in user as the employee, and default their Section
-  // Head to the most senior person in their own section.
+  // Head to the most senior person in their own section - which is themselves
+  // when they are that person.
   useEffect(() => {
     if (initializedSelf.current || employeesData.length === 0) return;
 
@@ -281,8 +241,8 @@ export default function IndividualAttendance() {
     selfDefaults.current = {
       employee_id: self.id,
       erp_id: self.erp_id,
-      // Blank only when the applicant is the sole active member of their
-      // section; the dropdown is there for them to choose.
+      // A head is always found now, including the applicant themselves; the
+      // fallback only covers an employee missing from the list entirely.
       head: head ? head.erp_id : "",
     };
 
@@ -292,33 +252,18 @@ export default function IndividualAttendance() {
   // Section Head choices: the applicant's own section first, most senior
   // first, so the head the form defaults to is the top entry rather than
   // something to hunt for among four hundred names.
+  // Section Head choices: the applicant's own section first, most senior
+  // first, so the head the form defaults to is the top entry rather than
+  // something to hunt for among four hundred names.
   const headOptions = useMemo(() => {
     const self = employeesData.find(
       (e: any) => Number(e.erp_id) === Number(user.erpid)
     );
 
-    const label = (e: any) =>
-      `${e.name} (${e.erp_id})${e.grade ? ` · ${e.grade}` : ""}`;
-    const toOption = (e: any) => ({ label: label(e), value: `${e.erp_id}-${e.id}` });
-
-    const active = employeesData.filter((e: any) => e.flag === undefined || Number(e.flag) === 1);
-    if (!self) return active.map(toOption);
-
-    const sameSection = active
-      .filter(
-        (e: any) =>
-          Number(e.section_id) === Number(self.section_id) &&
-          Number(e.erp_id) !== Number(self.erp_id)
-      )
-      .sort((a: any, b: any) => gradeRank(b) - gradeRank(a) || Number(a.erp_id) - Number(b.erp_id));
-
-    // Everyone else stays reachable — a few applications legitimately route
-    // outside the section — but below the applicant's own colleagues.
-    const others = active
-      .filter((e: any) => Number(e.section_id) !== Number(self.section_id))
-      .sort((a: any, b: any) => gradeRank(b) - gradeRank(a) || String(a.name).localeCompare(String(b.name)));
-
-    return [...sameSection, ...others].map(toOption);
+    return sortedApprovers(employeesData, self).map((e: any) => ({
+      label: `${e.name} (${e.erp_id})${e.grade ? ` · ${e.grade}` : ""}`,
+      value: `${e.erp_id}-${e.id}`,
+    }));
   }, [employeesData, user.erpid]);
 
   const selectedEmployee = employeesData.find(

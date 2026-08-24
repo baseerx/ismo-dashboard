@@ -3,12 +3,13 @@ import ComponentCard from "../../components/common/ComponentCard";
 import PageMeta from "../../components/common/PageMeta";
 import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
 import axios from "../../api/axios"; // Adjust the import path as necessary
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import moment from "moment";
 import _ from "lodash";
 import { ToastContainer, toast } from "react-toastify";
 import { ColumnDef } from "@tanstack/react-table";
 import DatePicker from "../../components/form/date-picker";
+import { findSectionHead, sortedApprovers } from "../../utils/sectionHead";
 import SearchableDropdown from "../../components/form/input/SearchableDropDown";
 import Button from "../../components/ui/button/Button";
 import Label from "../../components/form/Label";
@@ -71,7 +72,9 @@ export default function OfficialWork() {
     leave_type: "",
     reason: "",
     status: user.grade_id >= 9 ? "approved" : "pending",
-    head_erpid: user.grade_id >= 9 ? user.erpid : "",
+    // Filled in from the employee list once it loads - see findSectionHead.
+    // Guessing from grade here showed one name before the real one arrived.
+    head_erpid: "",
     start_date: moment().format("YYYY-MM-DD").toString(),
     approved_by: "",
     end_date: moment().format("YYYY-MM-DD").toString(),
@@ -112,8 +115,14 @@ export default function OfficialWork() {
     "SECTION HEAD",
   ];
 
-  // Auto-select the logged in user as the employee, and derive their
-  // Section Head (highest-graded employee, grade_id >= 9, in the same section)
+  // Auto-select the logged in user as the employee, and default their Section
+  // Head to the most senior person in their own section - which is themselves
+  // when they are that person.
+  //
+  // This used to make anyone at grade 9 or above their own head regardless of
+  // section, and everyone below grade 9 report to the most senior grade 9+
+  // colleague. Seniority within the section now decides it, exactly as Apply
+  // Leave does, from the same shared rule.
   useEffect(() => {
     if (initializedSelf.current || employeesData.length === 0) return;
 
@@ -124,30 +133,29 @@ export default function OfficialWork() {
 
     initializedSelf.current = true;
 
-    let headErpId: any = user.grade_id >= 9 ? user.erpid : "";
-    if (user.grade_id < 9) {
-      const sectionHeads = employeesData.filter(
-        (e: any) =>
-          Number(e.section_id) === Number(self.section_id) &&
-          Number(e.grade_id) >= 9 &&
-          Number(e.erp_id) !== Number(self.erp_id)
-      );
-      if (sectionHeads.length > 0) {
-        const topHead = sectionHeads.reduce((max: any, e: any) =>
-          Number(e.grade_id) > Number(max.grade_id) ? e : max
-        );
-        headErpId = topHead.erp_id;
-      }
-    }
+    const head = findSectionHead(employeesData, self);
 
     selfDefaults.current = {
       employee_id: self.id,
       erp_id: self.erp_id,
-      head_erpid: headErpId,
+      head_erpid: head ? head.erp_id : "",
     };
 
     setData((prev) => ({ ...prev, ...selfDefaults.current }));
   }, [employeesData]);
+
+  // Section Head choices: the applicant's own section first, most senior
+  // first, matching Apply Leave.
+  const headOptions = useMemo(() => {
+    const self = employeesData.find(
+      (e: any) => Number(e.erp_id) === Number(user.erpid)
+    );
+
+    return sortedApprovers(employeesData, self).map((e: any) => ({
+      label: `${e.name} (${e.erp_id})${e.grade ? ` · ${e.grade}` : ""}`,
+      value: `${e.erp_id}-${e.id}`,
+    }));
+  }, [employeesData, user.erpid]);
 
   const selectedEmployee = employeesData.find(
     (e: any) => Number(e.erp_id) === Number(data.erp_id)
@@ -501,29 +509,32 @@ export default function OfficialWork() {
               />
             </div>
 
+            {/* Shown for every grade, as Apply Leave does. Hiding it above
+                grade 9 meant the most senior applicant could not see who their
+                application was going to — and, now that the value is derived
+                rather than guessed from grade, could not see it had been
+                filled in at all. */}
             <div className="w-full">
-              {user.grade_id < 9 && (
-                <SearchableDropdown
-                  options={options}
-                  placeholder="select approving authority"
-                  label="Section Head"
-                  id="head-dropdown"
-                  value={
-                    options.find(
-                      (opt) => opt.value.split("-")[0] === `${data.head_erpid}`
-                    )?.value || ""
-                  }
-                  onChange={(value) => {
-                    const vals = value?.toString().split("-");
-                    setData({
-                      ...data,
-                      head_erpid: parseInt(vals[0]),
-                    });
-                  }}
-                  error={!!fielderror.head_erpid}
-                  hint={fielderror.head_erpid}
-                />
-              )}
+              <SearchableDropdown
+                options={headOptions}
+                placeholder="select approving authority"
+                label="Section Head"
+                id="head-dropdown"
+                value={
+                  headOptions.find(
+                    (opt) => opt.value.split("-")[0] === `${data.head_erpid}`
+                  )?.value || ""
+                }
+                onChange={(value) => {
+                  const vals = value?.toString().split("-");
+                  setData({
+                    ...data,
+                    head_erpid: parseInt(vals[0]),
+                  });
+                }}
+                error={!!fielderror.head_erpid}
+                hint={fielderror.head_erpid}
+              />
             </div>
             <div className="w-full my-3">
               <Label>Approved By</Label>
