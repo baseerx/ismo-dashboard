@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'mainmenu',  # Your main menu app
     'submenu',  # Your submenu app
     'assignrights',
+    'jobs',
     'addtouser',
     'officialwork',
     'notifications',  # In-app notifications shown in the top navbar

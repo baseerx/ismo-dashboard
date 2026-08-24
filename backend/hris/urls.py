@@ -29,4 +29,5 @@ urlpatterns = [
     path('api/assignrights/', include('assignrights.urls')),  # Include the assign rights app URLs
     path('api/officialwork/', include('officialwork.urls')),  # Include the official work app URLs
     path('api/notifications/', include('notifications.urls')),  # In-app notifications
+    path('api/jobs/', include('jobs.urls')),  # Internal job applications
 ]
