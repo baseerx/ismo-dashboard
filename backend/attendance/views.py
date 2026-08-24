@@ -674,8 +674,12 @@ class AttendanceView:
                     d.title, 
                     g.name, 
                     s.name, 
+                    e.grade_id,
                     CAST(a.timestamp AS DATE)
-                ORDER BY e.erp_id, timestamp
+                -- Most senior first: G-11, then G-10, down to G-01. Ordered by
+                -- grade_id rather than the grade's name so it stays numeric if
+                -- a grade is ever labelled without its leading zero.
+                ORDER BY e.grade_id DESC, e.name, timestamp
             """)
 
             result = session.execute(

@@ -10,6 +10,23 @@ import { ToastContainer, toast } from "react-toastify";
 import { ColumnDef } from "@tanstack/react-table";
 import DatePicker from "../../components/form/date-picker";
 
+/** "G-09" -> 9. Unknown or missing grades sort last. */
+function gradeRank(grade: string | undefined): number {
+  const digits = String(grade ?? "").replace(/\D/g, "");
+  return digits ? Number(digits) : -1;
+}
+
+/**
+ * Most senior first: G-11 at the top, down to G-01.
+ *
+ * The API already returns the rows in this order. Sorting again here is cheap
+ * and keeps the report right if the page is served against an older backend.
+ * Array.sort is stable, so the name and date ordering within a grade survives.
+ */
+function bySeniority<T extends { grade: string }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => gradeRank(b.grade) - gradeRank(a.grade));
+}
+
 type AttendanceRow = {
     erp_id: string;
     name: string;
@@ -78,7 +95,7 @@ export default function TeamLevel() {
         return picked;
       });
       toast.dismiss("attendance-fetch-success");
-      setAttendanceData(cleanedData);
+      setAttendanceData(bySeniority(cleanedData));
     } catch (error) {
       console.error("Error fetching attendance data:", error);
     }

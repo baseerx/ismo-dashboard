@@ -3,7 +3,7 @@ import ComponentCard from "../../components/common/ComponentCard";
 import PageMeta from "../../components/common/PageMeta";
 import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
 import axios from "../../api/axios"; // Adjust the import path as necessary
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import moment from "moment";
 import _ from "lodash";
 import { ToastContainer, toast } from "react-toastify";
@@ -46,6 +46,48 @@ type AttendanceRow = {
   approved_by?: string;
   created_at?: string;
 };
+
+/**
+ * Seniority as a number: G-11 is 11, G-01 is 1, higher is more senior.
+ *
+ * Reads the grade's own label when the API supplies it and falls back to
+ * `grade_id`, which carries the same number. Anything unrecognised ranks last
+ * rather than accidentally ranking top.
+ */
+function gradeRank(employee: any): number {
+  const fromName = String(employee?.grade ?? "").replace(/\D/g, "");
+  if (fromName) return Number(fromName);
+
+  const fromId = Number(employee?.grade_id);
+  return Number.isFinite(fromId) ? fromId : -1;
+}
+
+/**
+ * The section head for an applicant: the most senior active employee in their
+ * own section, excluding themselves.
+ *
+ * Seniority alone decides it. This used to require grade 9 or above, which left
+ * anyone in a section topping out at grade 8 with no head proposed at all. Ties
+ * are broken by the lower ERP id, so the same name is offered on every visit
+ * rather than shuffling between equally-graded colleagues.
+ */
+function findSectionHead(employees: any[], self: any): any | null {
+  const candidates = employees.filter(
+    (e: any) =>
+      Number(e.section_id) === Number(self.section_id) &&
+      Number(e.erp_id) !== Number(self.erp_id) &&
+      (e.flag === undefined || Number(e.flag) === 1)
+  );
+
+  if (candidates.length === 0) return null;
+
+  return candidates.reduce((best: any, e: any) => {
+    const difference = gradeRank(e) - gradeRank(best);
+    if (difference > 0) return e;
+    if (difference === 0 && Number(e.erp_id) < Number(best.erp_id)) return e;
+    return best;
+  });
+}
 
 export default function IndividualAttendance() {
   const [leaves, setLeaves] = useState<AttendanceRow[]>([]);
@@ -222,8 +264,8 @@ export default function IndividualAttendance() {
     getEmployeesLeaves();
   }, []);
 
-  // Auto-select the logged in user as the employee, and derive their
-  // Section Head (highest-graded employee, grade_id >= 9, in the same section)
+  // Auto-select the logged in user as the employee, and default their Section
+  // Head to the most senior person in their own section.
   useEffect(() => {
     if (initializedSelf.current || employeesData.length === 0) return;
 
@@ -234,32 +276,50 @@ export default function IndividualAttendance() {
 
     initializedSelf.current = true;
 
-    // Derived for every grade now, not only below grade 9. A grade 9+
-    // applicant gets the highest-graded *other* person in their section, so
-    // nobody is proposed as their own approver. If the section has no one
-    // senior, this stays blank and the visible dropdown lets them choose.
-    let headErpId: any = "";
-    const sectionHeads = employeesData.filter(
-      (e: any) =>
-        Number(e.section_id) === Number(self.section_id) &&
-        Number(e.grade_id) >= 9 &&
-        Number(e.erp_id) !== Number(self.erp_id)
-    );
-    if (sectionHeads.length > 0) {
-      const topHead = sectionHeads.reduce((max: any, e: any) =>
-        Number(e.grade_id) > Number(max.grade_id) ? e : max
-      );
-      headErpId = topHead.erp_id;
-    }
+    const head = findSectionHead(employeesData, self);
 
     selfDefaults.current = {
       employee_id: self.id,
       erp_id: self.erp_id,
-      head: headErpId,
+      // Blank only when the applicant is the sole active member of their
+      // section; the dropdown is there for them to choose.
+      head: head ? head.erp_id : "",
     };
 
     setData((prev) => ({ ...prev, ...selfDefaults.current }));
   }, [employeesData]);
+
+  // Section Head choices: the applicant's own section first, most senior
+  // first, so the head the form defaults to is the top entry rather than
+  // something to hunt for among four hundred names.
+  const headOptions = useMemo(() => {
+    const self = employeesData.find(
+      (e: any) => Number(e.erp_id) === Number(user.erpid)
+    );
+
+    const label = (e: any) =>
+      `${e.name} (${e.erp_id})${e.grade ? ` · ${e.grade}` : ""}`;
+    const toOption = (e: any) => ({ label: label(e), value: `${e.erp_id}-${e.id}` });
+
+    const active = employeesData.filter((e: any) => e.flag === undefined || Number(e.flag) === 1);
+    if (!self) return active.map(toOption);
+
+    const sameSection = active
+      .filter(
+        (e: any) =>
+          Number(e.section_id) === Number(self.section_id) &&
+          Number(e.erp_id) !== Number(self.erp_id)
+      )
+      .sort((a: any, b: any) => gradeRank(b) - gradeRank(a) || Number(a.erp_id) - Number(b.erp_id));
+
+    // Everyone else stays reachable — a few applications legitimately route
+    // outside the section — but below the applicant's own colleagues.
+    const others = active
+      .filter((e: any) => Number(e.section_id) !== Number(self.section_id))
+      .sort((a: any, b: any) => gradeRank(b) - gradeRank(a) || String(a.name).localeCompare(String(b.name)));
+
+    return [...sameSection, ...others].map(toOption);
+  }, [employeesData, user.erpid]);
 
   const selectedEmployee = employeesData.find(
     (e: any) => Number(e.erp_id) === Number(data.erp_id)
@@ -756,12 +816,12 @@ export default function IndividualAttendance() {
                 field hidden and were auto-approved. */}
             <div className="w-full my-3">
               <SearchableDropdown
-                options={options}
+                options={headOptions}
                 placeholder="select approving authority"
                 label="Section Head"
                 id="head-dropdown"
                 value={
-                  options.find(
+                  headOptions.find(
                     (opt) => opt.value.split("-")[0] === `${data.head}`
                   )?.value || ""
                 }

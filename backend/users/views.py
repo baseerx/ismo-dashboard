@@ -20,7 +20,7 @@ from datetime import date, timedelta
 from addtouser.models import CustomUser
 # Import LeaveModel from another app named 'attendance'
 from attendance.models import Attendance
-from sections.models import Sections
+from sections.models import Grades, Sections
 from holidays.models import Holiday
 from sqlalchemy import text
 from db import SessionLocal
@@ -295,9 +295,16 @@ class EmployeesView:
     def get(request):
         records = Employees.objects.all()
         records_list = records.values(
-            'id', 'erp_id', 'hris_id', 'name', 'cnic', 'gender', 'section_id', 'location_id', 'grade_id', 'designation_id', 'position'
+            'id', 'erp_id', 'hris_id', 'name', 'cnic', 'gender', 'section_id', 'location_id', 'grade_id', 'designation_id', 'position', 'flag'
         )
         employees_list = list(records_list)
+
+        # The grade's own label ("G-09"), so callers can show and rank seniority
+        # without hardcoding a mapping from grade_id. Eleven rows, fetched once.
+        grade_names = dict(Grades.objects.values_list('id', 'name'))
+        for employee in employees_list:
+            employee['grade'] = grade_names.get(employee.get('grade_id'))
+
         # Return as JSON response
         return JsonResponse(employees_list, safe=False)
 
