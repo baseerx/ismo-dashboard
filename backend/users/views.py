@@ -526,7 +526,9 @@ class EmployeesView:
             fy_start = date(today.year - 1, 7, 1)
             fy_end = date(today.year, 6, 30)
 
-        trend_start = today - timedelta(days=13)
+        # 20 calendar days back yields ~14 working days once weekends and
+        # holidays are removed.
+        trend_start = today - timedelta(days=19)
         month_trend_start = (today.replace(day=1) - timedelta(days=150)).replace(day=1)
 
         today_holiday = Holiday.objects.filter(date=today).first()
@@ -613,13 +615,28 @@ class EmployeesView:
             }).fetchall()
 
             # --------------------------------------------------
-            # ATTENDANCE TREND (last 14 days, present vs total)
+            # ATTENDANCE TREND (working days only, present vs total)
+            #
+            # Saturdays, Sundays and public holidays are left out entirely.
+            # Nobody is expected in on those days, so including them drew a
+            # dip to zero every weekend that read as mass absence.
+            #
+            # The weekday test is arithmetic rather than DATEPART(WEEKDAY),
+            # which shifts with the connection's DATEFIRST setting.
+            # 1900-01-01 was a Monday, so the modulo gives 0=Mon .. 6=Sun.
             # --------------------------------------------------
             trend_rows = session.execute(text(f"""
                 WITH date_range AS (
                     SELECT DATEADD(DAY, v.number, :trend_start) AS att_date
                     FROM master..spt_values v
-                    WHERE v.type = 'P' AND DATEADD(DAY, v.number, :trend_start) <= :today
+                    WHERE v.type = 'P'
+                      AND DATEADD(DAY, v.number, :trend_start) <= :today
+                      AND DATEDIFF(DAY, '19000101',
+                                   DATEADD(DAY, v.number, :trend_start)) % 7 NOT IN (5, 6)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM public_holidays h
+                          WHERE h.date = CAST(DATEADD(DAY, v.number, :trend_start) AS DATE)
+                      )
                 ),
                 employees_data AS (
                     SELECT e.erp_id, e.hris_id
@@ -630,15 +647,48 @@ class EmployeesView:
                     SELECT DISTINCT user_id, CAST(timestamp AS DATE) AS att_date
                     FROM attendance
                     WHERE timestamp >= :trend_start AND timestamp < DATEADD(DAY, 1, :today)
+                ),
+                -- Leave and official work spans expanded to one row per covered
+                -- working day, so the SUM below can join them. SQL Server will
+                -- not allow a correlated subquery inside an aggregate.
+                leave_days AS (
+                    SELECT DISTINCT l.erp_id, dr.att_date
+                    FROM leaves l
+                    JOIN date_range dr
+                        ON CAST(l.start_date AS DATE) <= dr.att_date
+                       AND CAST(l.end_date AS DATE) >= dr.att_date
+                    WHERE l.status = 'approved'
+                ),
+                official_days AS (
+                    SELECT DISTINCT ow.erp_id, dr.att_date
+                    FROM official_work_leaves ow
+                    JOIN date_range dr
+                        ON CAST(ow.start_date AS DATE) <= dr.att_date
+                       AND CAST(ow.end_date AS DATE) >= dr.att_date
+                    WHERE ow.status = 'approved'
                 )
                 SELECT
                     dr.att_date,
                     COUNT(*) AS total,
-                    SUM(CASE WHEN a.user_id IS NOT NULL THEN 1 ELSE 0 END) AS present
+                    SUM(CASE WHEN a.user_id IS NOT NULL THEN 1 ELSE 0 END) AS present,
+                    -- Absent means the same thing here as it does on the tile:
+                    -- no punch, and no approved leave or official work covering
+                    -- the day. Total minus present would have counted anyone on
+                    -- approved leave as absent.
+                    SUM(CASE
+                            WHEN a.user_id IS NOT NULL THEN 0
+                            WHEN ld.erp_id IS NOT NULL THEN 0
+                            WHEN od.erp_id IS NOT NULL THEN 0
+                            ELSE 1
+                        END) AS absent
                 FROM employees_data ed
                 CROSS JOIN date_range dr
                 LEFT JOIN attendance_days a
                     ON a.user_id = ed.hris_id AND a.att_date = dr.att_date
+                LEFT JOIN leave_days ld
+                    ON ld.erp_id = ed.erp_id AND ld.att_date = dr.att_date
+                LEFT JOIN official_days od
+                    ON od.erp_id = ed.erp_id AND od.att_date = dr.att_date
                 GROUP BY dr.att_date
                 ORDER BY dr.att_date
             """), {**base_params, "trend_start": trend_start, "today": today}).fetchall()
@@ -791,9 +841,14 @@ class EmployeesView:
                         "date": r.att_date.isoformat(),
                         "total": r.total,
                         "present": r.present,
+                        "absent": r.absent or 0,
                     }
                     for r in trend_rows
                 ],
+                # Mon-Fri, minus public holidays. Weekends are non-working days
+                # here, so they are excluded from every absence figure.
+                "trend_basis": "working days (Mon-Fri, excluding public holidays)",
+                "is_working_day": not (is_weekend_today or is_holiday_today),
                 "leaves": {
                     "pending": leave_pending or 0,
                     "by_type": [

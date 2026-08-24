@@ -27,7 +27,9 @@ import moment from "moment";
 type ByGrade = { grade: string; count: number };
 type ByType = { type: string; requests: number; days?: number };
 type MonthlyTrend = { month: string; days?: number; requests?: number };
-type TrendPoint = { date: string; total: number; present: number };
+// One working day. `absent` counts nobody who was on approved leave or
+// official work, matching the Absent Today tile.
+type TrendPoint = { date: string; total: number; present: number; absent?: number };
 type SectionBreakdown = {
   section_id: number;
   section_name: string;
@@ -52,6 +54,10 @@ type DashboardStats = {
   employees: { total: number; male: number; female: number; by_grade: ByGrade[] };
   attendance_today: { total: number; present: number; on_leave: number; official_work: number; absent: number };
   attendance_trend: TrendPoint[];
+  /** What the trend counts. Absent on a backend that predates the change. */
+  trend_basis?: string;
+  /** False on Saturdays, Sundays and public holidays. Derived when absent. */
+  is_working_day?: boolean;
   leaves: { pending: number; by_type: ByType[]; monthly_trend: MonthlyTrend[] };
   official_work: { pending: number; by_type: ByType[]; monthly_trend: MonthlyTrend[] };
   upcoming_holidays: { name: string; date: string }[];
@@ -70,9 +76,25 @@ function topNPlusOther(items: Slice[], n = 5): Slice[] {
   return otherTotal > 0 ? [...top, { label: "Other", value: otherTotal }] : top;
 }
 
-function attendanceRate(present: number, absent: number): number {
+/**
+ * Present ÷ (Present + Absent), or null when there is nothing to measure.
+ *
+ * Absence is only ever counted on a working day — Saturdays, Sundays and
+ * public holidays are non-working here, so the backend reports zero absent on
+ * them. That used to make this return a confident 100% every weekend: nobody
+ * absent, so everybody "attended". A rate with no expected attendance behind it
+ * is not a good score, it is an undefined one, and the tiles say so.
+ */
+function attendanceRate(present: number, absent: number): number | null {
   const expected = present + absent;
-  return expected > 0 ? (present / expected) * 100 : 100;
+  return expected > 0 ? (present / expected) * 100 : null;
+}
+
+/** Why a rate could not be worked out, in the words the tiles should use. */
+function nonWorkingReason(stats: { is_holiday: boolean; is_weekend: boolean; holiday_name?: string | null }): string | null {
+  if (stats.is_holiday) return stats.holiday_name ? `Public holiday — ${stats.holiday_name}` : "Public holiday";
+  if (stats.is_weekend) return "Weekend — not a working day";
+  return null;
 }
 
 export default function Home() {
@@ -141,13 +163,32 @@ export default function Home() {
 
   const { attendance_today: att, employees } = stats;
   const dayOff = Math.max(0, att.total - att.present - att.on_leave - att.official_work - att.absent);
-  const rate = attendanceRate(att.present, att.absent);
+  const offReason = nonWorkingReason(stats);
+
+  // The dashboard and the API are deployed separately, so treat the new fields
+  // as hints and fall back to deriving them. Saturdays and Sundays are filtered
+  // here as well as in SQL: the rule then holds even against an older backend
+  // that still returns them.
+  const isWorkingDay = stats.is_working_day ?? !(stats.is_weekend || stats.is_holiday);
+
+  // No rate at all on a Saturday, Sunday or public holiday - not even when a
+  // few people did punch in. Absence is not counted on those days, so the
+  // denominator is missing and "3 of 3 present = 100%" would be a score
+  // awarded for a day nobody was expected to work.
+  const rate = isWorkingDay ? attendanceRate(att.present, att.absent) : null;
+  const workingTrend = stats.attendance_trend.filter((point) => {
+    const weekday = moment(point.date).day(); // 0 = Sunday, 6 = Saturday
+    return weekday !== 0 && weekday !== 6;
+  });
+  const trendBasis = stats.trend_basis ?? "working days (Mon-Fri)";
 
   const donutLabels = ["Present", "On Leave", "Official Work", "Absent"];
   const donutSeries = [att.present, att.on_leave, att.official_work, att.absent];
   const donutColors = [statusColors.good, statusColors.warning, statusColors.info, statusColors.critical];
   if (dayOff > 0) {
-    donutLabels.push("Day Off");
+    // On a Saturday, Sunday or public holiday everyone who did not punch in
+    // lands here rather than in Absent, so name the slice for what it is.
+    donutLabels.push(stats.is_holiday ? "Holiday" : stats.is_weekend ? "Weekend" : "Day Off");
     donutSeries.push(dayOff);
     donutColors.push(statusColors.neutral);
   }
@@ -159,10 +200,16 @@ export default function Home() {
 
   const sectionSlices = stats.by_section.map((s) => ({
     ...s,
-    rate: attendanceRate(s.present_today, s.absent_today),
+    rate: isWorkingDay ? attendanceRate(s.present_today, s.absent_today) : null,
   }));
   const sectionColors = sectionSlices.map((s) =>
-    s.rate >= 90 ? statusColors.good : s.rate >= 70 ? statusColors.warning : statusColors.critical
+    s.rate === null
+      ? statusColors.neutral
+      : s.rate >= 90
+        ? statusColors.good
+        : s.rate >= 70
+          ? statusColors.warning
+          : statusColors.critical
   );
 
   return (
@@ -233,7 +280,12 @@ export default function Home() {
           title="Present Today"
           value={att.present}
           icon={<CheckCircleIcon className="text-success-500 size-6 dark:text-white/90" />}
-          badge={{ text: `${rate.toFixed(0)}%`, color: rate >= 90 ? "success" : rate >= 70 ? "warning" : "error" }}
+          badge={
+            rate === null
+              ? { text: "Day off", color: "light" }
+              : { text: `${rate.toFixed(0)}%`, color: rate >= 90 ? "success" : rate >= 70 ? "warning" : "error" }
+          }
+          subtext={rate === null ? offReason ?? undefined : undefined}
         />
         <StatTile
           title="On Leave Today"
@@ -260,7 +312,9 @@ export default function Home() {
                 })
               : navigate("/attendance/total-absent")
           }
-          subtext="Click to view details"
+          // Absence is counted Monday to Friday only, so on a weekend or a
+          // public holiday this is zero by definition rather than by luck.
+          subtext={isWorkingDay ? "Click to view details" : `${offReason} — absence not counted`}
         />
         <StatTile
           title="Pending Approvals"
@@ -280,9 +334,23 @@ export default function Home() {
         <ComponentCard title="Today's Attendance Breakdown">
           <StatDonutChart labels={donutLabels} series={donutSeries} colors={donutColors} centerLabel="Total" />
         </ComponentCard>
-        <ComponentCard title="Attendance Rate" desc="Present ÷ (Present + Absent)">
+        <ComponentCard
+          title="Attendance Rate"
+          desc="Present ÷ (Present + Absent) — working days only"
+        >
           <div className="flex items-center justify-center">
-            <RadialGaugeChart label="Attendance" value={rate} />
+            {rate === null ? (
+              <div className="flex h-[180px] flex-col items-center justify-center gap-2 text-center">
+                <span className="text-3xl font-semibold text-gray-300 dark:text-gray-600">—</span>
+                <p className="max-w-[220px] text-xs text-gray-500 dark:text-gray-400">
+                  {offReason
+                    ? `${offReason}. Attendance is not rated on non-working days.`
+                    : "Nobody was expected in, so there is no rate to show."}
+                </p>
+              </div>
+            ) : (
+              <RadialGaugeChart label="Attendance" value={rate} />
+            )}
           </div>
         </ComponentCard>
         <ComponentCard title="Upcoming Holidays">
@@ -313,13 +381,27 @@ export default function Home() {
 
       {/* Attendance trend */}
       <div className="mt-6">
-        <ComponentCard title="Attendance Trend — Last 14 Days" desc={scopeLabel}>
+        <ComponentCard
+          title="Attendance Trend — Last 14 Working Days"
+          desc={`${scopeLabel} · ${trendBasis}`}
+        >
           <TrendAreaChart
-            categories={stats.attendance_trend.map((t) => moment(t.date).format("DD MMM"))}
+            categories={workingTrend.map((t) => moment(t.date).format("ddd DD MMM"))}
             series={[
               {
-                name: "Present %",
-                data: stats.attendance_trend.map((t) => (t.total > 0 ? Math.round((t.present / t.total) * 100) : 0)),
+                // The same measure as the gauge, so the two cannot disagree.
+                // Weekends and holidays are absent from this series entirely:
+                // including them drew a dip to zero every Saturday that read
+                // as the whole organisation failing to turn up.
+                name: "Attendance Rate",
+                data: workingTrend.map((t) => {
+                  // An older backend does not send per-day absence; the
+                  // headcount that did not turn up is the closest stand-in,
+                  // and it slightly overstates it by counting approved leave.
+                  const absent = t.absent ?? Math.max(t.total - t.present, 0);
+                  const dayRate = attendanceRate(t.present, absent);
+                  return dayRate === null ? 0 : Math.round(dayRate);
+                }),
               },
             ]}
             valueSuffix="%"
@@ -372,15 +454,32 @@ export default function Home() {
       {isAdmin && scope === "org" && stats.by_section.length > 0 && (
         <>
           <div className="mt-6">
-            <ComponentCard title="Section-wise Attendance Rate Today" desc="Present ÷ (Present + Absent), colored by severity">
-              <CategoryBarChart
-                categories={sectionSlices.map((s) => s.section_name)}
-                series={[{ name: "Attendance Rate", data: sectionSlices.map((s) => Math.round(s.rate)) }]}
-                horizontal
-                distributed
-                colors={sectionColors}
-                valueSuffix="%"
-              />
+            <ComponentCard
+              title="Section-wise Attendance Rate Today"
+              desc="Present ÷ (Present + Absent), colored by severity"
+            >
+              {isWorkingDay ? (
+                <CategoryBarChart
+                  categories={sectionSlices.map((s) => s.section_name)}
+                  series={[
+                    {
+                      name: "Attendance Rate",
+                      // null means no expected attendance in that section, which
+                      // is a gap rather than a zero score.
+                      data: sectionSlices.map((s) => (s.rate === null ? 0 : Math.round(s.rate))),
+                    },
+                  ]}
+                  horizontal
+                  distributed
+                  colors={sectionColors}
+                  valueSuffix="%"
+                />
+              ) : (
+                <p className="py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+                  {offReason}. Attendance rates are only calculated for working days
+                  (Monday to Friday), so there is nothing to compare today.
+                </p>
+              )}
             </ComponentCard>
           </div>
 
@@ -410,7 +509,15 @@ export default function Home() {
                         <td className="py-2.5 pr-4">{s.present_today}</td>
                         <td className="py-2.5 pr-4">{s.on_leave_today}</td>
                         <td className="py-2.5 pr-4">{s.official_work_today}</td>
-                        <td className="py-2.5 pr-4">{s.absent_today}</td>
+                        <td className="py-2.5 pr-4">
+                          {isWorkingDay ? (
+                            s.absent_today
+                          ) : (
+                            <span title={offReason ?? undefined} className="text-gray-400 dark:text-gray-500">
+                              —
+                            </span>
+                          )}
+                        </td>
                         <td className="py-2.5 pr-4">
                           {s.pending_leaves > 0 ? (
                             <Badge color="warning" size="sm">{s.pending_leaves}</Badge>
