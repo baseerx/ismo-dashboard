@@ -25,6 +25,9 @@ import type {
 } from "../../types/chat";
 import DocumentSelector from "./DocumentSelector";
 import MessageBubble from "./MessageBubble";
+// The dashboard's own API, which is where the visibility rule lives - not the
+// assistant service.
+import dashboardApi from "../../api/axios";
 
 const POLL_INTERVAL_MS = 1500;
 
@@ -73,7 +76,12 @@ const WAITING_STAGES = [
   "Putting the answer together…",
 ];
 
-function readUser(): { name?: string; erpid?: number; is_superuser?: boolean } {
+function readUser(): {
+  name?: string;
+  erpid?: number;
+  user_id?: number;
+  is_superuser?: boolean;
+} {
   try {
     return JSON.parse(localStorage.getItem("user") || "{}");
   } catch {
@@ -90,6 +98,11 @@ export default function ChatWidget({ isAdmin }: Props) {
   const user = useMemo(readUser, []);
   const resolvedIsAdmin = isAdmin ?? Boolean(user.is_superuser);
   const signedIn = Boolean(user.erpid);
+
+  // Whether an administrator has switched the launcher on for this user, set
+  // in Assign Rights. Undefined until the answer arrives: the launcher stays
+  // out of the way rather than appearing and then being taken away.
+  const [allowed, setAllowed] = useState<boolean | undefined>(undefined);
 
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -116,6 +129,32 @@ export default function ChatWidget({ isAdmin }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pollTimers = useRef<number[]>([]);
+
+  // ---- may this user see the assistant at all? -------------------------
+  useEffect(() => {
+    if (!signedIn) return;
+
+    let cancelled = false;
+
+    dashboardApi
+      .get("/assignrights/chatbot-visibility/", {
+        params: { user_id: user.user_id ?? user.erpid },
+      })
+      .then((response) => {
+        if (!cancelled) setAllowed(response.data?.visible !== false);
+      })
+      .catch(() => {
+        // No rule configured, or the dashboard API is unreachable. The
+        // assistant was visible to everyone before this setting existed, so
+        // that is what an unanswered question means here.
+        if (!cancelled) setAllowed(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedIn]);
 
   // ---- scrolling -------------------------------------------------------
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
@@ -425,7 +464,9 @@ export default function ChatWidget({ isAdmin }: Props) {
 
   const indexedDocuments = documents.filter((document) => document.status === "indexed");
 
-  if (!signedIn) return null;
+  // Hidden while the rule is being read, and whenever it says no. Everything
+  // below - the panel, the polling, the conversation - is never mounted.
+  if (!signedIn || allowed !== true) return null;
 
   return (
     <div className="ismo-chat">

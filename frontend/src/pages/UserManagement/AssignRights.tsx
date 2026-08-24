@@ -11,6 +11,14 @@ import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
 import SearchableDropdown from "../../components/form/input/SearchableDropDown";
 import MultiSelect from "../../components/form/MultiSelect";
 
+type ChatbotMode = "all" | "specific" | "none";
+
+const CHATBOT_MODES: { value: ChatbotMode; title: string; detail: string }[] = [
+  { value: "all", title: "All users", detail: "Everyone who signs in sees the assistant" },
+  { value: "specific", title: "Specific users", detail: "Only the users selected below" },
+  { value: "none", title: "Nobody", detail: "The launcher is hidden for everyone" },
+];
+
 // 1. Define Type
 type UserRightsType = {
   id: number;
@@ -46,12 +54,70 @@ export default function AssignRights() {
     submenuid: "",
   });
 
+  // Who sees the HR Assistant launcher. Stored centrally so it applies to
+  // every browser; the widget itself does the showing and hiding.
+  const [chatbotMode, setChatbotMode] = useState<ChatbotMode>("all");
+  const [chatbotUserIds, setChatbotUserIds] = useState<number[]>([]);
+  // Bumped once the saved rule arrives, to remount the user picker: it seeds
+  // its selection from defaultSelected only on first render.
+  const [chatbotFormKey, setChatbotFormKey] = useState(0);
+  const [savingChatbot, setSavingChatbot] = useState(false);
+
  
 
   useEffect(() => {
     getMainMenus();
     getUsers();
+    getChatbotVisibility();
   }, []);
+
+  const getChatbotVisibility = async () => {
+    try {
+      const response = await axios.get("/assignrights/chatbot-visibility/");
+      const mode: ChatbotMode = response.data?.mode ?? "all";
+      setChatbotMode(mode);
+      setChatbotUserIds(
+        Array.isArray(response.data?.user_ids) ? response.data.user_ids : []
+      );
+      setChatbotFormKey((key) => key + 1);
+    } catch (error) {
+      // Leave the form on its default rather than blocking the page; saving
+      // will report the real problem if the endpoint is genuinely missing.
+      console.error("Error fetching chatbot visibility:", error);
+    }
+  };
+
+  const saveChatbotVisibility = async () => {
+    if (chatbotMode === "specific" && chatbotUserIds.length === 0) {
+      toast.error("Choose at least one user, or set it to nobody");
+      return;
+    }
+
+    setSavingChatbot(true);
+    try {
+      // This endpoint requires an administrator, and the shared axios instance
+      // does not attach the login token, so it is passed explicitly.
+      const token = localStorage.getItem("token");
+      const response = await axios.post(
+        "/assignrights/chatbot-visibility/set/",
+        {
+          mode: chatbotMode,
+          user_ids: chatbotMode === "specific" ? chatbotUserIds : [],
+        },
+        token ? { headers: { Authorization: `Bearer ${token}` } } : undefined
+      );
+      setChatbotMode(response.data?.mode ?? chatbotMode);
+      setChatbotUserIds(response.data?.user_ids ?? []);
+      setChatbotFormKey((key) => key + 1);
+      toast.success("Chatbot visibility saved");
+    } catch (error: any) {
+      toast.error(
+        error?.response?.data?.error ?? "Failed to save chatbot visibility"
+      );
+    } finally {
+      setSavingChatbot(false);
+    }
+  };
 
   const getUsers = async () => {
     try {
@@ -261,6 +327,80 @@ export default function AssignRights() {
               onClick={handleSubmit}
             >
               Add Rights
+            </Button>
+          </div>
+        </ComponentCard>
+
+        <ComponentCard
+          title="HR Assistant (Chatbot)"
+          desc="Controls whether the assistant's launcher appears in the corner of the dashboard. It does not change what the assistant can answer, or who its answers are scoped to."
+        >
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {CHATBOT_MODES.map((option) => {
+              const active = chatbotMode === option.value;
+              return (
+                <label
+                  key={option.value}
+                  className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors ${
+                    active
+                      ? "border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-500/10"
+                      : "border-gray-200 hover:border-gray-300 dark:border-gray-800 dark:hover:border-gray-700"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="chatbot-visibility"
+                    className="mt-0.5 size-4 accent-brand-500"
+                    checked={active}
+                    onChange={() => setChatbotMode(option.value)}
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-gray-800 dark:text-white/90">
+                      {option.title}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                      {option.detail}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          {chatbotMode === "specific" && (
+            <div className="mt-4">
+              <MultiSelect
+                key={`chatbot-users-${chatbotFormKey}`}
+                options={users.map((item) => ({
+                  value: item.id.toString(),
+                  text: `${item.full_name} (${item.email})`,
+                }))}
+                label="Users who can see the assistant"
+                defaultSelected={chatbotUserIds.map((id) => id.toString())}
+                onChange={(selected) =>
+                  setChatbotUserIds(selected.map((value) => parseInt(value, 10)))
+                }
+              />
+            </div>
+          )}
+
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {chatbotMode === "all"
+                ? "Currently visible to every signed-in user."
+                : chatbotMode === "none"
+                  ? "Currently hidden for everyone."
+                  : `Currently visible to ${chatbotUserIds.length} selected user${
+                      chatbotUserIds.length === 1 ? "" : "s"
+                    }.`}
+            </p>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={saveChatbotVisibility}
+              disabled={savingChatbot}
+            >
+              {savingChatbot ? "Saving..." : "Save Visibility"}
             </Button>
           </div>
         </ComponentCard>
