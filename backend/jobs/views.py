@@ -19,6 +19,8 @@ from db import SessionLocal
 from .models import (
     InternalJobApplication,
     InternalJobApplicationEducation,
+    InternalJobApplicationExperience,
+    InternalJobApplicationSkill,
     JobRequisition,
 )
 from .validators import validate_application
@@ -143,7 +145,7 @@ def my_applications(request):
     applications = (
         InternalJobApplication.objects.filter(applicant_erp_id=erp_id)
         .select_related("target_job_req")
-        .prefetch_related("education")
+        .prefetch_related("education", "experience", "skills")
     )
 
     return JsonResponse(
@@ -155,6 +157,8 @@ def my_applications(request):
                 "status": application.status,
                 "created_at": application.created_at.strftime("%Y-%m-%d %H:%M"),
                 "education_count": application.education.count(),
+                "experience_count": application.experience.count(),
+                "skill_count": application.skills.count(),
             }
             for application in applications
         ],
@@ -227,6 +231,10 @@ def create_application(request):
             corporate_email=cleaned["corporate_email"],
             personal_email=cleaned["personal_email"],
             preferred_contact_method=cleaned["preferred_contact_method"],
+            certifications_list=cleaned["certifications_list"],
+            application_rationale_sop=cleaned["application_rationale_sop"],
+            ack_manager_notified_bool=cleaned["ack_manager_notified_bool"],
+            ack_data_accuracy_bool=cleaned["ack_data_accuracy_bool"],
         )
 
         InternalJobApplicationEducation.objects.bulk_create(
@@ -235,10 +243,23 @@ def create_application(request):
                 for row in cleaned["education"]
             ]
         )
+        InternalJobApplicationExperience.objects.bulk_create(
+            [
+                InternalJobApplicationExperience(application=application, **row)
+                for row in cleaned["experience"]
+            ]
+        )
+        InternalJobApplicationSkill.objects.bulk_create(
+            [
+                InternalJobApplicationSkill(application=application, **row)
+                for row in cleaned["skills"]
+            ]
+        )
 
     logger.info(
-        "internal job application %s: erp=%s vacancy=%s education_rows=%d",
-        application.id, applicant_erp_id, requisition.id, len(cleaned["education"]),
+        "internal job application %s: erp=%s vacancy=%s education=%d experience=%d skills=%d",
+        application.id, applicant_erp_id, requisition.id,
+        len(cleaned["education"]), len(cleaned["experience"]), len(cleaned["skills"]),
     )
 
     return JsonResponse(
@@ -246,6 +267,8 @@ def create_application(request):
             "id": application.id,
             "vacancy": requisition.title,
             "education_count": len(cleaned["education"]),
+            "experience_count": len(cleaned["experience"]),
+            "skill_count": len(cleaned["skills"]),
             "message": "Your application has been submitted.",
         },
         status=201,

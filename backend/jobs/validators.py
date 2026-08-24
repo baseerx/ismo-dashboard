@@ -13,11 +13,49 @@ import re
 from datetime import date
 from typing import Any, Dict, List, Tuple
 
-from .models import InternalJobApplication
+from .models import InternalJobApplication, InternalJobApplicationSkill
 
 # Grid rows a person can add. Generous for a career, small enough that a script
 # cannot post ten thousand of them.
 MAX_EDUCATION_ROWS = 15
+MAX_EXPERIENCE_ROWS = 20
+
+# Character ceilings from the specification, enforced here as well as in each
+# textarea's own maxlength — which a POST can ignore.
+MAX_RESPONSIBILITIES = 1500
+MAX_ACHIEVEMENTS = 2000
+MAX_CERTIFICATIONS = 1500
+MAX_SOP = 3000
+
+# A statement of purpose has to say something; this only rules out "n/a".
+MIN_SOP = 30
+
+# Tags exist to be filtered on, so they are capped and de-duplicated.
+MAX_TECHNICAL_SKILLS = 30
+MAX_SKILL_LENGTH = 80
+
+# Nobody here was employed before this, and no post starts in the future.
+EARLIEST_EMPLOYMENT_YEAR = 1950
+
+# The list the form offers. Anything else is a typo rather than a soft skill,
+# and is refused instead of becoming a category nothing will match again.
+SOFT_SKILL_OPTIONS = (
+    "Leadership",
+    "Team Management",
+    "Communication",
+    "Stakeholder Management",
+    "Problem Solving",
+    "Analytical Thinking",
+    "Decision Making",
+    "Negotiation",
+    "Conflict Resolution",
+    "Mentoring & Coaching",
+    "Time Management",
+    "Adaptability",
+    "Presentation Skills",
+    "Report Writing",
+    "Cross-functional Collaboration",
+)
 
 # The oldest graduation year worth accepting, and how far ahead an in-progress
 # degree may be expected to finish.
@@ -208,4 +246,210 @@ def validate_application(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str
         errors["education_rows"] = row_errors
 
     cleaned["education"] = cleaned_rows
+
+    _validate_experience(data, cleaned, errors)
+    _validate_skills(data, cleaned, errors)
+    _validate_statement(data, cleaned, errors)
+
     return cleaned, errors
+
+
+def _parse_date(value: Any):
+    """A date from YYYY-MM-DD, or None when it is not one."""
+    text = _text(value)[:10]
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _validate_experience(
+    data: Dict[str, Any], cleaned: Dict[str, Any], errors: Dict[str, Any]
+) -> None:
+    """Section 4: one row per post held, internal or external."""
+    rows = data.get("experience")
+    if not isinstance(rows, list):
+        rows = []
+
+    if not rows:
+        errors["experience"] = "Add at least one position, including your current role"
+    elif len(rows) > MAX_EXPERIENCE_ROWS:
+        errors["experience"] = f"At most {MAX_EXPERIENCE_ROWS} positions can be listed"
+
+    today = date.today()
+    cleaned_rows: List[Dict[str, Any]] = []
+    row_errors: Dict[str, Dict[str, str]] = {}
+
+    for index, row in enumerate(rows[:MAX_EXPERIENCE_ROWS]):
+        if not isinstance(row, dict):
+            row_errors[str(index)] = {"exp_job_title": "Unreadable entry"}
+            continue
+
+        problems: Dict[str, str] = {}
+        entry: Dict[str, Any] = {
+            "exp_job_title": _text(row.get("exp_job_title")),
+            "exp_company_name": _text(row.get("exp_company_name")),
+            "exp_key_responsibilities": _text(row.get("exp_key_responsibilities")),
+            "exp_key_achievements": _text(row.get("exp_key_achievements")),
+            "exp_is_current": bool(row.get("exp_is_current")),
+        }
+
+        for field, label, maximum in (
+            ("exp_job_title", "Job position title", 200),
+            ("exp_company_name", "Organization / company name", 200),
+        ):
+            if not entry[field]:
+                problems[field] = f"{label} is required"
+            elif len(entry[field]) > maximum:
+                problems[field] = f"{label} must be {maximum} characters or fewer"
+
+        if not entry["exp_key_responsibilities"]:
+            problems["exp_key_responsibilities"] = "Key responsibilities are required"
+        elif len(entry["exp_key_responsibilities"]) > MAX_RESPONSIBILITIES:
+            problems["exp_key_responsibilities"] = (
+                f"Keep responsibilities within {MAX_RESPONSIBILITIES} characters"
+            )
+
+        # Achievements are optional: a long-ago junior post may have none worth
+        # quantifying, and demanding one invites invention.
+        if len(entry["exp_key_achievements"]) > MAX_ACHIEVEMENTS:
+            problems["exp_key_achievements"] = (
+                f"Keep achievements within {MAX_ACHIEVEMENTS} characters"
+            )
+        entry["exp_key_achievements"] = entry["exp_key_achievements"] or None
+
+        start = _parse_date(row.get("exp_start_date"))
+        entry["exp_start_date"] = start
+        if start is None:
+            problems["exp_start_date"] = "Select the employment start date"
+        elif start.year < EARLIEST_EMPLOYMENT_YEAR:
+            problems["exp_start_date"] = f"Start date cannot be before {EARLIEST_EMPLOYMENT_YEAR}"
+        elif start > today:
+            problems["exp_start_date"] = "Start date cannot be in the future"
+
+        end = _parse_date(row.get("exp_end_date"))
+        if entry["exp_is_current"]:
+            # "Currently in this role" and an end date contradict each other;
+            # the toggle wins and the date is dropped.
+            entry["exp_end_date"] = None
+        else:
+            entry["exp_end_date"] = end
+            if end is None:
+                problems["exp_end_date"] = (
+                    "Select the end date, or tick 'Currently in this role'"
+                )
+            elif end > today:
+                problems["exp_end_date"] = "End date cannot be in the future"
+            elif start and end < start:
+                problems["exp_end_date"] = "End date cannot be before the start date"
+
+        entry["row_order"] = index
+        if problems:
+            row_errors[str(index)] = problems
+        else:
+            cleaned_rows.append(entry)
+
+    if row_errors:
+        errors["experience_rows"] = row_errors
+
+    cleaned["experience"] = cleaned_rows
+
+
+def _validate_skills(
+    data: Dict[str, Any], cleaned: Dict[str, Any], errors: Dict[str, Any]
+) -> None:
+    """Section 5: the skills matrix and certifications."""
+    technical_in = data.get("skills_technical_tags")
+    if isinstance(technical_in, str):
+        # A comma-separated string is accepted as well as a list of tags.
+        technical_in = technical_in.split(",")
+    if not isinstance(technical_in, list):
+        technical_in = []
+
+    technical: List[str] = []
+    seen = set()
+    for value in technical_in:
+        tag = _text(value)
+        if not tag:
+            continue
+        if len(tag) > MAX_SKILL_LENGTH:
+            errors["skills_technical_tags"] = (
+                f"Each skill must be {MAX_SKILL_LENGTH} characters or fewer"
+            )
+            break
+        # Case-insensitive de-duplication: "python" and "Python" are one skill.
+        if tag.casefold() in seen:
+            continue
+        seen.add(tag.casefold())
+        technical.append(tag)
+
+    if "skills_technical_tags" not in errors:
+        if not technical:
+            errors["skills_technical_tags"] = "Add at least one technical skill"
+        elif len(technical) > MAX_TECHNICAL_SKILLS:
+            errors["skills_technical_tags"] = (
+                f"At most {MAX_TECHNICAL_SKILLS} skills can be listed"
+            )
+
+    soft_in = data.get("skills_soft_checkboxes")
+    if not isinstance(soft_in, list):
+        soft_in = []
+
+    soft: List[str] = []
+    for value in soft_in:
+        name = _text(value)
+        if not name:
+            continue
+        # Only the offered options are stored, so a typo cannot become a new
+        # category that nothing else will ever match.
+        if name not in SOFT_SKILL_OPTIONS:
+            errors["skills_soft_checkboxes"] = f"Unknown soft skill: {name}"
+            break
+        if name not in soft:
+            soft.append(name)
+
+    certifications = _text(data.get("certifications_list"))
+    if len(certifications) > MAX_CERTIFICATIONS:
+        errors["certifications_list"] = (
+            f"Keep certifications within {MAX_CERTIFICATIONS} characters"
+        )
+    cleaned["certifications_list"] = certifications or None
+
+    cleaned["skills"] = [
+        {"skill_type": InternalJobApplicationSkill.TECHNICAL, "skill_name": name}
+        for name in technical
+    ] + [
+        {"skill_type": InternalJobApplicationSkill.SOFT, "skill_name": name}
+        for name in soft
+    ]
+
+
+def _validate_statement(
+    data: Dict[str, Any], cleaned: Dict[str, Any], errors: Dict[str, Any]
+) -> None:
+    """Section 6: the statement of purpose and the two acknowledgements."""
+    statement = _text(data.get("application_rationale_sop"))
+    cleaned["application_rationale_sop"] = statement
+
+    if not statement:
+        errors["application_rationale_sop"] = "Tell us why you are applying"
+    elif len(statement) < MIN_SOP:
+        errors["application_rationale_sop"] = (
+            f"Please give a little more detail — at least {MIN_SOP} characters"
+        )
+    elif len(statement) > MAX_SOP:
+        errors["application_rationale_sop"] = f"Keep this within {MAX_SOP} characters"
+
+    manager = bool(data.get("ack_manager_notified_bool"))
+    accuracy = bool(data.get("ack_data_accuracy_bool"))
+    cleaned["ack_manager_notified_bool"] = manager
+    cleaned["ack_data_accuracy_bool"] = accuracy
+
+    if not manager:
+        errors["ack_manager_notified_bool"] = (
+            "Confirm your current manager is aware of this request"
+        )
+    if not accuracy:
+        errors["ack_data_accuracy_bool"] = "Confirm the details match the corporate record"

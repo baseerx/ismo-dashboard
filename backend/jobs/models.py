@@ -66,6 +66,22 @@ class InternalJobApplication(models.Model):
     personal_email = models.EmailField(max_length=150, null=True, blank=True)
     preferred_contact_method = models.CharField(max_length=10)
 
+    # --- section 5: skills matrix and certifications ----------------------
+    # Individual skills live in their own table so applications can be filtered
+    # by them; this column is the free-text list of credentials the form asks
+    # for as prose.
+    certifications_list = models.TextField(null=True, blank=True)
+
+    # --- section 6: statement of purpose and acknowledgements -------------
+    # Required to submit - see jobs/validators.py. The column default exists
+    # only so the field could be added to a table that already existed; nothing
+    # can be stored through the form without it.
+    application_rationale_sop = models.TextField(default="")
+    # Both are required to submit, and are kept as a record of what the
+    # applicant certified at the time.
+    ack_manager_notified_bool = models.BooleanField(default=False)
+    ack_data_accuracy_bool = models.BooleanField(default=False)
+
     status = models.CharField(max_length=20, default="submitted")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -105,3 +121,63 @@ class InternalJobApplicationEducation(models.Model):
 
     def __str__(self):
         return f"{self.edu_degree_title} ({self.edu_graduation_year})"
+
+
+class InternalJobApplicationExperience(models.Model):
+    """One post held, whether outside the organisation or inside it.
+
+    Internal promotions belong here alongside external employment, which is why
+    the company name is free text rather than a flag: an applicant lists the
+    subsidiary or the department they held the post in, in their own words.
+    """
+
+    application = models.ForeignKey(
+        InternalJobApplication, on_delete=models.CASCADE, related_name="experience"
+    )
+
+    exp_job_title = models.CharField(max_length=200)
+    exp_company_name = models.CharField(max_length=200)
+    exp_start_date = models.DateField()
+    # Null while the applicant still holds the post, which is what the form's
+    # "Currently in this role" toggle means.
+    exp_end_date = models.DateField(null=True, blank=True)
+    exp_is_current = models.BooleanField(default=False)
+
+    exp_key_responsibilities = models.TextField()
+    exp_key_achievements = models.TextField(null=True, blank=True)
+
+    row_order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = 'internal_job_application_experience'
+        ordering = ['row_order', 'id']
+
+    def __str__(self):
+        return f"{self.exp_job_title} at {self.exp_company_name}"
+
+
+class InternalJobApplicationSkill(models.Model):
+    """One skill on an application, technical or soft.
+
+    A row per skill rather than a delimited column, because the point of the
+    section is filtering applicants by skill - which a text column cannot do
+    without a LIKE over every row.
+    """
+
+    TECHNICAL = "technical"
+    SOFT = "soft"
+    SKILL_TYPES = (TECHNICAL, SOFT)
+
+    application = models.ForeignKey(
+        InternalJobApplication, on_delete=models.CASCADE, related_name="skills"
+    )
+
+    skill_type = models.CharField(max_length=10, db_index=True)
+    skill_name = models.CharField(max_length=80)
+
+    class Meta:
+        db_table = 'internal_job_application_skills'
+        ordering = ['skill_type', 'id']
+
+    def __str__(self):
+        return f"{self.skill_name} ({self.skill_type})"

@@ -3,6 +3,8 @@ from django.contrib import admin
 from .models import (
     InternalJobApplication,
     InternalJobApplicationEducation,
+    InternalJobApplicationExperience,
+    InternalJobApplicationSkill,
     JobRequisition,
 )
 
@@ -26,6 +28,16 @@ class EducationInline(admin.TabularInline):
     extra = 0
 
 
+class ExperienceInline(admin.TabularInline):
+    model = InternalJobApplicationExperience
+    extra = 0
+
+
+class SkillInline(admin.TabularInline):
+    model = InternalJobApplicationSkill
+    extra = 0
+
+
 @admin.register(InternalJobApplication)
 class InternalJobApplicationAdmin(admin.ModelAdmin):
     """Read side of the review flow: one row per application, degrees inline."""
@@ -36,4 +48,4 @@ class InternalJobApplicationAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "target_job_req", "preferred_contact_method")
     search_fields = ("emp_full_name", "emp_id", "corporate_email", "cnic")
-    inlines = [EducationInline]
+    inlines = [EducationInline, ExperienceInline, SkillInline]
