@@ -55,6 +55,7 @@ import TotalAbsent from "./pages/Attendance/TotalAbsent";
 import DetailedAbsentReport from "./pages/Attendance/DetailedAbsentReport";
 import SectionMonthlyReport from "./pages/Attendance/SectionMonthlyReport";
 import MonthlyAttendanceReport from "./pages/Attendance/MonthlyAttendanceReport";
+import JobApplicationsReport from "./pages/Jobs/JobApplicationsReports";
 export default function App() {
   return (
     <>
@@ -170,6 +171,7 @@ export default function App() {
                 element={<InternalJobApplication />}
               />
               <Route path="/job-requisitions" element={<JobRequisitions />} />
+              <Route path="/job-reports" element={<JobApplicationsReport />} />
               <Route
                 path="/leaves/public-holidays"
                 element={<PublicHoliday />}
