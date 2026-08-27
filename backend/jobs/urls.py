@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import requisition_views, views
+from . import requisition_views, views, reports_views
 
 urlpatterns = [
     # --- the application form ---------------------------------------------
@@ -17,4 +17,9 @@ urlpatterns = [
     path('requisitions/create/', requisition_views.create_requisition),
     path('requisitions/<int:requisition_id>/update/', requisition_views.update_requisition),
     path('requisitions/<int:requisition_id>/delete/', requisition_views.delete_requisition),
+
+    path('applications/manage/', reports_views.list_applications_report),
+    path('applications/<int:application_id>/detail/', reports_views.application_detail),
+    path('applications/<int:application_id>/pdf/', reports_views.application_pdf),
+    path('applications/export/zip/', reports_views.applications_zip),
 ]

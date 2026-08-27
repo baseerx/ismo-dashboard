@@ -51,8 +51,13 @@ def identity_from_request(request):
     return payload, None
 
 
-def _has_menu_right(auth_user_id) -> bool:
-    """True when Assign Rights has granted this user the management page."""
+def _has_menu_right(auth_user_id, uri: str = MANAGE_URI) -> bool:
+    """True when Assign Rights has granted this user the given sub-menu page.
+
+    `uri` defaults to MANAGE_URI (vacancy management) so existing callers are
+    unaffected; other pages - e.g. the applications report - pass their own
+    sub-menu URI to reuse this same lookup against a different grant.
+    """
     if not auth_user_id:
         return False
 
@@ -67,12 +72,12 @@ def _has_menu_right(auth_user_id) -> bool:
                 WHERE a.user_id = :user_id AND s.uri = :uri
                 """
             ),
-            {"user_id": auth_user_id, "uri": MANAGE_URI},
+            {"user_id": auth_user_id, "uri": uri},
         ).first()
         return row is not None
     except Exception:
         # A permissions lookup that cannot run must not read as "allowed".
-        logger.exception("could not check menu rights for user %s", auth_user_id)
+        logger.exception("could not check menu rights for user %s (uri=%s)", auth_user_id, uri)
         return False
     finally:
         session.close()
