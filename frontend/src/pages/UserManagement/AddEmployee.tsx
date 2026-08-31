@@ -215,9 +215,9 @@ export default function AddEmployee() {
     if (!empData.cnic) {
       errors.cnic = "CNIC is required";
     } else if (!/^(\d{13}|\d{5}-\d{7}-\d)$/.test(empData.cnic)) {
-      // Accept both the plain 13-digit form (1120153664389) and the
-      // dashed form (11201-5366438-9).
-      errors.cnic = "CNIC must be 13 digits, e.g. 1120153664389 or 11201-5366438-9";
+      // Accept both the plain 13-digit form (11201-6655448-9) and the
+      // dashed form (11201-6655448-9).
+      errors.cnic = "CNIC must be 13 digits, e.g. 1120166554489 or 11201-6655448-9";
     }
     if (!empData.gender) errors.gender = "Gender is required";
     if (!empData.section_id) errors.section_id = "Section is required";
