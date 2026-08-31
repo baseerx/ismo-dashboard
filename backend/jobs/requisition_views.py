@@ -24,6 +24,8 @@ MAX_TITLE = 200
 MAX_DEPARTMENT = 200
 MAX_LOCATION = 200
 MAX_DESCRIPTION = 4000
+MAX_REFERENCE = 100
+MAX_GRADE = 40
 
 
 def _text(value) -> str:
@@ -32,12 +34,16 @@ def _text(value) -> str:
 
 def _serialize(requisition: JobRequisition, application_count: int = 0) -> dict:
     closing = requisition.closing_date
+    advertised = requisition.advertisement_date
     return {
         "id": requisition.id,
         "title": requisition.title,
+        "reference_no": requisition.reference_no,
+        "grade": requisition.grade,
         "department": requisition.department,
         "location": requisition.location,
         "description": requisition.description,
+        "advertisement_date": advertised.isoformat() if advertised else None,
         "closing_date": closing.isoformat() if closing else None,
         "is_open": requisition.is_open,
         # Distinguishes "closed by HR" from "the closing date has passed", which
@@ -65,7 +71,9 @@ def _validate(data, existing: JobRequisition | None = None):
     cleaned["title"] = title
 
     for field, label, maximum in (
-        ("department", "Department", MAX_DEPARTMENT),
+        ("reference_no", "Advertisement / reference no.", MAX_REFERENCE),
+        ("grade", "Grade", MAX_GRADE),
+        ("department", "Department / function", MAX_DEPARTMENT),
         ("location", "Location", MAX_LOCATION),
         ("description", "Description", MAX_DESCRIPTION),
     ):
@@ -73,6 +81,18 @@ def _validate(data, existing: JobRequisition | None = None):
         if len(value) > maximum:
             errors[field] = f"Keep {label.lower()} within {maximum} characters"
         cleaned[field] = value or None
+
+    advertised_raw = _text(data.get("advertisement_date"))
+    advertised = None
+    if advertised_raw:
+        try:
+            advertised = date.fromisoformat(advertised_raw[:10])
+        except ValueError:
+            errors["advertisement_date"] = "Use a date like 2026-09-30"
+        else:
+            if advertised > date.today():
+                errors["advertisement_date"] = "The advertisement date cannot be in the future"
+    cleaned["advertisement_date"] = advertised
 
     closing_raw = _text(data.get("closing_date"))
     closing = None
@@ -88,6 +108,8 @@ def _validate(data, existing: JobRequisition | None = None):
             unchanged = existing is not None and existing.closing_date == closing
             if closing < date.today() and not unchanged:
                 errors["closing_date"] = "The closing date cannot be in the past"
+            elif advertised and closing < advertised:
+                errors["closing_date"] = "The closing date is before the advertisement date"
     cleaned["closing_date"] = closing
 
     cleaned["is_open"] = bool(data.get("is_open", True))
@@ -100,6 +122,14 @@ def _validate(data, existing: JobRequisition | None = None):
             clash = clash.exclude(id=existing.id)
         if clash.exists():
             errors["title"] = "A vacancy with this title already exists"
+
+    reference = cleaned.get("reference_no")
+    if reference and not errors.get("reference_no"):
+        clash = JobRequisition.objects.filter(reference_no__iexact=reference)
+        if existing is not None:
+            clash = clash.exclude(id=existing.id)
+        if clash.exists():
+            errors["reference_no"] = "Another vacancy already uses this reference number"
 
     return cleaned, errors
 

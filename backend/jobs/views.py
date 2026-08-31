@@ -1,8 +1,9 @@
-"""Endpoints behind the internal job application form.
+"""Endpoints behind the internal recruitment online application form.
 
 Three jobs: list the vacancies that can be applied for, hand the form what the
-`employees` table already knows about the person filling it in, and store a
-submission with its education rows.
+employee record already knows about the person filling it in, and store a
+submission - one application per vacancy chosen - with its four repeating
+sections.
 """
 
 import json
@@ -18,16 +19,34 @@ from sqlalchemy import text
 
 from db import SessionLocal
 
+from .form_text import DECLARATION_PARAGRAPHS, SUBMISSION_NOTE
 from .models import (
     InternalJobApplication,
+    InternalJobApplicationCertification,
     InternalJobApplicationEducation,
     InternalJobApplicationExperience,
-    InternalJobApplicationSkill,
+    InternalJobApplicationTraining,
     JobRequisition,
 )
 from .validators import validate_application
 
 logger = logging.getLogger(__name__)
+
+GENDER_NAMES = {"M": "Male", "F": "Female", "male": "Male", "female": "Female"}
+
+
+def _requisition_payload(row) -> dict:
+    """A vacancy as section 1 of the form needs it."""
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "reference_no": row["reference_no"] or "",
+        "grade": row["grade"] or "",
+        "department": row["department"] or "",
+        "location": row["location"] or "",
+        "advertisement_date": row["advertisement_date"].isoformat() if row["advertisement_date"] else None,
+        "closing_date": row["closing_date"].isoformat() if row["closing_date"] else None,
+    }
 
 
 @require_GET
@@ -41,33 +60,23 @@ def requisitions(request):
     rows = (
         JobRequisition.objects.filter(is_open=True)
         .filter(Q(closing_date__isnull=True) | Q(closing_date__gte=date.today()))
-        .values("id", "title", "department", "location", "closing_date")
+        .values(
+            "id", "title", "reference_no", "grade", "department", "location",
+            "advertisement_date", "closing_date",
+        )
     )
 
-    return JsonResponse(
-        [
-            {
-                "id": row["id"],
-                "title": row["title"],
-                "department": row["department"],
-                "location": row["location"],
-                "closing_date": row["closing_date"].isoformat() if row["closing_date"] else None,
-            }
-            for row in rows
-        ],
-        safe=False,
-        status=200,
-    )
+    return JsonResponse([_requisition_payload(row) for row in rows], safe=False, status=200)
 
 
 @require_GET
 def application_profile(request):
     """What the form can fill in for one employee before they type anything.
 
-    Everything here comes from `employees` and the tables it points at, plus
-    the corporate email from the account mapped to that ERP id. Fields the
-    database does not hold - a personal phone number, for instance - come back
-    empty for the applicant to fill in.
+    Everything here comes from the employee record and the tables it points at,
+    plus the email on the account mapped to that ERP id. Fields the database
+    does not hold - a date of birth, a mobile number - come back empty for the
+    applicant to fill in, and every one of them stays editable on the form.
     """
     erp_id = request.GET.get("erp_id")
     if not erp_id:
@@ -84,11 +93,13 @@ def application_profile(request):
                     s.name AS section_name,
                     d.title AS designation,
                     g.name AS grade,
-                    u.email AS corporate_email
+                    l.name AS office_location,
+                    u.email AS official_email
                 FROM employees e
                 LEFT JOIN sections s ON s.id = e.section_id
                 LEFT JOIN designations d ON d.id = e.designation_id
                 LEFT JOIN grades g ON g.id = e.grade_id
+                LEFT JOIN locations l ON l.id = e.location_id
                 LEFT JOIN profiles p ON p.erpid = e.erp_id
                 LEFT JOIN auth_user u ON u.id = p.authid
                 WHERE e.erp_id = :erp_id AND e.flag = 1
@@ -100,43 +111,35 @@ def application_profile(request):
         if not employee:
             return JsonResponse({"error": "Employee not found"}, status=404)
 
-        # The reporting line is not a column anywhere, so the most senior other
-        # person in the same section is offered as the supervisor. It is a
-        # starting point the applicant can correct, which is why the form leaves
-        # the field editable.
-        supervisor = session.execute(
-            text(
-                """
-                SELECT TOP 1 e.erp_id, e.name, g.name AS grade
-                FROM employees e
-                LEFT JOIN grades g ON g.id = e.grade_id
-                WHERE e.flag = 1
-                  AND e.section_id = :section_id
-                  AND e.erp_id <> :erp_id
-                ORDER BY e.grade_id DESC, e.erp_id ASC
-                """
-            ),
-            {"section_id": employee.section_id, "erp_id": employee.erp_id},
-        ).first()
+        # Designation is the job title; `position` is a free-text note on the
+        # row and is only used when there is no designation.
+        designation = employee.designation or employee.position or ""
 
         return JsonResponse(
             {
-                "erp_id": employee.erp_id,
-                "emp_full_name": employee.name or "",
+                # section 2
                 "emp_id": employee.erp_id,
-                "hris_id": employee.hris_id,
+                "full_name": employee.name or "",
                 "cnic": employee.cnic or "",
-                "gender": employee.gender or "",
-                "current_dept_code": employee.section_name or "",
-                # Designation is the job title; `position` is a free-text note
-                # on the row and is only used when there is no designation.
-                "current_job_title": employee.designation or employee.position or "",
-                "grade": employee.grade or "",
-                "current_supervisor_id": supervisor.name if supervisor else "",
-                "current_supervisor_erp_id": supervisor.erp_id if supervisor else None,
-                "corporate_email": employee.corporate_email or "",
-                # Not held anywhere in the HR tables; the applicant supplies it.
-                "contact_phone_no": "",
+                "gender": GENDER_NAMES.get((employee.gender or "").strip(), ""),
+                "official_email": employee.official_email or "",
+                "current_office_location": employee.office_location or "",
+                # section 3
+                "current_designation": designation,
+                "current_grade": employee.grade or "",
+                "department_function": employee.section_name or "",
+                # Held nowhere in the HR tables; the applicant supplies them.
+                "father_or_husband_name": "",
+                "date_of_birth": "",
+                "mobile_no": "",
+                "emergency_contact_no": "",
+                "date_of_joining_ismo": "",
+                "date_of_appointment_to_current_grade": "",
+                "date_of_joining_current_position": "",
+                "hris_id": employee.hris_id,
+                # The form shows the declaration it is asking to be accepted.
+                "declaration_paragraphs": list(DECLARATION_PARAGRAPHS),
+                "submission_note": SUBMISSION_NOTE,
             },
             status=200,
         )
@@ -154,20 +157,23 @@ def my_applications(request):
     applications = (
         InternalJobApplication.objects.filter(applicant_erp_id=erp_id)
         .select_related("target_job_req")
-        .prefetch_related("education", "experience", "skills")
+        .prefetch_related("education", "experience", "certifications", "trainings")
     )
 
     return JsonResponse(
         [
             {
                 "id": application.id,
-                "vacancy": application.target_job_req.title,
+                "reference_no": application.application_reference_no or "",
+                "vacancy": application.vacancy_position_title or application.target_job_req.title,
                 "target_job_req_id": application.target_job_req_id,
                 "status": application.status,
+                "hr_verification_status": application.hr_verification_status,
                 "created_at": application.created_at.strftime("%Y-%m-%d %H:%M"),
                 "education_count": application.education.count(),
                 "experience_count": application.experience.count(),
-                "skill_count": application.skills.count(),
+                "certification_count": application.certifications.count(),
+                "training_count": application.trainings.count(),
             }
             for application in applications
         ],
@@ -176,10 +182,16 @@ def my_applications(request):
     )
 
 
+def _reference_no(application: InternalJobApplication) -> str:
+    """ISMO/IJA/2026/00042 - printed in the form's submission record."""
+    year = (application.created_at or date.today()).year
+    return f"ISMO/IJA/{year}/{application.id:05d}"
+
+
 @csrf_exempt
 @require_POST
 def create_application(request):
-    """Store one application and its education rows, or explain what is wrong."""
+    """Store one application per vacancy chosen, or explain what is wrong."""
     try:
         data = json.loads(request.body.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
@@ -197,88 +209,161 @@ def create_application(request):
     if applicant_erp_id <= 0:
         errors["applicant_erp_id"] = "Sign in again - your employee id is missing"
 
-    requisition = None
-    if cleaned.get("target_job_req_id"):
-        requisition = JobRequisition.objects.filter(
-            id=cleaned["target_job_req_id"]
-        ).first()
-        if requisition is None:
-            errors["target_job_req_id"] = "That vacancy no longer exists"
-        elif not requisition.is_open:
-            errors["target_job_req_id"] = "That vacancy has closed"
+    requisitions_to_use = []
+    if cleaned.get("target_job_req_ids") and "target_job_req_ids" not in errors:
+        found = {
+            item.id: item
+            for item in JobRequisition.objects.filter(id__in=cleaned["target_job_req_ids"])
+        }
+
+        unusable = []
+        today = date.today()
+        for requisition_id in cleaned["target_job_req_ids"]:
+            requisition = found.get(requisition_id)
+            if requisition is None:
+                unusable.append(f"#{requisition_id} no longer exists")
+            elif not requisition.is_open:
+                unusable.append(f"{requisition.title} has closed")
+            elif requisition.closing_date and requisition.closing_date < today:
+                unusable.append(f"{requisition.title} is past its closing date")
+            else:
+                requisitions_to_use.append(requisition)
+
+        if unusable:
+            errors["target_job_req_ids"] = "; ".join(unusable)
 
     if errors:
         return JsonResponse({"errors": errors}, status=400)
 
-    # One application per person per vacancy: a second submission would leave
-    # reviewers guessing which one counts.
-    already = InternalJobApplication.objects.filter(
-        applicant_erp_id=applicant_erp_id, target_job_req=requisition
-    ).first()
-    if already:
+    # One application per person per vacancy. Vacancies already applied for are
+    # reported back rather than blocking the ones that are new, so a stale
+    # selection does not send the applicant away empty-handed.
+    already_applied = set(
+        InternalJobApplication.objects.filter(
+            applicant_erp_id=applicant_erp_id,
+            target_job_req__in=requisitions_to_use,
+        ).values_list("target_job_req_id", flat=True)
+    )
+
+    skipped = [item.title for item in requisitions_to_use if item.id in already_applied]
+    to_create = [item for item in requisitions_to_use if item.id not in already_applied]
+
+    if not to_create:
         return JsonResponse(
             {
                 "errors": {
-                    "target_job_req_id": "You have already applied for this vacancy."
-                }
+                    "target_job_req_ids": (
+                        "You have already applied for "
+                        + ("this vacancy." if len(skipped) == 1
+                           else "these vacancies: " + ", ".join(skipped))
+                    )
+                },
+                "skipped": skipped,
             },
             status=409,
         )
 
+    # One row per vacancy, each carrying its own copy of the application. The
+    # repetition is deliberate: an application is a snapshot of what was
+    # submitted, each vacancy is reviewed and progresses on its own, and the
+    # reviewer for one post should not be reading a record that also belongs to
+    # another.
+    created = []
     with transaction.atomic():
-        application = InternalJobApplication.objects.create(
-            applicant_erp_id=applicant_erp_id,
-            target_job_req=requisition,
-            emp_full_name=cleaned["emp_full_name"],
-            emp_id=cleaned["emp_id"],
-            current_dept_code=cleaned["current_dept_code"],
-            current_job_title=cleaned["current_job_title"],
-            current_supervisor_id=cleaned["current_supervisor_id"],
-            current_supervisor_erp_id=cleaned["current_supervisor_erp_id"],
-            cnic=cleaned["cnic"],
-            contact_phone_no=cleaned["contact_phone_no"],
-            corporate_email=cleaned["corporate_email"],
-            personal_email=cleaned["personal_email"],
-            preferred_contact_method=cleaned["preferred_contact_method"],
-            certifications_list=cleaned["certifications_list"],
-            application_rationale_sop=cleaned["application_rationale_sop"],
-            ack_manager_notified_bool=cleaned["ack_manager_notified_bool"],
-            ack_data_accuracy_bool=cleaned["ack_data_accuracy_bool"],
-        )
+        for requisition in to_create:
+            application = InternalJobApplication.objects.create(
+                applicant_erp_id=applicant_erp_id,
+                target_job_req=requisition,
+                # 1. vacancy information, as advertised on the day
+                vacancy_position_title=requisition.title,
+                vacancy_reference_no=requisition.reference_no,
+                vacancy_grade=requisition.grade,
+                vacancy_department=requisition.department,
+                vacancy_advertisement_date=requisition.advertisement_date,
+                vacancy_closing_date=requisition.closing_date,
+                # 2. personal & contact information
+                emp_id=cleaned["emp_id"],
+                full_name=cleaned["full_name"],
+                father_or_husband_name=cleaned["father_or_husband_name"],
+                cnic=cleaned["cnic"],
+                date_of_birth=cleaned["date_of_birth"],
+                gender=cleaned["gender"],
+                official_email=cleaned["official_email"],
+                mobile_no=cleaned["mobile_no"],
+                current_office_location=cleaned["current_office_location"],
+                emergency_contact_no=cleaned["emergency_contact_no"],
+                # 3. current employment details
+                date_of_joining_ismo=cleaned["date_of_joining_ismo"],
+                current_designation=cleaned["current_designation"],
+                current_grade=cleaned["current_grade"],
+                department_function=cleaned["department_function"],
+                date_of_appointment_to_current_grade=cleaned["date_of_appointment_to_current_grade"],
+                total_service_ismo=cleaned["total_service_ismo"],
+                total_relevant_experience=cleaned["total_relevant_experience"],
+                date_of_joining_current_position=cleaned["date_of_joining_current_position"],
+                # 8 and 9
+                declaration_accepted=cleaned["declaration_accepted"],
+                applicant_signature=cleaned["applicant_signature"],
+            )
 
-        InternalJobApplicationEducation.objects.bulk_create(
-            [
+            application.application_reference_no = _reference_no(application)
+            application.save(update_fields=["application_reference_no"])
+
+            InternalJobApplicationEducation.objects.bulk_create([
                 InternalJobApplicationEducation(application=application, **row)
                 for row in cleaned["education"]
-            ]
-        )
-        InternalJobApplicationExperience.objects.bulk_create(
-            [
+            ])
+            InternalJobApplicationExperience.objects.bulk_create([
                 InternalJobApplicationExperience(application=application, **row)
                 for row in cleaned["experience"]
-            ]
-        )
-        InternalJobApplicationSkill.objects.bulk_create(
-            [
-                InternalJobApplicationSkill(application=application, **row)
-                for row in cleaned["skills"]
-            ]
-        )
+            ])
+            InternalJobApplicationCertification.objects.bulk_create([
+                InternalJobApplicationCertification(application=application, **row)
+                for row in cleaned["certifications"]
+            ])
+            InternalJobApplicationTraining.objects.bulk_create([
+                InternalJobApplicationTraining(application=application, **row)
+                for row in cleaned["trainings"]
+            ])
+
+            created.append({
+                "id": application.id,
+                "vacancy": requisition.title,
+                "reference_no": application.application_reference_no,
+            })
 
     logger.info(
-        "internal job application %s: erp=%s vacancy=%s education=%d experience=%d skills=%d",
-        application.id, applicant_erp_id, requisition.id,
-        len(cleaned["education"]), len(cleaned["experience"]), len(cleaned["skills"]),
+        "internal job applications %s: erp=%s vacancies=%s skipped=%d "
+        "education=%d experience=%d certifications=%d trainings=%d",
+        [item["id"] for item in created], applicant_erp_id,
+        [item.id for item in to_create], len(skipped),
+        len(cleaned["education"]), len(cleaned["experience"]),
+        len(cleaned["certifications"]), len(cleaned["trainings"]),
     )
+
+    if len(created) == 1:
+        message = (
+            f"Your application has been submitted for {created[0]['vacancy']}. "
+            f"Reference {created[0]['reference_no']}."
+        )
+    else:
+        message = f"Your application has been submitted for {len(created)} vacancies."
+    if skipped:
+        message += " Already applied for, so left alone: " + ", ".join(skipped) + "."
 
     return JsonResponse(
         {
-            "id": application.id,
-            "vacancy": requisition.title,
+            "applications": created,
+            # Kept so anything reading the old shape still finds a first id.
+            "id": created[0]["id"],
+            "vacancy": created[0]["vacancy"],
+            "reference_no": created[0]["reference_no"],
+            "skipped": skipped,
             "education_count": len(cleaned["education"]),
             "experience_count": len(cleaned["experience"]),
-            "skill_count": len(cleaned["skills"]),
-            "message": "Your application has been submitted.",
+            "certification_count": len(cleaned["certifications"]),
+            "training_count": len(cleaned["trainings"]),
+            "message": message,
         },
         status=201,
     )

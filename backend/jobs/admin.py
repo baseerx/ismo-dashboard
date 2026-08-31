@@ -2,25 +2,28 @@ from django.contrib import admin
 
 from .models import (
     InternalJobApplication,
+    InternalJobApplicationCertification,
     InternalJobApplicationEducation,
     InternalJobApplicationExperience,
-    InternalJobApplicationSkill,
+    InternalJobApplicationTraining,
     JobRequisition,
 )
 
 
 @admin.register(JobRequisition)
 class JobRequisitionAdmin(admin.ModelAdmin):
-    """HR adds and closes vacancies here.
+    """HR adds and closes vacancies here as well as from Job Openings.
 
-    Registered so advertising a post needs no screen of its own: closing a
-    requisition removes it from the application form while leaving the
-    applications already filed against it intact.
+    Closing a requisition removes it from the application form while leaving
+    the applications already filed against it intact.
     """
 
-    list_display = ("title", "department", "location", "closing_date", "is_open", "created_at")
-    list_filter = ("is_open", "department")
-    search_fields = ("title", "department", "location")
+    list_display = (
+        "title", "reference_no", "grade", "department",
+        "advertisement_date", "closing_date", "is_open", "created_at",
+    )
+    list_filter = ("is_open", "department", "grade")
+    search_fields = ("title", "reference_no", "department", "location")
 
 
 class EducationInline(admin.TabularInline):
@@ -33,19 +36,26 @@ class ExperienceInline(admin.TabularInline):
     extra = 0
 
 
-class SkillInline(admin.TabularInline):
-    model = InternalJobApplicationSkill
+class CertificationInline(admin.TabularInline):
+    model = InternalJobApplicationCertification
+    extra = 0
+
+
+class TrainingInline(admin.TabularInline):
+    model = InternalJobApplicationTraining
     extra = 0
 
 
 @admin.register(InternalJobApplication)
 class InternalJobApplicationAdmin(admin.ModelAdmin):
-    """Read side of the review flow: one row per application, degrees inline."""
+    """Read side of the review flow: one row per application, sections inline."""
 
     list_display = (
-        "id", "emp_full_name", "emp_id", "target_job_req",
-        "current_dept_code", "current_job_title", "status", "created_at",
+        "id", "application_reference_no", "full_name", "emp_id", "target_job_req",
+        "department_function", "current_designation", "status", "created_at",
     )
-    list_filter = ("status", "target_job_req", "preferred_contact_method")
-    search_fields = ("emp_full_name", "emp_id", "corporate_email", "cnic")
-    inlines = [EducationInline, ExperienceInline, SkillInline]
+    list_filter = ("status", "target_job_req", "current_grade")
+    search_fields = (
+        "full_name", "emp_id", "official_email", "cnic", "application_reference_no",
+    )
+    inlines = [EducationInline, ExperienceInline, CertificationInline, TrainingInline]

@@ -13,6 +13,14 @@ from django.contrib.auth import authenticate
 from django.conf import settings
 import jwt
 from addtouser.models import CustomUser
+from users.employee_account import (
+    apply_account_fields,
+    account_for,
+    email_taken_by_another,
+    parse_date_joined,
+    parse_dob,
+    parse_email,
+)
 # Assuming you have an AssignRights model defined
 from assignrights.models import AssignRightsModel
 from datetime import date, timedelta
@@ -398,20 +406,27 @@ class EmployeesView:
             session = SessionLocal()
 
             # SQL with joins to fetch all employee attributes + section/location/grade/designation
+            # The email address and the date joined live on the login account,
+            # which is tied to the employee through `profiles`; an employee
+            # without an account comes back with both empty.
             employees_query = text('''
-                SELECT e.id, e.erp_id, e.hris_id, e.name, e.cnic, e.gender, 
-                    e.section_id, e.location_id, e.grade_id, e.designation_id, 
-                    e.position, e.flag,
+                SELECT e.id, e.erp_id, e.hris_id, e.name, e.cnic, e.gender,
+                    e.section_id, e.location_id, e.grade_id, e.designation_id,
+                    e.position, e.flag, e.dob,
                     s.name AS section_name,
                     l.name AS location_name,
                     g.name AS grade_name,
-                    d.title AS designation_title
+                    d.title AS designation_title,
+                    u.id AS auth_user_id,
+                    u.email AS email,
+                    u.date_joined AS date_joined
                 FROM employees e
                 LEFT JOIN sections s ON e.section_id = s.id
                 LEFT JOIN locations l ON e.location_id = l.id
                 LEFT JOIN grades g ON e.grade_id = g.id
                 LEFT JOIN designations d ON e.designation_id = d.id
-                
+                LEFT JOIN profiles p ON p.erpid = e.erp_id
+                LEFT JOIN auth_user u ON u.id = p.authid
             ''')
 
             employees_data = session.execute(employees_query).fetchall()
@@ -426,6 +441,12 @@ class EmployeesView:
                     "gender": row.gender,
                     "position": row.position,
                     "flag": row.flag,
+                    "dob": row.dob.isoformat() if row.dob else None,
+                    "email": row.email or "",
+                    "date_joined": row.date_joined.date().isoformat() if row.date_joined else None,
+                    # Lets the screen say whether the email and date joined can
+                    # be edited at all for this employee.
+                    "has_account": bool(row.auth_user_id),
                     "section": {
                         "id": row.section_id,
                         "name": row.section_name
@@ -959,6 +980,26 @@ class EmployeesView:
             if field not in data or data[field] in [None, ""]:
                 return JsonResponse({"success": False, "error": f"Field '{field}' is required"}, status=400)
 
+        # Date of birth is stored on the employee; the email address and the
+        # date joined belong to the login account and are applied afterwards.
+        dob, dob_error = parse_dob(data.get('dob'))
+        if dob_error:
+            return JsonResponse({"success": False, "error": dob_error}, status=400)
+
+        email, email_error = parse_email(data.get('email'))
+        if email_error:
+            return JsonResponse({"success": False, "error": email_error}, status=400)
+
+        date_joined, joined_error = parse_date_joined(data.get('date_joined'), dob)
+        if joined_error:
+            return JsonResponse({"success": False, "error": joined_error}, status=400)
+
+        if email and email_taken_by_another(email, account_for(data['erp_id'])):
+            return JsonResponse(
+                {"success": False, "error": "Another account already uses that email address"},
+                status=400,
+            )
+
         try:
             employee = Employees.objects.create(
                 erp_id=str(data['erp_id']),
@@ -971,9 +1012,16 @@ class EmployeesView:
                 grade_id=int(data['grade_id']),
                 designation_id=int(data['designation_id']),
                 position=data['position'],
+                dob=dob,
                 flag=1 if data.get('flag', False) else 0
             )
-            return JsonResponse({"success": True, "message": "Employee created successfully", "employee_id": employee.pk}, status=201)
+            note = apply_account_fields(data['erp_id'], email, date_joined)
+            return JsonResponse({
+                "success": True,
+                "message": "Employee created successfully",
+                "employee_id": employee.pk,
+                "note": note,
+            }, status=201)
         except KeyError as e:
             return JsonResponse({"success": False, "error": f"Missing required field: {str(e)}"}, status=400)
         except ValueError as e:
@@ -1011,6 +1059,24 @@ class EmployeesView:
         except Employees.DoesNotExist:
             return JsonResponse({"success": False, "error": "Employee not found"}, status=404)
 
+        dob, dob_error = parse_dob(data.get('dob'))
+        if dob_error:
+            return JsonResponse({"success": False, "error": dob_error}, status=400)
+
+        email, email_error = parse_email(data.get('email'))
+        if email_error:
+            return JsonResponse({"success": False, "error": email_error}, status=400)
+
+        date_joined, joined_error = parse_date_joined(data.get('date_joined'), dob)
+        if joined_error:
+            return JsonResponse({"success": False, "error": joined_error}, status=400)
+
+        if email and email_taken_by_another(email, account_for(data['erp_id'])):
+            return JsonResponse(
+                {"success": False, "error": "Another account already uses that email address"},
+                status=400,
+            )
+
         try:
             employee.erp_id = str(data['erp_id'])
             employee.name = data.get('name', '')
@@ -1021,10 +1087,18 @@ class EmployeesView:
             employee.grade_id = int(data['grade_id'])
             employee.designation_id = int(data['designation_id'])
             employee.position = data['position']
+            # Clearing the field is a legitimate edit, so an empty date of birth
+            # is stored as empty rather than left at its old value.
+            employee.dob = dob
             employee.flag = 1 if data.get('flag', False) else 0
             # NOTE: employee.hris_id is intentionally left untouched.
             employee.save()
-            return JsonResponse({"success": True, "message": "Employee updated successfully"}, status=200)
+            note = apply_account_fields(data['erp_id'], email, date_joined)
+            return JsonResponse({
+                "success": True,
+                "message": "Employee updated successfully",
+                "note": note,
+            }, status=200)
         except ValueError as e:
             return JsonResponse({"success": False, "error": f"Invalid value: {str(e)}"}, status=400)
         except Exception as e:

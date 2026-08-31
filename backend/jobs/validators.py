@@ -1,125 +1,428 @@
-"""Validation for an internal job application.
+"""Validation for the internal recruitment online application form.
 
-The form checks the same things in the browser for immediate feedback, but this
-is the copy that decides: a POST can be made without the page, so anything the
-browser refuses has to be refused here too.
+One function, `validate_application`, returns (cleaned, errors) so a submission
+is either stored whole or refused with a message against every field that is
+wrong. The rules mirror the printed form: the fields it marks mandatory are
+required here, the one field it marks optional stays optional, and the four
+repeating tables are checked row by row.
 
-Errors come back keyed by field, and education errors keyed by row index, so
-the form can put each message next to the input that caused it rather than
-showing one banner for the whole submission.
+The browser checks the same things first; this is what actually decides, since
+a payload can be sent without going near the page.
 """
 
 import re
-from datetime import date
-from typing import Any, Dict, List, Tuple
+from datetime import date, datetime
+from typing import List
 
-from .models import InternalJobApplication, InternalJobApplicationSkill
-
-# Grid rows a person can add. Generous for a career, small enough that a script
-# cannot post ten thousand of them.
+# Repeater ceilings. Generous enough for a long career, low enough that a
+# runaway payload cannot fill the database.
 MAX_EDUCATION_ROWS = 15
 MAX_EXPERIENCE_ROWS = 20
+MAX_CERTIFICATION_ROWS = 15
+MAX_TRAINING_ROWS = 20
 
-# Character ceilings from the specification, enforced here as well as in each
-# textarea's own maxlength — which a POST can ignore.
+# Vacancies one submission may target. Applying for everything advertised is
+# not a career move, and each one becomes its own application to review.
+MAX_VACANCIES_PER_SUBMISSION = 10
+
 MAX_RESPONSIBILITIES = 1500
-MAX_ACHIEVEMENTS = 2000
-MAX_CERTIFICATIONS = 1500
-MAX_SOP = 3000
 
-# A statement of purpose has to say something; this only rules out "n/a".
-MIN_SOP = 30
+GENDERS = ("Male", "Female", "Other")
 
-# Tags exist to be filtered on, so they are capped and de-duplicated.
-MAX_TECHNICAL_SKILLS = 30
-MAX_SKILL_LENGTH = 80
+# 12345-1234567-1, the way a CNIC is written on the card.
+CNIC = re.compile(r"^\d{5}-\d{7}-\d$")
+# Local or international, with or without separators: +92-300-1234567, 03001234567.
+PHONE = re.compile(r"^\+?[\d][\d\s\-()]{6,20}$")
+EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
-# Nobody here was employed before this, and no post starts in the future.
-EARLIEST_EMPLOYMENT_YEAR = 1950
+EARLIEST_QUALIFICATION_YEAR = 1950
+# A degree can be awarded shortly after the form is filled in, and nobody is
+# still at school in 1949.
+FUTURE_QUALIFICATION_YEARS = 6
 
-# The list the form offers. Anything else is a typo rather than a soft skill,
-# and is refused instead of becoming a category nothing will match again.
-SOFT_SKILL_OPTIONS = (
-    "Leadership",
-    "Team Management",
-    "Communication",
-    "Stakeholder Management",
-    "Problem Solving",
-    "Analytical Thinking",
-    "Decision Making",
-    "Negotiation",
-    "Conflict Resolution",
-    "Mentoring & Coaching",
-    "Time Management",
-    "Adaptability",
-    "Presentation Skills",
-    "Report Writing",
-    "Cross-functional Collaboration",
+
+def _text(value, limit: int | None = None) -> str:
+    cleaned = str(value or "").strip()
+    return cleaned[:limit] if limit else cleaned
+
+
+def _require(errors: dict, field: str, value, message: str, minimum: int = 0) -> str:
+    """Records `message` when the value is missing or too short."""
+    cleaned = _text(value)
+    if not cleaned:
+        errors[field] = message
+    elif minimum and len(cleaned) < minimum:
+        errors[field] = f"{message.rstrip('.')} - that looks too short"
+    return cleaned
+
+
+def _as_date(value):
+    """A date from an ISO string, or None when absent or unparseable."""
+    cleaned = _text(value)
+    if not cleaned:
+        return None
+    for pattern in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(cleaned[:10], pattern).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _required_date(errors: dict, field: str, value, label: str, *, allow_future=False):
+    """A date that has to be there, and has to make sense."""
+    cleaned = _text(value)
+    if not cleaned:
+        errors[field] = f"{label} is required"
+        return None
+
+    parsed = _as_date(cleaned)
+    if parsed is None:
+        errors[field] = f"{label} is not a valid date"
+        return None
+    if not allow_future and parsed > date.today():
+        errors[field] = f"{label} cannot be in the future"
+        return None
+    return parsed
+
+
+def _optional_date(errors: dict, field: str, value, label: str, *, allow_future=True):
+    cleaned = _text(value)
+    if not cleaned:
+        return None
+    parsed = _as_date(cleaned)
+    if parsed is None:
+        errors[field] = f"{label} is not a valid date"
+        return None
+    if not allow_future and parsed > date.today():
+        errors[field] = f"{label} cannot be in the future"
+        return None
+    return parsed
+
+
+def describe_span(start: date, end: date | None) -> str:
+    """"3 years 4 months", the way the form's Duration column reads."""
+    finish = end or date.today()
+    if finish < start:
+        return ""
+
+    months = (finish.year - start.year) * 12 + (finish.month - start.month)
+    if finish.day < start.day:
+        months -= 1
+    months = max(months, 0)
+
+    years, remainder = divmod(months, 12)
+    parts = []
+    if years:
+        parts.append(f"{years} year{'s' if years != 1 else ''}")
+    if remainder:
+        parts.append(f"{remainder} month{'s' if remainder != 1 else ''}")
+    return " ".join(parts) or "less than a month"
+
+
+def _rows(data, key) -> list:
+    rows = data.get(key)
+    return rows if isinstance(rows, list) else []
+
+
+def _row_is_empty(row: dict, fields) -> bool:
+    """True when the applicant added a row and typed nothing in it."""
+    return all(not _text(row.get(field)) for field in fields)
+
+
+# ---------------------------------------------------------------------------
+# 4. Educational background
+# ---------------------------------------------------------------------------
+
+def _validate_education(data, errors) -> list:
+    rows = _rows(data, "education")
+    if not rows:
+        errors["education"] = "Add at least one qualification"
+        return []
+    if len(rows) > MAX_EDUCATION_ROWS:
+        errors["education"] = f"At most {MAX_EDUCATION_ROWS} qualifications can be listed"
+        return []
+
+    cleaned_rows, row_errors = [], {}
+    this_year = date.today().year
+
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            row_errors[index] = {"degree_qualification": "This row is not filled in"}
+            continue
+
+        problems = {}
+        degree = _require(problems, "degree_qualification", row.get("degree_qualification"),
+                          "Degree / qualification is required", minimum=2)
+        major = _require(problems, "major_field_of_study", row.get("major_field_of_study"),
+                         "Major / field of study is required", minimum=2)
+        institution = _require(problems, "institution_university", row.get("institution_university"),
+                               "Institution / university is required", minimum=2)
+        country = _require(problems, "country", row.get("country"), "Country is required", minimum=2)
+
+        year_raw = _text(row.get("year_of_completion"))
+        year = None
+        if not year_raw:
+            problems["year_of_completion"] = "Year of completion is required"
+        else:
+            try:
+                year = int(year_raw)
+            except (TypeError, ValueError):
+                problems["year_of_completion"] = "Year of completion must be a year"
+            else:
+                if not EARLIEST_QUALIFICATION_YEAR <= year <= this_year + FUTURE_QUALIFICATION_YEARS:
+                    problems["year_of_completion"] = (
+                        f"Year must be between {EARLIEST_QUALIFICATION_YEAR} and "
+                        f"{this_year + FUTURE_QUALIFICATION_YEARS}"
+                    )
+
+        grade = _require(problems, "cgpa_division", row.get("cgpa_division"),
+                         "CGPA / division is required")
+
+        if problems:
+            row_errors[index] = problems
+            continue
+
+        cleaned_rows.append({
+            "degree_qualification": degree[:200],
+            "major_field_of_study": major[:200],
+            "institution_university": institution[:200],
+            "country": country[:100],
+            "year_of_completion": year,
+            "cgpa_division": grade[:40],
+            "row_order": index,
+        })
+
+    if row_errors:
+        errors["education_rows"] = row_errors
+    return cleaned_rows
+
+
+# ---------------------------------------------------------------------------
+# 5. Employment history / professional experience
+# ---------------------------------------------------------------------------
+
+def _validate_experience(data, errors) -> list:
+    rows = _rows(data, "experience")
+    if not rows:
+        errors["experience"] = "Add at least one post, including your current one"
+        return []
+    if len(rows) > MAX_EXPERIENCE_ROWS:
+        errors["experience"] = f"At most {MAX_EXPERIENCE_ROWS} posts can be listed"
+        return []
+
+    cleaned_rows, row_errors = [], {}
+
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            row_errors[index] = {"organization_employer": "This row is not filled in"}
+            continue
+
+        problems = {}
+        employer = _require(problems, "organization_employer", row.get("organization_employer"),
+                            "Organization / employer is required", minimum=2)
+        designation = _require(problems, "designation", row.get("designation"),
+                               "Designation is required", minimum=2)
+        grade = _text(row.get("grade"), 40)
+
+        is_current = bool(row.get("is_current"))
+        from_date = _required_date(problems, "from_date", row.get("from_date"), "From date")
+        to_date = None
+        if is_current:
+            # "To" is meaningless for a post still held, and the form's Duration
+            # runs to today in that case.
+            to_date = None
+        else:
+            to_date = _required_date(problems, "to_date", row.get("to_date"), "To date")
+            if from_date and to_date and to_date < from_date:
+                problems["to_date"] = "The To date cannot be before the From date"
+
+        responsibilities = _require(
+            problems, "key_responsibilities", row.get("key_responsibilities"),
+            "Key responsibilities / relevant experience is required", minimum=10,
+        )
+        if len(responsibilities) > MAX_RESPONSIBILITIES:
+            problems["key_responsibilities"] = (
+                f"Keep this within {MAX_RESPONSIBILITIES} characters"
+            )
+
+        if problems:
+            row_errors[index] = problems
+            continue
+
+        duration = _text(row.get("duration"), 60) or describe_span(from_date, to_date)
+
+        cleaned_rows.append({
+            "organization_employer": employer[:200],
+            "designation": designation[:200],
+            "grade": grade or None,
+            "from_date": from_date,
+            "to_date": to_date,
+            "is_current": is_current,
+            "duration": duration,
+            "key_responsibilities": responsibilities,
+            "row_order": index,
+        })
+
+    if row_errors:
+        errors["experience_rows"] = row_errors
+    return cleaned_rows
+
+
+# ---------------------------------------------------------------------------
+# 6. Professional certifications / memberships
+# ---------------------------------------------------------------------------
+
+CERTIFICATION_FIELDS = (
+    "certification_membership", "certifying_body", "date_obtained",
+    "expiry_date", "registration_no",
 )
 
-# The oldest graduation year worth accepting, and how far ahead an in-progress
-# degree may be expected to finish.
-EARLIEST_GRADUATION_YEAR = 1950
-GRADUATION_YEARS_AHEAD = 7
 
-EMAIL = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")
+def _validate_certifications(data, errors) -> list:
+    """Optional as a section; complete once a row has anything in it."""
+    rows = _rows(data, "certifications")
+    if len(rows) > MAX_CERTIFICATION_ROWS:
+        errors["certifications"] = f"At most {MAX_CERTIFICATION_ROWS} entries can be listed"
+        return []
 
-# 13 digits, conventionally written 12345-1234567-1.
-CNIC_DIGITS = 13
+    cleaned_rows, row_errors = [], {}
 
-# Pakistani numbers reach 12 digits with the country code (923001234567); the
-# range also accepts a landline with an area code, and any of the usual
-# separators, because people type these however they please.
-PHONE_MIN_DIGITS = 10
-PHONE_MAX_DIGITS = 15
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or _row_is_empty(row, CERTIFICATION_FIELDS):
+            continue
 
+        problems = {}
+        name = _require(problems, "certification_membership", row.get("certification_membership"),
+                        "Certification / membership is required", minimum=2)
+        body = _require(problems, "certifying_body", row.get("certifying_body"),
+                        "Certifying / professional body is required", minimum=2)
+        obtained = _optional_date(problems, "date_obtained", row.get("date_obtained"),
+                                  "Date obtained", allow_future=False)
+        expiry = _optional_date(problems, "expiry_date", row.get("expiry_date"), "Expiry date")
+        if obtained and expiry and expiry < obtained:
+            problems["expiry_date"] = "The expiry date cannot be before the date obtained"
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+        if problems:
+            row_errors[index] = problems
+            continue
 
+        cleaned_rows.append({
+            "certification_membership": name[:200],
+            "certifying_body": body[:200],
+            "date_obtained": obtained,
+            "expiry_date": expiry,
+            "registration_no": _text(row.get("registration_no"), 100) or None,
+            "row_order": index,
+        })
 
-def normalise_cnic(value: Any) -> str:
-    """Digits only, then written back as 12345-1234567-1."""
-    digits = re.sub(r"\D", "", _text(value))
-    if len(digits) != CNIC_DIGITS:
-        return _text(value)
-    return f"{digits[:5]}-{digits[5:12]}-{digits[12]}"
-
-
-def normalise_phone(value: Any) -> str:
-    """Keeps a leading +, drops everything that is not a digit."""
-    raw = _text(value)
-    digits = re.sub(r"\D", "", raw)
-    return f"+{digits}" if raw.startswith("+") else digits
-
-
-def _require(errors: Dict[str, str], field: str, value: str, label: str, maximum: int) -> str:
-    if not value:
-        errors[field] = f"{label} is required"
-    elif len(value) > maximum:
-        errors[field] = f"{label} must be {maximum} characters or fewer"
-    return value
+    if row_errors:
+        errors["certification_rows"] = row_errors
+    return cleaned_rows
 
 
-def validate_application(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Returns (cleaned, errors). `errors` is empty when the payload is usable."""
-    errors: Dict[str, Any] = {}
-    cleaned: Dict[str, Any] = {}
+# ---------------------------------------------------------------------------
+# 7. Trainings & professional development
+# ---------------------------------------------------------------------------
 
-    # --- section 1 --------------------------------------------------------
-    try:
-        cleaned["target_job_req_id"] = int(data.get("target_job_req_id") or 0)
-    except (TypeError, ValueError):
-        cleaned["target_job_req_id"] = 0
-    if not cleaned["target_job_req_id"]:
-        errors["target_job_req_id"] = "Select the vacancy you are applying for"
+TRAINING_FIELDS = ("training_title", "training_provider", "duration", "date_or_year")
 
-    cleaned["emp_full_name"] = _require(
-        errors, "emp_full_name", _text(data.get("emp_full_name")), "Employee full name", 150
-    )
-    if cleaned["emp_full_name"] and len(cleaned["emp_full_name"]) < 3:
-        errors["emp_full_name"] = "Employee full name looks too short"
 
+def _validate_trainings(data, errors) -> list:
+    """Also optional as a section, also complete once started."""
+    rows = _rows(data, "trainings")
+    if len(rows) > MAX_TRAINING_ROWS:
+        errors["trainings"] = f"At most {MAX_TRAINING_ROWS} entries can be listed"
+        return []
+
+    cleaned_rows, row_errors = [], {}
+    this_year = date.today().year
+
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or _row_is_empty(row, TRAINING_FIELDS):
+            continue
+
+        problems = {}
+        title = _require(problems, "training_title", row.get("training_title"),
+                         "Training / course title is required", minimum=2)
+        provider = _require(problems, "training_provider", row.get("training_provider"),
+                            "Training provider / institute is required", minimum=2)
+
+        # "Date / Year": a bare year is a fine answer, so only a year that could
+        # not be one is refused.
+        when = _text(row.get("date_or_year"), 40)
+        if when and re.fullmatch(r"\d{4}", when):
+            year = int(when)
+            if not EARLIEST_QUALIFICATION_YEAR <= year <= this_year:
+                problems["date_or_year"] = (
+                    f"Year must be between {EARLIEST_QUALIFICATION_YEAR} and {this_year}"
+                )
+
+        if problems:
+            row_errors[index] = problems
+            continue
+
+        cleaned_rows.append({
+            "training_title": title[:200],
+            "training_provider": provider[:200],
+            "duration": _text(row.get("duration"), 60) or None,
+            "date_or_year": when or None,
+            "relevant_to_position": bool(row.get("relevant_to_position")),
+            "row_order": index,
+        })
+
+    if row_errors:
+        errors["training_rows"] = row_errors
+    return cleaned_rows
+
+
+# ---------------------------------------------------------------------------
+# The whole submission
+# ---------------------------------------------------------------------------
+
+def _signature_matches(signature: str, full_name: str) -> bool:
+    """A signature is the applicant's own name, however it is punctuated."""
+    strip = lambda value: re.sub(r"[^a-z]", "", value.lower())
+    return strip(signature) == strip(full_name)
+
+
+def validate_application(data):
+    """Returns (cleaned, errors). `errors` empty means the payload is storable."""
+    errors: dict = {}
+    cleaned: dict = {}
+
+    if not isinstance(data, dict):
+        return {}, {"__all__": "The submission was not readable"}
+
+    # ---- which vacancies -------------------------------------------------
+    raw_ids = data.get("target_job_req_ids")
+    if raw_ids is None:
+        # An older client sent a single vacancy.
+        single = data.get("target_job_req_id")
+        raw_ids = [single] if single else []
+    if not isinstance(raw_ids, list):
+        raw_ids = [raw_ids]
+
+    requisition_ids: List[int] = []
+    for value in raw_ids:
+        try:
+            requisition_id = int(value)
+        except (TypeError, ValueError):
+            errors["target_job_req_ids"] = f"Not a vacancy: {value!r}"
+            break
+        if requisition_id > 0 and requisition_id not in requisition_ids:
+            requisition_ids.append(requisition_id)
+
+    cleaned["target_job_req_ids"] = requisition_ids
+    if "target_job_req_ids" not in errors:
+        if not requisition_ids:
+            errors["target_job_req_ids"] = "Select at least one vacancy to apply for"
+        elif len(requisition_ids) > MAX_VACANCIES_PER_SUBMISSION:
+            errors["target_job_req_ids"] = (
+                f"Apply for at most {MAX_VACANCIES_PER_SUBMISSION} vacancies at a time"
+            )
+
+    # ---- 2. personal & contact information -------------------------------
     try:
         cleaned["emp_id"] = int(data.get("emp_id") or 0)
     except (TypeError, ValueError):
@@ -127,329 +430,131 @@ def validate_application(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str
     if cleaned["emp_id"] <= 0:
         errors["emp_id"] = "Employee ID must be a number"
 
-    cleaned["current_dept_code"] = _require(
-        errors, "current_dept_code", _text(data.get("current_dept_code")), "Current department", 200
-    )
-    cleaned["current_job_title"] = _require(
-        errors, "current_job_title", _text(data.get("current_job_title")), "Current position title", 200
-    )
-    cleaned["current_supervisor_id"] = _require(
-        errors, "current_supervisor_id", _text(data.get("current_supervisor_id")), "Current supervisor name", 150
-    )
+    cleaned["full_name"] = _require(errors, "full_name", data.get("full_name"),
+                                    "Full name is required", minimum=3)[:150]
+    cleaned["father_or_husband_name"] = _require(
+        errors, "father_or_husband_name", data.get("father_or_husband_name"),
+        "Father's / husband's name is required", minimum=3,
+    )[:150]
 
-    supervisor_erp = data.get("current_supervisor_erp_id")
-    try:
-        cleaned["current_supervisor_erp_id"] = int(supervisor_erp) if supervisor_erp else None
-    except (TypeError, ValueError):
-        cleaned["current_supervisor_erp_id"] = None
-
-    # --- section 2 --------------------------------------------------------
-    cnic = normalise_cnic(data.get("cnic"))
+    cnic = _text(data.get("cnic"), 15)
     cleaned["cnic"] = cnic
     if not cnic:
-        errors["cnic"] = "CNIC is required"
-    elif len(re.sub(r"\D", "", cnic)) != CNIC_DIGITS:
+        errors["cnic"] = "CNIC number is required"
+    elif not CNIC.match(cnic):
         errors["cnic"] = "CNIC must be 13 digits, like 12345-1234567-1"
 
-    raw_phone = _text(data.get("contact_phone_no"))
-    phone = normalise_phone(raw_phone)
-    cleaned["contact_phone_no"] = phone
-    digits = re.sub(r"\D", "", phone)
-    if not raw_phone:
-        errors["contact_phone_no"] = "Contact phone number is required"
-    elif not (PHONE_MIN_DIGITS <= len(digits) <= PHONE_MAX_DIGITS):
-        # Covers both "too short" and text with no digits in it at all, which
-        # would otherwise be reported as a missing field.
-        errors["contact_phone_no"] = "Enter a phone number like +92-300-1234567"
+    date_of_birth = _required_date(errors, "date_of_birth", data.get("date_of_birth"),
+                                   "Date of birth")
+    cleaned["date_of_birth"] = date_of_birth
+    if date_of_birth:
+        age = (date.today() - date_of_birth).days / 365.25
+        if age < 18:
+            errors["date_of_birth"] = "An applicant must be at least 18"
+        elif age > 70:
+            errors["date_of_birth"] = "Check the date of birth - that is over 70 years ago"
 
-    corporate = _text(data.get("corporate_email")).lower()
-    cleaned["corporate_email"] = corporate
-    if not corporate:
-        errors["corporate_email"] = "Corporate email address is required"
-    elif not EMAIL.match(corporate):
-        errors["corporate_email"] = "That does not look like an email address"
+    gender = _text(data.get("gender"), 10)
+    cleaned["gender"] = gender
+    if not gender:
+        errors["gender"] = "Gender is required"
+    elif gender not in GENDERS:
+        errors["gender"] = f"Gender should be one of: {', '.join(GENDERS)}"
 
-    personal = _text(data.get("personal_email")).lower()
-    cleaned["personal_email"] = personal or None
-    if personal and not EMAIL.match(personal):
-        errors["personal_email"] = "That does not look like an email address"
-    if personal and personal == corporate:
-        errors["personal_email"] = "Personal email should differ from the corporate one"
+    email = _text(data.get("official_email"), 150).lower()
+    cleaned["official_email"] = email
+    if not email:
+        errors["official_email"] = "Official email address is required"
+    elif not EMAIL.match(email):
+        errors["official_email"] = "That does not look like an email address"
 
-    method = _text(data.get("preferred_contact_method"))
-    cleaned["preferred_contact_method"] = method
-    if not method:
-        errors["preferred_contact_method"] = "Choose how you would like to be contacted"
-    elif method not in InternalJobApplication.CONTACT_METHODS:
-        errors["preferred_contact_method"] = (
-            f"Choose one of {', '.join(InternalJobApplication.CONTACT_METHODS)}"
+    mobile = _text(data.get("mobile_no"), 25)
+    cleaned["mobile_no"] = mobile
+    if not mobile:
+        errors["mobile_no"] = "Mobile / contact number is required"
+    elif not PHONE.match(mobile) or sum(character.isdigit() for character in mobile) < 7:
+        errors["mobile_no"] = "Enter a number like +92-300-1234567"
+
+    cleaned["current_office_location"] = _require(
+        errors, "current_office_location", data.get("current_office_location"),
+        "Current office / location is required", minimum=2,
+    )[:200]
+
+    emergency = _text(data.get("emergency_contact_no"), 25)
+    cleaned["emergency_contact_no"] = emergency or None
+    if emergency and (not PHONE.match(emergency)
+                      or sum(character.isdigit() for character in emergency) < 7):
+        errors["emergency_contact_no"] = "Enter a number like +92-300-1234567"
+
+    # ---- 3. current employment details -----------------------------------
+    joined = _required_date(errors, "date_of_joining_ismo", data.get("date_of_joining_ismo"),
+                            "Date of joining ISMO")
+    cleaned["date_of_joining_ismo"] = joined
+    if joined and date_of_birth and (joined - date_of_birth).days < 16 * 365:
+        errors["date_of_joining_ismo"] = "That is before the applicant turned 16"
+
+    cleaned["current_designation"] = _require(
+        errors, "current_designation", data.get("current_designation"),
+        "Current designation is required", minimum=2,
+    )[:200]
+    cleaned["current_grade"] = _require(
+        errors, "current_grade", data.get("current_grade"), "Current grade is required",
+    )[:40]
+    cleaned["department_function"] = _require(
+        errors, "department_function", data.get("department_function"),
+        "Department / function is required", minimum=2,
+    )[:200]
+
+    appointed = _required_date(
+        errors, "date_of_appointment_to_current_grade",
+        data.get("date_of_appointment_to_current_grade"), "Date of appointment to current grade",
+    )
+    cleaned["date_of_appointment_to_current_grade"] = appointed
+    if appointed and joined and appointed < joined:
+        errors["date_of_appointment_to_current_grade"] = (
+            "This cannot be before the date of joining ISMO"
         )
 
-    # --- section 3: the education repeater --------------------------------
-    rows = data.get("education")
-    if not isinstance(rows, list):
-        rows = []
+    current_position_since = _required_date(
+        errors, "date_of_joining_current_position",
+        data.get("date_of_joining_current_position"), "Date of joining current position",
+    )
+    cleaned["date_of_joining_current_position"] = current_position_since
+    if current_position_since and joined and current_position_since < joined:
+        errors["date_of_joining_current_position"] = (
+            "This cannot be before the date of joining ISMO"
+        )
 
-    if not rows:
-        errors["education"] = "Add at least one degree or certificate"
-    elif len(rows) > MAX_EDUCATION_ROWS:
-        errors["education"] = f"At most {MAX_EDUCATION_ROWS} entries can be listed"
+    cleaned["total_service_ismo"] = _require(
+        errors, "total_service_ismo", data.get("total_service_ismo"),
+        "Total service in ISMO is required",
+    )[:60]
+    cleaned["total_relevant_experience"] = _require(
+        errors, "total_relevant_experience", data.get("total_relevant_experience"),
+        "Total relevant experience is required",
+    )[:60]
 
-    latest_year = date.today().year + GRADUATION_YEARS_AHEAD
-    cleaned_rows: List[Dict[str, Any]] = []
-    row_errors: Dict[str, Dict[str, str]] = {}
+    # ---- 4 to 7: the repeating tables ------------------------------------
+    cleaned["education"] = _validate_education(data, errors)
+    cleaned["experience"] = _validate_experience(data, errors)
+    cleaned["certifications"] = _validate_certifications(data, errors)
+    cleaned["trainings"] = _validate_trainings(data, errors)
 
-    for index, row in enumerate(rows[:MAX_EDUCATION_ROWS]):
-        if not isinstance(row, dict):
-            row_errors[str(index)] = {"edu_degree_title": "Unreadable entry"}
-            continue
+    # ---- 8. declaration & undertaking ------------------------------------
+    cleaned["declaration_accepted"] = bool(data.get("declaration_accepted"))
+    if not cleaned["declaration_accepted"]:
+        errors["declaration_accepted"] = (
+            "Read and accept the declaration and undertaking before submitting"
+        )
 
-        problems: Dict[str, str] = {}
-        entry = {
-            "edu_degree_title": _text(row.get("edu_degree_title")),
-            "edu_institution_name": _text(row.get("edu_institution_name")),
-            "edu_major_specialization": _text(row.get("edu_major_specialization")),
-            "edu_grade_score": _text(row.get("edu_grade_score")),
-        }
-
-        for field, label, maximum in (
-            ("edu_degree_title", "Degree / certificate", 200),
-            ("edu_institution_name", "Institution", 200),
-            ("edu_major_specialization", "Major / field of study", 200),
-            ("edu_grade_score", "CGPA / grade", 40),
-        ):
-            if not entry[field]:
-                problems[field] = f"{label} is required"
-            elif len(entry[field]) > maximum:
-                problems[field] = f"{label} must be {maximum} characters or fewer"
-
-        try:
-            year = int(row.get("edu_graduation_year") or 0)
-        except (TypeError, ValueError):
-            year = 0
-        entry["edu_graduation_year"] = year
-
-        if not year:
-            problems["edu_graduation_year"] = "Select the year of completion"
-        elif not (EARLIEST_GRADUATION_YEAR <= year <= latest_year):
-            problems["edu_graduation_year"] = (
-                f"Year must be between {EARLIEST_GRADUATION_YEAR} and {latest_year}"
-            )
-
-        entry["row_order"] = index
-        if problems:
-            row_errors[str(index)] = problems
-        else:
-            cleaned_rows.append(entry)
-
-    if row_errors:
-        errors["education_rows"] = row_errors
-
-    cleaned["education"] = cleaned_rows
-
-    _validate_experience(data, cleaned, errors)
-    _validate_skills(data, cleaned, errors)
-    _validate_statement(data, cleaned, errors)
+    # ---- 9. submission record --------------------------------------------
+    signature = _text(data.get("applicant_signature"), 150)
+    cleaned["applicant_signature"] = signature
+    if not signature:
+        errors["applicant_signature"] = "Type your full name to sign the application"
+    elif cleaned["full_name"] and not _signature_matches(signature, cleaned["full_name"]):
+        errors["applicant_signature"] = (
+            "The signature must be your full name as entered above"
+        )
 
     return cleaned, errors
-
-
-def _parse_date(value: Any):
-    """A date from YYYY-MM-DD, or None when it is not one."""
-    text = _text(value)[:10]
-    if not text:
-        return None
-    try:
-        return date.fromisoformat(text)
-    except ValueError:
-        return None
-
-
-def _validate_experience(
-    data: Dict[str, Any], cleaned: Dict[str, Any], errors: Dict[str, Any]
-) -> None:
-    """Section 4: one row per post held, internal or external."""
-    rows = data.get("experience")
-    if not isinstance(rows, list):
-        rows = []
-
-    if not rows:
-        errors["experience"] = "Add at least one position, including your current role"
-    elif len(rows) > MAX_EXPERIENCE_ROWS:
-        errors["experience"] = f"At most {MAX_EXPERIENCE_ROWS} positions can be listed"
-
-    today = date.today()
-    cleaned_rows: List[Dict[str, Any]] = []
-    row_errors: Dict[str, Dict[str, str]] = {}
-
-    for index, row in enumerate(rows[:MAX_EXPERIENCE_ROWS]):
-        if not isinstance(row, dict):
-            row_errors[str(index)] = {"exp_job_title": "Unreadable entry"}
-            continue
-
-        problems: Dict[str, str] = {}
-        entry: Dict[str, Any] = {
-            "exp_job_title": _text(row.get("exp_job_title")),
-            "exp_company_name": _text(row.get("exp_company_name")),
-            "exp_key_responsibilities": _text(row.get("exp_key_responsibilities")),
-            "exp_key_achievements": _text(row.get("exp_key_achievements")),
-            "exp_is_current": bool(row.get("exp_is_current")),
-        }
-
-        for field, label, maximum in (
-            ("exp_job_title", "Job position title", 200),
-            ("exp_company_name", "Organization / company name", 200),
-        ):
-            if not entry[field]:
-                problems[field] = f"{label} is required"
-            elif len(entry[field]) > maximum:
-                problems[field] = f"{label} must be {maximum} characters or fewer"
-
-        if not entry["exp_key_responsibilities"]:
-            problems["exp_key_responsibilities"] = "Key responsibilities are required"
-        elif len(entry["exp_key_responsibilities"]) > MAX_RESPONSIBILITIES:
-            problems["exp_key_responsibilities"] = (
-                f"Keep responsibilities within {MAX_RESPONSIBILITIES} characters"
-            )
-
-        # Achievements are optional: a long-ago junior post may have none worth
-        # quantifying, and demanding one invites invention.
-        if len(entry["exp_key_achievements"]) > MAX_ACHIEVEMENTS:
-            problems["exp_key_achievements"] = (
-                f"Keep achievements within {MAX_ACHIEVEMENTS} characters"
-            )
-        entry["exp_key_achievements"] = entry["exp_key_achievements"] or None
-
-        start = _parse_date(row.get("exp_start_date"))
-        entry["exp_start_date"] = start
-        if start is None:
-            problems["exp_start_date"] = "Select the employment start date"
-        elif start.year < EARLIEST_EMPLOYMENT_YEAR:
-            problems["exp_start_date"] = f"Start date cannot be before {EARLIEST_EMPLOYMENT_YEAR}"
-        elif start > today:
-            problems["exp_start_date"] = "Start date cannot be in the future"
-
-        end = _parse_date(row.get("exp_end_date"))
-        if entry["exp_is_current"]:
-            # "Currently in this role" and an end date contradict each other;
-            # the toggle wins and the date is dropped.
-            entry["exp_end_date"] = None
-        else:
-            entry["exp_end_date"] = end
-            if end is None:
-                problems["exp_end_date"] = (
-                    "Select the end date, or tick 'Currently in this role'"
-                )
-            elif end > today:
-                problems["exp_end_date"] = "End date cannot be in the future"
-            elif start and end < start:
-                problems["exp_end_date"] = "End date cannot be before the start date"
-
-        entry["row_order"] = index
-        if problems:
-            row_errors[str(index)] = problems
-        else:
-            cleaned_rows.append(entry)
-
-    if row_errors:
-        errors["experience_rows"] = row_errors
-
-    cleaned["experience"] = cleaned_rows
-
-
-def _validate_skills(
-    data: Dict[str, Any], cleaned: Dict[str, Any], errors: Dict[str, Any]
-) -> None:
-    """Section 5: the skills matrix and certifications."""
-    technical_in = data.get("skills_technical_tags")
-    if isinstance(technical_in, str):
-        # A comma-separated string is accepted as well as a list of tags.
-        technical_in = technical_in.split(",")
-    if not isinstance(technical_in, list):
-        technical_in = []
-
-    technical: List[str] = []
-    seen = set()
-    for value in technical_in:
-        tag = _text(value)
-        if not tag:
-            continue
-        if len(tag) > MAX_SKILL_LENGTH:
-            errors["skills_technical_tags"] = (
-                f"Each skill must be {MAX_SKILL_LENGTH} characters or fewer"
-            )
-            break
-        # Case-insensitive de-duplication: "python" and "Python" are one skill.
-        if tag.casefold() in seen:
-            continue
-        seen.add(tag.casefold())
-        technical.append(tag)
-
-    if "skills_technical_tags" not in errors:
-        if not technical:
-            errors["skills_technical_tags"] = "Add at least one technical skill"
-        elif len(technical) > MAX_TECHNICAL_SKILLS:
-            errors["skills_technical_tags"] = (
-                f"At most {MAX_TECHNICAL_SKILLS} skills can be listed"
-            )
-
-    soft_in = data.get("skills_soft_checkboxes")
-    if not isinstance(soft_in, list):
-        soft_in = []
-
-    soft: List[str] = []
-    for value in soft_in:
-        name = _text(value)
-        if not name:
-            continue
-        # Only the offered options are stored, so a typo cannot become a new
-        # category that nothing else will ever match.
-        if name not in SOFT_SKILL_OPTIONS:
-            errors["skills_soft_checkboxes"] = f"Unknown soft skill: {name}"
-            break
-        if name not in soft:
-            soft.append(name)
-
-    certifications = _text(data.get("certifications_list"))
-    if len(certifications) > MAX_CERTIFICATIONS:
-        errors["certifications_list"] = (
-            f"Keep certifications within {MAX_CERTIFICATIONS} characters"
-        )
-    cleaned["certifications_list"] = certifications or None
-
-    cleaned["skills"] = [
-        {"skill_type": InternalJobApplicationSkill.TECHNICAL, "skill_name": name}
-        for name in technical
-    ] + [
-        {"skill_type": InternalJobApplicationSkill.SOFT, "skill_name": name}
-        for name in soft
-    ]
-
-
-def _validate_statement(
-    data: Dict[str, Any], cleaned: Dict[str, Any], errors: Dict[str, Any]
-) -> None:
-    """Section 6: the statement of purpose and the two acknowledgements."""
-    statement = _text(data.get("application_rationale_sop"))
-    cleaned["application_rationale_sop"] = statement
-
-    if not statement:
-        errors["application_rationale_sop"] = "Tell us why you are applying"
-    elif len(statement) < MIN_SOP:
-        errors["application_rationale_sop"] = (
-            f"Please give a little more detail — at least {MIN_SOP} characters"
-        )
-    elif len(statement) > MAX_SOP:
-        errors["application_rationale_sop"] = f"Keep this within {MAX_SOP} characters"
-
-    manager = bool(data.get("ack_manager_notified_bool"))
-    accuracy = bool(data.get("ack_data_accuracy_bool"))
-    cleaned["ack_manager_notified_bool"] = manager
-    cleaned["ack_data_accuracy_bool"] = accuracy
-
-    if not manager:
-        errors["ack_manager_notified_bool"] = (
-            "Confirm your current manager is aware of this request"
-        )
-    if not accuracy:
-        errors["ack_data_accuracy_bool"] = "Confirm the details match the corporate record"

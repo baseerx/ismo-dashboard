@@ -9,6 +9,7 @@ PDF, or export a filtered batch as a ZIP of PDFs.
 import io
 import re
 import zipfile
+from xml.sax.saxutils import escape
 from datetime import datetime
 
 from django.core.paginator import Paginator
@@ -29,6 +30,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from .form_text import DECLARATION_PARAGRAPHS, SUBMISSION_NOTE
 from .models import InternalJobApplication
 from .reports_permissions import require_applications_viewer
 
@@ -39,6 +41,11 @@ MAX_ZIP_APPLICATIONS = 300
 DEFAULT_PAGE_SIZE = 50
 
 
+class FilterError(ValueError):
+    """A query string the page would never produce - answered as a 400 rather
+    than letting the database raise on it."""
+
+
 # ---------------------------------------------------------------------------
 # Shared query helpers
 # ---------------------------------------------------------------------------
@@ -46,9 +53,20 @@ DEFAULT_PAGE_SIZE = 50
 def _base_queryset():
     return (
         InternalJobApplication.objects.select_related("target_job_req")
-        .prefetch_related("education", "experience", "skills")
+        .prefetch_related("education", "experience", "certifications", "trainings")
         .order_by("-created_at")
     )
+
+
+def _as_date(value, label: str):
+    """A date from the query string, or None when it was not given."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        raise FilterError(f"The {label} date should look like 2026-08-27")
 
 
 def _apply_filters(request, queryset):
@@ -60,87 +78,142 @@ def _apply_filters(request, queryset):
 
     vacancy_id = request.GET.get("target_job_req_id")
     if vacancy_id:
-        queryset = queryset.filter(target_job_req_id=vacancy_id)
+        try:
+            queryset = queryset.filter(target_job_req_id=int(vacancy_id))
+        except (TypeError, ValueError):
+            raise FilterError("The vacancy filter is not a vacancy id")
 
     search = (request.GET.get("search") or "").strip()
     if search:
-        queryset = queryset.filter(
-            emp_full_name__icontains=search
-        ) | queryset.filter(corporate_email__icontains=search) | queryset.filter(
-            emp_id__icontains=search
-        ) | queryset.filter(cnic__icontains=search)
+        queryset = (
+            queryset.filter(full_name__icontains=search)
+            | queryset.filter(official_email__icontains=search)
+            | queryset.filter(emp_id__icontains=search)
+            | queryset.filter(cnic__icontains=search)
+            | queryset.filter(application_reference_no__icontains=search)
+            | queryset.filter(vacancy_position_title__icontains=search)
+        )
 
-    date_from = request.GET.get("date_from")
+    date_from = _as_date(request.GET.get("date_from"), "From")
     if date_from:
         queryset = queryset.filter(created_at__date__gte=date_from)
 
-    date_to = request.GET.get("date_to")
+    date_to = _as_date(request.GET.get("date_to"), "To")
     if date_to:
         queryset = queryset.filter(created_at__date__lte=date_to)
+
+    if date_from and date_to and date_from > date_to:
+        raise FilterError("The From date is after the To date")
 
     return queryset.distinct()
 
 
+def _iso(value):
+    return value.isoformat() if value else None
+
+
 def _summary(application: InternalJobApplication) -> dict:
+    """One row of the report list."""
     return {
         "id": application.id,
-        "vacancy": application.target_job_req.title,
+        "reference_no": application.application_reference_no or "",
+        "vacancy": application.vacancy_position_title or application.target_job_req.title,
+        "vacancy_reference_no": application.vacancy_reference_no or "",
         "target_job_req_id": application.target_job_req_id,
-        "emp_full_name": application.emp_full_name,
+        "full_name": application.full_name,
         "emp_id": application.emp_id,
-        "current_dept_code": application.current_dept_code,
-        "current_job_title": application.current_job_title,
-        "corporate_email": application.corporate_email,
-        "contact_phone_no": application.contact_phone_no,
+        "department_function": application.department_function,
+        "current_designation": application.current_designation,
+        "current_grade": application.current_grade,
+        "official_email": application.official_email,
+        "mobile_no": application.mobile_no,
         "status": application.status,
+        "hr_verification_status": application.hr_verification_status,
         "created_at": application.created_at.strftime("%Y-%m-%d %H:%M"),
         "education_count": application.education.count(),
         "experience_count": application.experience.count(),
-        "skill_count": application.skills.count(),
+        "certification_count": application.certifications.count(),
+        "training_count": application.trainings.count(),
     }
 
 
 def _detail(application: InternalJobApplication) -> dict:
+    """Everything the printed form shows, section by section."""
     education = [
         {
-            "edu_degree_title": row.edu_degree_title,
-            "edu_institution_name": row.edu_institution_name,
-            "edu_major_specialization": row.edu_major_specialization,
-            "edu_graduation_year": row.edu_graduation_year,
-            "edu_grade_score": row.edu_grade_score,
+            "degree_qualification": row.degree_qualification,
+            "major_field_of_study": row.major_field_of_study,
+            "institution_university": row.institution_university,
+            "country": row.country,
+            "year_of_completion": row.year_of_completion,
+            "cgpa_division": row.cgpa_division,
         }
-        for row in application.education.all().order_by("row_order")
+        for row in application.education.all()
     ]
     experience = [
         {
-            "exp_job_title": row.exp_job_title,
-            "exp_company_name": row.exp_company_name,
-            "exp_start_date": row.exp_start_date.isoformat() if row.exp_start_date else None,
-            "exp_end_date": row.exp_end_date.isoformat() if row.exp_end_date else None,
-            "exp_is_current": row.exp_is_current,
-            "exp_key_responsibilities": row.exp_key_responsibilities,
-            "exp_key_achievements": row.exp_key_achievements,
+            "organization_employer": row.organization_employer,
+            "designation": row.designation,
+            "grade": row.grade or "",
+            "from_date": _iso(row.from_date),
+            "to_date": _iso(row.to_date),
+            "is_current": row.is_current,
+            "duration": row.duration,
+            "key_responsibilities": row.key_responsibilities,
         }
-        for row in application.experience.all().order_by("row_order")
+        for row in application.experience.all()
     ]
-    skills = list(application.skills.all())
-    technical_skills = [s.skill_name for s in skills if s.skill_type == "technical"]
-    soft_skills = [s.skill_name for s in skills if s.skill_type == "soft"]
+    certifications = [
+        {
+            "certification_membership": row.certification_membership,
+            "certifying_body": row.certifying_body,
+            "date_obtained": _iso(row.date_obtained),
+            "expiry_date": _iso(row.expiry_date),
+            "registration_no": row.registration_no or "",
+        }
+        for row in application.certifications.all()
+    ]
+    trainings = [
+        {
+            "training_title": row.training_title,
+            "training_provider": row.training_provider,
+            "duration": row.duration or "",
+            "date_or_year": row.date_or_year or "",
+            "relevant_to_position": row.relevant_to_position,
+        }
+        for row in application.trainings.all()
+    ]
 
     return {
         **_summary(application),
-        "current_supervisor_id": application.current_supervisor_id,
+        # 1. vacancy information
+        "vacancy_grade": application.vacancy_grade or "",
+        "vacancy_department": application.vacancy_department or "",
+        "vacancy_advertisement_date": _iso(application.vacancy_advertisement_date),
+        "vacancy_closing_date": _iso(application.vacancy_closing_date),
+        # 2. personal & contact information
+        "father_or_husband_name": application.father_or_husband_name,
         "cnic": application.cnic,
-        "personal_email": application.personal_email,
-        "preferred_contact_method": application.preferred_contact_method,
-        "certifications_list": application.certifications_list,
-        "application_rationale_sop": application.application_rationale_sop,
-        "ack_manager_notified_bool": application.ack_manager_notified_bool,
-        "ack_data_accuracy_bool": application.ack_data_accuracy_bool,
+        "date_of_birth": _iso(application.date_of_birth),
+        "gender": application.gender,
+        "current_office_location": application.current_office_location,
+        "emergency_contact_no": application.emergency_contact_no or "",
+        # 3. current employment details
+        "date_of_joining_ismo": _iso(application.date_of_joining_ismo),
+        "date_of_appointment_to_current_grade": _iso(
+            application.date_of_appointment_to_current_grade
+        ),
+        "total_service_ismo": application.total_service_ismo,
+        "total_relevant_experience": application.total_relevant_experience,
+        "date_of_joining_current_position": _iso(application.date_of_joining_current_position),
+        # 4 to 7
         "education": education,
         "experience": experience,
-        "skills_technical": technical_skills,
-        "skills_soft": soft_skills,
+        "certifications": certifications,
+        "trainings": trainings,
+        # 8 and 9
+        "declaration_accepted": application.declaration_accepted,
+        "applicant_signature": application.applicant_signature,
     }
 
 
@@ -154,7 +227,10 @@ def list_applications_report(request):
     if refusal:
         return JsonResponse({"error": refusal}, status=403)
 
-    queryset = _apply_filters(request, _base_queryset())
+    try:
+        queryset = _apply_filters(request, _base_queryset())
+    except FilterError as problem:
+        return JsonResponse({"error": str(problem)}, status=400)
 
     try:
         page_number = max(int(request.GET.get("page", 1)), 1)
@@ -201,29 +277,258 @@ def application_detail(request, application_id: int):
 # PDF rendering
 # ---------------------------------------------------------------------------
 
+_SECTION_BLUE = colors.HexColor("#1f4e79")
+
 _styles = getSampleStyleSheet()
 _STYLE_TITLE = ParagraphStyle(
-    "AppTitle", parent=_styles["Title"], fontSize=16, spaceAfter=4
+    "AppTitle", parent=_styles["Title"], fontSize=14, spaceAfter=6
+)
+_STYLE_FORM_TITLE = ParagraphStyle(
+    "FormTitle", parent=_styles["Title"], fontSize=11.5, spaceAfter=4
 )
 _STYLE_SUBTITLE = ParagraphStyle(
-    "AppSubtitle", parent=_styles["Normal"], fontSize=10, textColor=colors.grey, spaceAfter=14
+    "AppSubtitle", parent=_styles["Normal"], fontSize=9, alignment=1,
+    fontName="Helvetica-Oblique", textColor=colors.HexColor("#444444"), spaceAfter=12,
 )
-_STYLE_HEADING = ParagraphStyle(
-    "SectionHeading",
-    parent=_styles["Heading2"],
-    fontSize=12,
-    spaceBefore=14,
-    spaceAfter=6,
-    textColor=colors.HexColor("#1c3d5a"),
+_STYLE_SECTION_BAR = ParagraphStyle(
+    "SectionBar", parent=_styles["Normal"], fontSize=9.5,
+    fontName="Helvetica-Bold", textColor=colors.white,
 )
 _STYLE_LABEL = ParagraphStyle("FieldLabel", parent=_styles["Normal"], fontSize=8, textColor=colors.grey)
-_STYLE_VALUE = ParagraphStyle("FieldValue", parent=_styles["Normal"], fontSize=10, spaceAfter=6)
+_STYLE_VALUE = ParagraphStyle("FieldValue", parent=_styles["Normal"], fontSize=9.5, spaceAfter=6)
 _STYLE_BODY = ParagraphStyle("Body", parent=_styles["Normal"], fontSize=9, leading=13)
+_STYLE_NOTE = ParagraphStyle(
+    "Note", parent=_styles["Normal"], fontSize=7.5, alignment=1,
+    fontName="Helvetica-Oblique", textColor=colors.HexColor("#555555"),
+)
+_STYLE_TABLE_HEAD = ParagraphStyle("TableHead", parent=_styles["Normal"], fontSize=7.5, leading=9.5)
+_STYLE_TABLE_CELL = ParagraphStyle("TableCell", parent=_styles["Normal"], fontSize=7.5, leading=9.5)
+
+def _iso(value):
+    return value.isoformat() if value else None
+
+
+def _summary(application: InternalJobApplication) -> dict:
+    """One row of the report list."""
+    return {
+        "id": application.id,
+        "reference_no": application.application_reference_no or "",
+        "vacancy": application.vacancy_position_title or application.target_job_req.title,
+        "vacancy_reference_no": application.vacancy_reference_no or "",
+        "target_job_req_id": application.target_job_req_id,
+        "full_name": application.full_name,
+        "emp_id": application.emp_id,
+        "department_function": application.department_function,
+        "current_designation": application.current_designation,
+        "current_grade": application.current_grade,
+        "official_email": application.official_email,
+        "mobile_no": application.mobile_no,
+        "status": application.status,
+        "hr_verification_status": application.hr_verification_status,
+        "created_at": application.created_at.strftime("%Y-%m-%d %H:%M"),
+        "education_count": application.education.count(),
+        "experience_count": application.experience.count(),
+        "certification_count": application.certifications.count(),
+        "training_count": application.trainings.count(),
+    }
+
+
+def _detail(application: InternalJobApplication) -> dict:
+    """Everything the printed form shows, section by section."""
+    education = [
+        {
+            "degree_qualification": row.degree_qualification,
+            "major_field_of_study": row.major_field_of_study,
+            "institution_university": row.institution_university,
+            "country": row.country,
+            "year_of_completion": row.year_of_completion,
+            "cgpa_division": row.cgpa_division,
+        }
+        for row in application.education.all()
+    ]
+    experience = [
+        {
+            "organization_employer": row.organization_employer,
+            "designation": row.designation,
+            "grade": row.grade or "",
+            "from_date": _iso(row.from_date),
+            "to_date": _iso(row.to_date),
+            "is_current": row.is_current,
+            "duration": row.duration,
+            "key_responsibilities": row.key_responsibilities,
+        }
+        for row in application.experience.all()
+    ]
+    certifications = [
+        {
+            "certification_membership": row.certification_membership,
+            "certifying_body": row.certifying_body,
+            "date_obtained": _iso(row.date_obtained),
+            "expiry_date": _iso(row.expiry_date),
+            "registration_no": row.registration_no or "",
+        }
+        for row in application.certifications.all()
+    ]
+    trainings = [
+        {
+            "training_title": row.training_title,
+            "training_provider": row.training_provider,
+            "duration": row.duration or "",
+            "date_or_year": row.date_or_year or "",
+            "relevant_to_position": row.relevant_to_position,
+        }
+        for row in application.trainings.all()
+    ]
+
+    return {
+        **_summary(application),
+        # 1. vacancy information
+        "vacancy_grade": application.vacancy_grade or "",
+        "vacancy_department": application.vacancy_department or "",
+        "vacancy_advertisement_date": _iso(application.vacancy_advertisement_date),
+        "vacancy_closing_date": _iso(application.vacancy_closing_date),
+        # 2. personal & contact information
+        "father_or_husband_name": application.father_or_husband_name,
+        "cnic": application.cnic,
+        "date_of_birth": _iso(application.date_of_birth),
+        "gender": application.gender,
+        "current_office_location": application.current_office_location,
+        "emergency_contact_no": application.emergency_contact_no or "",
+        # 3. current employment details
+        "date_of_joining_ismo": _iso(application.date_of_joining_ismo),
+        "date_of_appointment_to_current_grade": _iso(
+            application.date_of_appointment_to_current_grade
+        ),
+        "total_service_ismo": application.total_service_ismo,
+        "total_relevant_experience": application.total_relevant_experience,
+        "date_of_joining_current_position": _iso(application.date_of_joining_current_position),
+        # 4 to 7
+        "education": education,
+        "experience": experience,
+        "certifications": certifications,
+        "trainings": trainings,
+        # 8 and 9
+        "declaration_accepted": application.declaration_accepted,
+        "applicant_signature": application.applicant_signature,
+    }
+
+
+# ---------------------------------------------------------------------------
+# List / detail
+# ---------------------------------------------------------------------------
+
+@require_GET
+def list_applications_report(request):
+    identity, refusal = require_applications_viewer(request)
+    if refusal:
+        return JsonResponse({"error": refusal}, status=403)
+
+    try:
+        queryset = _apply_filters(request, _base_queryset())
+    except FilterError as problem:
+        return JsonResponse({"error": str(problem)}, status=400)
+
+    try:
+        page_number = max(int(request.GET.get("page", 1)), 1)
+    except (TypeError, ValueError):
+        page_number = 1
+    try:
+        page_size = min(max(int(request.GET.get("page_size", DEFAULT_PAGE_SIZE)), 1), 200)
+    except (TypeError, ValueError):
+        page_size = DEFAULT_PAGE_SIZE
+
+    paginator = Paginator(queryset, page_size)
+    page = paginator.get_page(page_number)
+
+    return JsonResponse(
+        {
+            "results": [_summary(app) for app in page.object_list],
+            "count": paginator.count,
+            "page": page.number,
+            "num_pages": paginator.num_pages,
+            "statuses": list(
+                InternalJobApplication.objects.order_by()
+                .values_list("status", flat=True)
+                .distinct()
+            ),
+        },
+        status=200,
+    )
+
+
+@require_GET
+def application_detail(request, application_id: int):
+    identity, refusal = require_applications_viewer(request)
+    if refusal:
+        return JsonResponse({"error": refusal}, status=403)
+
+    application = _base_queryset().filter(id=application_id).first()
+    if application is None:
+        return JsonResponse({"error": "Application not found"}, status=404)
+
+    return JsonResponse(_detail(application), status=200)
+
+
+# ---------------------------------------------------------------------------
+# PDF rendering
+# ---------------------------------------------------------------------------
+
+_SECTION_BLUE = colors.HexColor("#1f4e79")
+
+_styles = getSampleStyleSheet()
+_STYLE_TITLE = ParagraphStyle(
+    "AppTitle", parent=_styles["Title"], fontSize=14, spaceAfter=6
+)
+_STYLE_FORM_TITLE = ParagraphStyle(
+    "FormTitle", parent=_styles["Title"], fontSize=11.5, spaceAfter=4
+)
+_STYLE_SUBTITLE = ParagraphStyle(
+    "AppSubtitle", parent=_styles["Normal"], fontSize=9, alignment=1,
+    fontName="Helvetica-Oblique", textColor=colors.HexColor("#444444"), spaceAfter=12,
+)
+_STYLE_SECTION_BAR = ParagraphStyle(
+    "SectionBar", parent=_styles["Normal"], fontSize=9.5,
+    fontName="Helvetica-Bold", textColor=colors.white,
+)
+_STYLE_LABEL = ParagraphStyle("FieldLabel", parent=_styles["Normal"], fontSize=8, textColor=colors.grey)
+_STYLE_VALUE = ParagraphStyle("FieldValue", parent=_styles["Normal"], fontSize=9.5, spaceAfter=6)
+_STYLE_BODY = ParagraphStyle("Body", parent=_styles["Normal"], fontSize=9, leading=13)
+_STYLE_NOTE = ParagraphStyle(
+    "Note", parent=_styles["Normal"], fontSize=7.5, alignment=1,
+    fontName="Helvetica-Oblique", textColor=colors.HexColor("#555555"),
+)
+_STYLE_TABLE_HEAD = ParagraphStyle("TableHead", parent=_styles["Normal"], fontSize=7.5, leading=9.5)
+_STYLE_TABLE_CELL = ParagraphStyle("TableCell", parent=_styles["Normal"], fontSize=7.5, leading=9.5)
+
+# Section 8 of the printed form, word for word. Served to the application page
+# as well, so the applicant accepts exactly what the PDF records.
+DECLARATION_PARAGRAPHS = (
+    "I hereby declare that all information and particulars provided by me in this application "
+    "are true, complete and correct to the best of my knowledge and belief. I understand that "
+    "any false, incorrect, misleading or concealed information may result in cancellation of my "
+    "candidature or, in case of selection/appointment, cancellation of my appointment, in "
+    "addition to any disciplinary action that may be taken against me under the applicable "
+    "rules, policies and procedures of ISMO.",
+    "I further confirm that, based on the eligibility criteria prescribed in the advertisement, "
+    "I meet the requirements for the position applied for and am eligible to apply.",
+    "I understand that submission of this application does not confer any right to appointment "
+    "and that selection shall be made in accordance with the applicable recruitment process and "
+    "criteria approved by ISMO.",
+    "If selected, I undertake to accept the offer of appointment/promotion to the position for "
+    "which I have applied and to comply with the terms and conditions of the offer as prescribed "
+    "by ISMO.",
+)
+
+
+def _markup(value) -> str:
+    """Applicant text as safe paragraph markup, or an em dash when empty."""
+    if value in (None, ""):
+        return "—"
+    return escape(str(value))
 
 
 def _field(label: str, value) -> list:
-    text = str(value) if value not in (None, "") else "—"
-    return [Paragraph(label, _STYLE_LABEL), Paragraph(text, _STYLE_VALUE)]
+    return [Paragraph(label, _STYLE_LABEL), Paragraph(_markup(value), _STYLE_VALUE)]
 
 
 def _two_col(rows: list) -> Table:
@@ -254,113 +559,205 @@ def _two_col(rows: list) -> Table:
     return table
 
 
+def _section(number: int, title: str) -> Table:
+    """The printed form's numbered blue section bar."""
+    bar = Table(
+        [[Paragraph(f"{number}. {title.upper()}", _STYLE_SECTION_BAR)]],
+        colWidths=[18 * cm],
+    )
+    bar.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), _SECTION_BLUE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return bar
+
+
+def _grid(headers: list, rows: list, widths: list) -> Table:
+    """One of the form's ruled tables, with its header row repeated on a break."""
+    data = [[Paragraph(f"<b>{header}</b>", _STYLE_TABLE_HEAD) for header in headers]]
+    for row in rows:
+        data.append([Paragraph(_markup(cell), _STYLE_TABLE_CELL) for cell in row])
+
+    table = Table(data, colWidths=widths, repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dce6f1")),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#9fb3c8")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    return table
+
+
+def _date(value, fmt: str = "%d %b %Y") -> str:
+    return value.strftime(fmt) if value else "—"
+
+
+def _block(number: int, title: str, *content) -> KeepTogether:
+    """A section bar and what follows it, kept on one page where it fits.
+
+    Oversized content still splits - reportlab treats this as a preference -
+    but a bar with nothing under it never happens.
+    """
+    flowables = [_section(number, title), Spacer(1, 6)]
+    flowables.extend(content)
+    return KeepTogether(flowables)
+
+
 def render_application_pdf(application: InternalJobApplication) -> bytes:
+    """The submitted application as the printed form, section by section."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        leftMargin=1.8 * cm,
-        rightMargin=1.8 * cm,
-        topMargin=1.6 * cm,
-        bottomMargin=1.6 * cm,
-        title=f"Job Application - {application.emp_full_name}",
+        leftMargin=1.5 * cm,
+        rightMargin=1.5 * cm,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm,
+        title=f"Internal Job Application - {application.full_name}",
+        author="Independent System and Market Operator (ISMO)",
     )
 
-    story = []
-    story.append(Paragraph("Internal Job Application", _STYLE_TITLE))
-    story.append(
-        Paragraph(
-            f"Application #{application.id} · Vacancy: {application.target_job_req.title} · "
-            f"Status: {application.status} · Submitted {application.created_at.strftime('%d %b %Y, %H:%M')}",
-            _STYLE_SUBTITLE,
-        )
-    )
+    story = [
+        Paragraph("INDEPENDENT SYSTEM AND MARKET OPERATOR (ISMO)", _STYLE_TITLE),
+        Paragraph("INTERNAL RECRUITMENT – ONLINE APPLICATION FORM", _STYLE_FORM_TITLE),
+        Paragraph("For applications against internally advertised positions", _STYLE_SUBTITLE),
+    ]
 
-    story.append(Paragraph("Target Position &amp; Applicant Identity", _STYLE_HEADING))
-    story.append(_two_col([
-        ("Employee Full Name", application.emp_full_name),
+    # ---- 1. vacancy information -----------------------------------------
+    story.append(_block(1, "Vacancy Information", _two_col([
+        ("Position Title", application.vacancy_position_title or application.target_job_req.title),
+        ("Advertisement / Reference No.", application.vacancy_reference_no),
+        ("Grade", application.vacancy_grade),
+        ("Department / Function", application.vacancy_department),
+        ("Date of Advertisement", _date(application.vacancy_advertisement_date)),
+        ("Closing Date", _date(application.vacancy_closing_date)),
+        ("Current Designation", application.current_designation),
+        ("Current Grade", application.current_grade),
+    ])))
+
+    # ---- 2. personal & contact information -------------------------------
+    story.append(_block(2, "Personal &amp; Contact Information", _two_col([
         ("Employee ID", application.emp_id),
-        ("Current Department", application.current_dept_code),
-        ("Current Position Title", application.current_job_title),
-        ("Current Supervisor", application.current_supervisor_id),
-        ("CNIC", application.cnic),
-    ]))
+        ("Full Name", application.full_name),
+        ("Father's / Husband's Name", application.father_or_husband_name),
+        ("CNIC No.", application.cnic),
+        ("Date of Birth", _date(application.date_of_birth)),
+        ("Gender", application.gender),
+        ("Official Email Address", application.official_email),
+        ("Mobile / Contact No.", application.mobile_no),
+        ("Current Office / Location", application.current_office_location),
+        ("Emergency Contact No. (optional)", application.emergency_contact_no),
+    ])))
 
-    story.append(Paragraph("Contact Information", _STYLE_HEADING))
-    story.append(_two_col([
-        ("Contact Phone Number", application.contact_phone_no),
-        ("Corporate Email", application.corporate_email),
-        ("Personal Email", application.personal_email),
-        ("Preferred Contact Method", application.preferred_contact_method),
-    ]))
+    # ---- 3. current employment details -----------------------------------
+    story.append(_block(3, "Current Employment Details", _two_col([
+        ("Date of Joining ISMO", _date(application.date_of_joining_ismo)),
+        ("Current Designation", application.current_designation),
+        ("Current Grade", application.current_grade),
+        ("Department / Function", application.department_function),
+        ("Date of Appointment to Current Grade",
+         _date(application.date_of_appointment_to_current_grade)),
+        ("Total Service in ISMO", application.total_service_ismo),
+        ("Total Relevant Experience", application.total_relevant_experience),
+        ("Date of Joining Current Position",
+         _date(application.date_of_joining_current_position)),
+    ])))
 
-    story.append(Paragraph("Educational Background", _STYLE_HEADING))
-    education_rows = list(application.education.all().order_by("row_order"))
-    if education_rows:
-        data = [["Degree / Certificate", "Institution", "Major", "Year", "Grade"]]
-        for row in education_rows:
-            data.append([
-                row.edu_degree_title, row.edu_institution_name,
-                row.edu_major_specialization or "—",
-                str(row.edu_graduation_year), row.edu_grade_score or "—",
-            ])
-        edu_table = Table(data, colWidths=[4.2 * cm, 4.8 * cm, 4 * cm, 2 * cm, 2.6 * cm], repeatRows=1)
-        edu_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef3f8")),
-            ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d7dfe6")),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ]))
-        story.append(edu_table)
+    # ---- 4. educational background ---------------------------------------
+    story.append(_section(4, "Educational Background"))
+    story.append(Spacer(1, 6))
+    education = list(application.education.all())
+    if education:
+        story.append(_grid(
+            ["Degree / Qualification", "Major / Field of Study", "Institution / University",
+             "Country", "Year of Completion", "CGPA / Division"],
+            [[row.degree_qualification, row.major_field_of_study, row.institution_university,
+              row.country, row.year_of_completion, row.cgpa_division] for row in education],
+            [3.4 * cm, 3.2 * cm, 4 * cm, 2.4 * cm, 2.5 * cm, 2.5 * cm],
+        ))
     else:
-        story.append(Paragraph("No education records provided.", _STYLE_BODY))
+        story.append(Paragraph("No qualifications listed.", _STYLE_BODY))
 
-    story.append(Paragraph("Professional Experience", _STYLE_HEADING))
-    experience_rows = list(application.experience.all().order_by("row_order"))
-    if experience_rows:
-        for row in experience_rows:
-            end = "Present" if row.exp_is_current else (
-                row.exp_end_date.strftime("%b %Y") if row.exp_end_date else "—"
-            )
-            start = row.exp_start_date.strftime("%b %Y") if row.exp_start_date else "—"
-            block = [
-                Paragraph(f"<b>{row.exp_job_title}</b> — {row.exp_company_name} ({start} – {end})", _STYLE_BODY),
-            ]
-            if row.exp_key_responsibilities:
-                block.append(Paragraph(f"<i>Responsibilities:</i> {row.exp_key_responsibilities}", _STYLE_BODY))
-            if row.exp_key_achievements:
-                block.append(Paragraph(f"<i>Achievements:</i> {row.exp_key_achievements}", _STYLE_BODY))
-            block.append(Spacer(1, 8))
-            story.append(KeepTogether(block))
+    # ---- 5. employment history / professional experience -----------------
+    story.append(_section(5, "Employment History / Professional Experience"))
+    story.append(Spacer(1, 6))
+    experience = list(application.experience.all())
+    if experience:
+        story.append(_grid(
+            ["Organization / Employer", "Designation", "Grade", "From", "To", "Duration",
+             "Key Responsibilities / Relevant Experience"],
+            [[row.organization_employer, row.designation, row.grade,
+              _date(row.from_date, "%b %Y"),
+              "Present" if row.is_current else _date(row.to_date, "%b %Y"),
+              row.duration, row.key_responsibilities] for row in experience],
+            [3 * cm, 2.4 * cm, 1.4 * cm, 1.8 * cm, 1.8 * cm, 2.1 * cm, 5.5 * cm],
+        ))
     else:
-        story.append(Paragraph("No experience records provided.", _STYLE_BODY))
+        story.append(Paragraph("No employment history listed.", _STYLE_BODY))
 
-    story.append(Paragraph("Skills &amp; Certifications", _STYLE_HEADING))
-    skills = list(application.skills.all())
-    technical = ", ".join(s.skill_name for s in skills if s.skill_type == "technical") or "—"
-    soft = ", ".join(s.skill_name for s in skills if s.skill_type == "soft") or "—"
-    story.append(Paragraph(f"<b>Technical Skills:</b> {technical}", _STYLE_BODY))
-    story.append(Paragraph(f"<b>Soft Skills:</b> {soft}", _STYLE_BODY))
-    story.append(Paragraph(f"<b>Certifications:</b> {application.certifications_list or '—'}", _STYLE_BODY))
+    # ---- 6. professional certifications / memberships --------------------
+    story.append(_section(6, "Professional Certifications / Memberships"))
+    story.append(Spacer(1, 6))
+    certifications = list(application.certifications.all())
+    if certifications:
+        story.append(_grid(
+            ["Certification / Membership", "Certifying / Professional Body", "Date Obtained",
+             "Expiry Date", "Registration / Membership No."],
+            [[row.certification_membership, row.certifying_body,
+              _date(row.date_obtained), _date(row.expiry_date), row.registration_no]
+             for row in certifications],
+            [4.2 * cm, 4.4 * cm, 2.6 * cm, 2.6 * cm, 4.2 * cm],
+        ))
+    else:
+        story.append(Paragraph("None declared.", _STYLE_BODY))
 
-    story.append(Paragraph("Statement of Purpose", _STYLE_HEADING))
-    story.append(Paragraph(application.application_rationale_sop, _STYLE_BODY))
+    # ---- 7. trainings & professional development -------------------------
+    story.append(_section(7, "Trainings &amp; Professional Development"))
+    story.append(Spacer(1, 6))
+    trainings = list(application.trainings.all())
+    if trainings:
+        story.append(_grid(
+            ["Training / Course Title", "Training Provider / Institute", "Duration",
+             "Date / Year", "Relevant to Position"],
+            [[row.training_title, row.training_provider, row.duration, row.date_or_year,
+              "Yes" if row.relevant_to_position else "No"] for row in trainings],
+            [4.6 * cm, 4.6 * cm, 2.6 * cm, 2.6 * cm, 3.6 * cm],
+        ))
+    else:
+        story.append(Paragraph("None declared.", _STYLE_BODY))
 
-    story.append(Paragraph("Acknowledgements", _STYLE_HEADING))
+    # ---- 8. declaration & undertaking ------------------------------------
+    story.append(_section(8, "Declaration &amp; Undertaking"))
+    story.append(Spacer(1, 6))
+    for paragraph in DECLARATION_PARAGRAPHS:
+        story.append(Paragraph(paragraph, _STYLE_BODY))
+        story.append(Spacer(1, 5))
     story.append(Paragraph(
-        f"Manager notified: <b>{'Yes' if application.ack_manager_notified_bool else 'No'}</b> &nbsp;&nbsp; "
-        f"Data accuracy confirmed: <b>{'Yes' if application.ack_data_accuracy_bool else 'No'}</b>",
+        f"Accepted by the applicant: <b>{'Yes' if application.declaration_accepted else 'No'}</b>",
         _STYLE_BODY,
     ))
+
+    # ---- 9. submission record --------------------------------------------
+    story.append(_block(9, "Submission Record", _two_col([
+        ("Applicant Name", application.full_name),
+        ("Employee ID", application.emp_id),
+        ("Date of Submission", application.created_at.strftime("%d %b %Y, %H:%M")),
+        ("Application Reference No.", application.application_reference_no),
+        ("Applicant's Electronic Signature / Confirmation", application.applicant_signature),
+        ("HR Verification Status", application.hr_verification_status),
+    ])))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph(f"Note: {SUBMISSION_NOTE}", _STYLE_NOTE))
 
     doc.build(story)
     return buffer.getvalue()
 
 
 def _safe_filename(application: InternalJobApplication) -> str:
-    name = re.sub(r"[^A-Za-z0-9_-]+", "_", application.emp_full_name or "applicant").strip("_")
+    name = re.sub(r"[^A-Za-z0-9_-]+", "_", application.full_name or "applicant").strip("_")
     return f"{application.id}_{name or 'applicant'}.pdf"
 
 
@@ -393,7 +790,11 @@ def applications_zip(request):
     if refusal:
         return JsonResponse({"error": refusal}, status=403)
 
-    queryset = _apply_filters(request, _base_queryset())
+    try:
+        queryset = _apply_filters(request, _base_queryset())
+    except FilterError as problem:
+        return JsonResponse({"error": str(problem)}, status=400)
+
     count = queryset.count()
 
     if count == 0:

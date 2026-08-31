@@ -29,6 +29,12 @@ type EmployeeRow = {
   grade_id: string;
   designation_id: string;
   position: string;
+  /** On the employee record; empty for everyone entered before it existed. */
+  dob: string;
+  /** These two live on the login account, mapped by ERP ID through profiles. */
+  email: string;
+  date_joined: string;
+  has_account: boolean;
   flag: boolean;
 };
 
@@ -43,6 +49,10 @@ type EmployeeFormData = {
   grade_id: string;
   designation_id: string;
   position: string;
+  dob: string;
+  email: string;
+  date_joined: string;
+  has_account: boolean;
   flag: boolean;
 };
 
@@ -53,6 +63,9 @@ type Section = { id: number; name: string };
 type Location = { id: number; name: string };
 type Grade = { id: number; name: string };
 type Designation = { id: number; title: string };
+
+/** Today in the format a date input uses. */
+const todayISO = () => new Date().toISOString().slice(0, 10);
 
 export default function AddEmployee() {
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
@@ -78,6 +91,10 @@ export default function AddEmployee() {
     grade_id: "",
     designation_id: "",
     position: "",
+    dob: "",
+    email: "",
+    date_joined: "",
+    has_account: false,
     flag: true,
   });
 
@@ -92,6 +109,9 @@ export default function AddEmployee() {
     grade_id: "",
     designation_id: "",
     position: "",
+    dob: "",
+    email: "",
+    date_joined: "",
     flag: "",
   };
   const [fielderror, setFieldError] =
@@ -123,6 +143,10 @@ export default function AddEmployee() {
           grade_id: emp.grade?.id ? String(emp.grade.id) : "",
           designation_id: emp.designation?.id ? String(emp.designation.id) : "",
           position: emp.position,
+          dob: emp.dob ?? "",
+          email: emp.email ?? "",
+          date_joined: emp.date_joined ?? "",
+          has_account: !!emp.has_account,
           flag: !!emp.flag,
         }));
         setEmployees(employeesData);
@@ -201,6 +225,33 @@ export default function AddEmployee() {
     if (!empData.grade_id) errors.grade_id = "Grade is required";
     if (!empData.designation_id) errors.designation_id = "Designation is required";
     if (!empData.position) errors.position = "Position is required";
+
+    // Optional, but checked when filled in - the backend applies the same rules.
+    if (empData.dob) {
+      const dob = new Date(empData.dob);
+      const years = (Date.now() - dob.getTime()) / (365.25 * 24 * 3600 * 1000);
+      if (Number.isNaN(dob.getTime())) errors.dob = "That is not a valid date";
+      else if (empData.dob > todayISO()) errors.dob = "Date of birth cannot be in the future";
+      else if (years < 18) errors.dob = "An employee must be at least 18";
+      else if (years > 75) errors.dob = "Check the date of birth - that is over 75 years ago";
+    }
+
+    if (empData.email && !/^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$/.test(empData.email.trim())) {
+      errors.email = "That does not look like an email address";
+    }
+
+    if (empData.date_joined) {
+      if (empData.date_joined > todayISO()) {
+        errors.date_joined = "Date joined cannot be in the future";
+      } else if (empData.dob) {
+        const joined = new Date(empData.date_joined).getTime();
+        const dob = new Date(empData.dob).getTime();
+        if ((joined - dob) / (365.25 * 24 * 3600 * 1000) < 16) {
+          errors.date_joined = "Date joined is before the employee turned 16";
+        }
+      }
+    }
+
     return errors;
   };
 
@@ -218,6 +269,10 @@ export default function AddEmployee() {
       grade_id: "",
       designation_id: "",
       position: "",
+      dob: "",
+      email: "",
+      date_joined: "",
+      has_account: false,
       flag: true,
     });
     setFieldError(emptyErrors);
@@ -234,16 +289,20 @@ export default function AddEmployee() {
         toast.error("Please fix all validation errors");
         return;
       }
-      await axios.post("/users/create_employee/", empData);
+      const response = await axios.post("/users/create_employee/", empData);
+      // The email and date joined need a login account to land on; when there
+      // is none the server says so rather than silently dropping them.
+      if (response.data?.note) toast.info(response.data.note);
 
       resetForm();
       // Pull a fresh HRIS ID so the next create doesn't reuse this one.
       getDetails();
       getEmployees();
       toast.success("Employee created successfully");
-    } catch (error) {
+    } catch (error: any) {
       toast.error(
-        "Failed to create employee:" +
+        error?.response?.data?.error ??
+        "Failed to create employee: " +
         (error instanceof Error ? error.message : "Unknown error")
       );
     }
@@ -265,6 +324,10 @@ export default function AddEmployee() {
       grade_id: row.grade_id,
       designation_id: row.designation_id,
       position: row.position,
+      dob: row.dob,
+      email: row.email,
+      date_joined: row.date_joined,
+      has_account: row.has_account,
       flag: row.flag,
     });
     setFieldError(emptyErrors);
@@ -292,14 +355,19 @@ export default function AddEmployee() {
         return;
       }
       // hris_id is intentionally omitted — the backend ignores it too.
-      await axios.post(`/users/update_employee/${editingId}/`, empData);
+      const response = await axios.post(
+        `/users/update_employee/${editingId}/`,
+        empData
+      );
+      if (response.data?.note) toast.info(response.data.note);
 
       resetForm();
       getEmployees();
       toast.success("Employee updated successfully");
-    } catch (error) {
+    } catch (error: any) {
       toast.error(
-        "Failed to update employee:" +
+        error?.response?.data?.error ??
+        "Failed to update employee: " +
         (error instanceof Error ? error.message : "Unknown error")
       );
     }
@@ -314,7 +382,22 @@ export default function AddEmployee() {
     { header: "HRIS ID", accessorKey: "hris_id" },
     { header: "Name", accessorKey: "name" },
     { header: "CNIC", accessorKey: "cnic" },
+    {
+      header: "Date of Birth",
+      accessorKey: "dob",
+      cell: ({ row }) => row.original.dob || "—",
+    },
     { header: "Gender", accessorKey: "gender" },
+    {
+      header: "Email",
+      accessorKey: "email",
+      cell: ({ row }) => row.original.email || "—",
+    },
+    {
+      header: "Date Joined",
+      accessorKey: "date_joined",
+      cell: ({ row }) => row.original.date_joined || "—",
+    },
     {
       header: "Section",
       accessorKey: "section_id",
@@ -449,6 +532,61 @@ export default function AddEmployee() {
                 error={!!fielderror.cnic}
                 hint={fielderror.cnic}
               />
+            </div>
+
+            <div className="w-full">
+              <Label>Date of Birth</Label>
+              <Input
+                id="dob"
+                type="date"
+                max={todayISO()}
+                value={data.dob}
+                onChange={(e) => setData({ ...data, dob: e.target.value })}
+                error={!!fielderror.dob}
+                hint={fielderror.dob}
+              />
+              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                Blank for employees entered before this field existed - fill it in
+                and it is saved on the employee record.
+              </p>
+            </div>
+
+            <div className="w-full">
+              <Label>Email Address</Label>
+              <Input
+                id="email"
+                type="email"
+                placeholder="name@ismo.gov.pk"
+                value={data.email}
+                onChange={(e) => setData({ ...data, email: e.target.value })}
+                disabled={!!editingId && !data.has_account}
+                error={!!fielderror.email}
+                hint={fielderror.email}
+              />
+              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                {editingId && !data.has_account
+                  ? "No login account is linked to this ERP ID yet - create it from Create User first."
+                  : "Saved on the employee's login account."}
+              </p>
+            </div>
+
+            <div className="w-full">
+              <Label>Date Joined</Label>
+              <Input
+                id="date_joined"
+                type="date"
+                max={todayISO()}
+                value={data.date_joined}
+                onChange={(e) => setData({ ...data, date_joined: e.target.value })}
+                disabled={!!editingId && !data.has_account}
+                error={!!fielderror.date_joined}
+                hint={fielderror.date_joined}
+              />
+              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                {editingId && !data.has_account
+                  ? "Also part of the login account."
+                  : "The date on the login account, editable here."}
+              </p>
             </div>
 
             <div className="w-full">

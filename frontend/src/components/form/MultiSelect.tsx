@@ -1,5 +1,5 @@
 import type React from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface Option {
   value: string;
@@ -24,6 +24,25 @@ const MultiSelect: React.FC<MultiSelectProps> = ({
   const [selectedOptions, setSelectedOptions] =
     useState<string[]>(defaultSelected);
   const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const closeIfOutside = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setIsOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsOpen(false);
+    };
+
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isOpen]);
 
   const toggleDropdown = () => {
     if (!disabled) setIsOpen((prev) => !prev);
@@ -49,7 +68,7 @@ const MultiSelect: React.FC<MultiSelectProps> = ({
   );
 
   return (
-    <div className="w-full">
+    <div className="w-full" ref={containerRef}>
       <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-400">
         {label}
       </label>
@@ -57,7 +76,7 @@ const MultiSelect: React.FC<MultiSelectProps> = ({
       <div className="relative z-20 inline-block w-full">
         <div className="relative flex flex-col items-center">
           <div onClick={toggleDropdown} className="w-full">
-            <div className="mb-2 flex h-11 rounded-lg border border-gray-300 py-1.5 pl-3 pr-3 shadow-theme-xs outline-hidden transition focus:border-brand-300 focus:shadow-focus-ring dark:border-gray-700 dark:bg-gray-900 dark:focus:border-brand-300">
+            <div className="mb-2 flex min-h-11 rounded-lg border border-gray-300 py-1.5 pl-3 pr-3 shadow-theme-xs outline-hidden transition focus:border-brand-300 focus:shadow-focus-ring dark:border-gray-700 dark:bg-gray-900 dark:focus:border-brand-300">
               <div className="flex flex-wrap flex-auto gap-2">
                 {selectedValuesText.length > 0 ? (
                   selectedValuesText.map((text, index) => (
@@ -104,7 +123,13 @@ const MultiSelect: React.FC<MultiSelectProps> = ({
               <div className="flex items-center py-1 pl-1 pr-1 w-7">
                 <button
                   type="button"
-                  onClick={toggleDropdown}
+                  // The whole box already toggles the list, so the arrow has to
+                  // keep its click to itself - otherwise it opens and closes in
+                  // one go and the list never appears.
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleDropdown();
+                  }}
                   className="w-5 h-5 text-gray-700 outline-hidden cursor-pointer focus:outline-hidden dark:text-gray-400"
                 >
                   <svg

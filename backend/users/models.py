@@ -15,6 +15,9 @@ class Employees(models.Model):
     designation_id = models.IntegerField()
     position = models.CharField(max_length=100)
     flag=models.IntegerField(default=0)
+    # Empty for everyone already on file - it was never collected before, and
+    # is filled in from Add Employee one record at a time.
+    dob = models.DateField(null=True, blank=True)
 
     class Meta:
         db_table = 'employees'

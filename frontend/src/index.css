@@ -1,5 +1,8 @@
-@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap")
-layer(base);
+/* Outfit was loaded from fonts.googleapis.com, which the network this portal
+   runs on cannot resolve - every page load waited on a DNS failure before
+   painting. The stack below uses Outfit where it is installed and the
+   platform UI font otherwise. To have Outfit everywhere, drop the woff2
+   files in public/fonts and declare @font-face here. */
 
 @import "tailwindcss";
 @import 'react-toastify/dist/ReactToastify.css';
@@ -9,7 +12,8 @@ layer(base);
 
 @theme {
   --font-*: initial;
-  --font-outfit: Outfit, sans-serif;
+  --font-outfit: Outfit, "Segoe UI Variable", "Segoe UI", system-ui,
+    -apple-system, "Helvetica Neue", Arial, sans-serif;
 
   --breakpoint-*: initial;
   --breakpoint-2xsm: 375px;

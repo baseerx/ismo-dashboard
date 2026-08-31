@@ -16,59 +16,100 @@ import moment from "moment";
 // ----------------------------
 type ApplicationSummary = {
   id: number;
+  /** ISMO/IJA/2026/00042 - issued on submission. */
+  reference_no: string;
   vacancy: string;
+  vacancy_reference_no: string;
   target_job_req_id: number;
-  emp_full_name: string;
+  full_name: string;
   emp_id: number;
-  current_dept_code: string;
-  current_job_title: string;
-  corporate_email: string;
-  contact_phone_no: string;
+  department_function: string;
+  current_designation: string;
+  current_grade: string;
+  official_email: string;
+  mobile_no: string;
   status: string;
+  hr_verification_status: string;
   created_at: string;
   education_count: number;
   experience_count: number;
-  skill_count: number;
+  certification_count: number;
+  training_count: number;
 };
 
 type EducationRow = {
-  edu_degree_title: string;
-  edu_institution_name: string;
-  edu_major_specialization: string;
-  edu_graduation_year: number;
-  edu_grade_score: string;
+  degree_qualification: string;
+  major_field_of_study: string;
+  institution_university: string;
+  country: string;
+  year_of_completion: number;
+  cgpa_division: string;
 };
 
 type ExperienceRow = {
-  exp_job_title: string;
-  exp_company_name: string;
-  exp_start_date: string | null;
-  exp_end_date: string | null;
-  exp_is_current: boolean;
-  exp_key_responsibilities: string;
-  exp_key_achievements: string;
+  organization_employer: string;
+  designation: string;
+  grade: string;
+  from_date: string | null;
+  to_date: string | null;
+  is_current: boolean;
+  duration: string;
+  key_responsibilities: string;
+};
+
+type CertificationRow = {
+  certification_membership: string;
+  certifying_body: string;
+  date_obtained: string | null;
+  expiry_date: string | null;
+  registration_no: string;
+};
+
+type TrainingRow = {
+  training_title: string;
+  training_provider: string;
+  duration: string;
+  date_or_year: string;
+  relevant_to_position: boolean;
 };
 
 type ApplicationDetail = ApplicationSummary & {
-  current_supervisor_id: string;
+  // 1. vacancy information
+  vacancy_grade: string;
+  vacancy_department: string;
+  vacancy_advertisement_date: string | null;
+  vacancy_closing_date: string | null;
+  // 2. personal & contact information
+  father_or_husband_name: string;
   cnic: string;
-  personal_email: string | null;
-  preferred_contact_method: string;
-  certifications_list: string | null;
-  application_rationale_sop: string;
-  ack_manager_notified_bool: boolean;
-  ack_data_accuracy_bool: boolean;
+  date_of_birth: string | null;
+  gender: string;
+  current_office_location: string;
+  emergency_contact_no: string;
+  // 3. current employment details
+  date_of_joining_ismo: string | null;
+  date_of_appointment_to_current_grade: string | null;
+  total_service_ismo: string;
+  total_relevant_experience: string;
+  date_of_joining_current_position: string | null;
+  // 4 to 7
   education: EducationRow[];
   experience: ExperienceRow[];
-  skills_technical: string[];
-  skills_soft: string[];
+  certifications: CertificationRow[];
+  trainings: TrainingRow[];
+  // 8 and 9
+  declaration_accepted: boolean;
+  applicant_signature: string;
 };
 
 type Requisition = { id: number; title: string };
 
+const DASH_SPACED = "—";
+
 const STATUS_COLORS: Record<string, "success" | "warning" | "error" | "light"> = {
   submitted: "light",
   under_review: "warning",
+  verified: "success",
   shortlisted: "success",
   rejected: "error",
   hired: "success",
@@ -94,13 +135,56 @@ export default function JobApplicationsReport() {
   const [selected, setSelected] = useState<ApplicationDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [pdfBusyId, setPdfBusyId] = useState<number | null>(null);
+  // Why the list is empty, when it is empty because something failed. An empty
+  // table with a toast that has already faded is impossible to diagnose.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // A refused session needs a different remedy from a retry - signing in again.
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   // Requests to /jobs/applications/... are permission-gated; the shared axios
   // instance does not attach the login token, so it is added explicitly here.
-  const authHeader = useMemo(() => {
+  // Read per request rather than once, so signing in again in another tab does
+  // not leave this page holding a stale token.
+  const authHeader = () => {
     const token = localStorage.getItem("token");
     return token ? { Authorization: `Bearer ${token}` } : undefined;
+  };
+
+  const signedInAs = useMemo(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("user") || "{}");
+      if (!stored?.erpid) return "not signed in";
+      return `${stored.employee_name || stored.username || "signed in"} (ERP ${stored.erpid})` +
+        (stored.is_superuser ? ", administrator" : "");
+    } catch {
+      return "not signed in";
+    }
   }, []);
+
+  /** A sentence that says what actually went wrong, and what to do about it. */
+  const describeFailure = (error: any, what: string): string => {
+    const server = error?.response?.data?.error;
+    const status = error?.response?.status;
+
+    if (!error?.response) {
+      return `Could not reach the server to ${what}. It is not answering at ` +
+        `${axios.defaults.baseURL} — check the backend is running and reachable from this machine.`;
+    }
+    if (status === 401 || status === 403) {
+      return server || `You are not allowed to ${what}. Signed in as ${signedInAs}.`;
+    }
+    if (status === 404) {
+      return `The server answered 404 for this request, which means it is not running the ` +
+        `job reports code yet. Deploy the latest backend and restart it, then reload this page.`;
+    }
+    if (status === 400) {
+      return server || "One of the filters was not understood by the server.";
+    }
+    if (status >= 500) {
+      return `The server failed while trying to ${what} (HTTP ${status}). Its log will say why.`;
+    }
+    return server || `Could not ${what} (HTTP ${status}).`;
+  };
 
   useEffect(() => {
     loadRequisitions();
@@ -129,7 +213,7 @@ export default function JobApplicationsReport() {
     setLoading(true);
     try {
       const response = await axios.get("/jobs/applications/manage/", {
-        headers: authHeader,
+        headers: authHeader(),
         params: {
           page: targetPage,
           search: search || undefined,
@@ -144,9 +228,21 @@ export default function JobApplicationsReport() {
       setNumPages(response.data?.num_pages || 1);
       setCount(response.data?.count || 0);
       setPage(response.data?.page || 1);
+      setLoadError(null);
+      setSessionExpired(false);
     } catch (error: any) {
       setApplications([]);
-      toast.error(error?.response?.data?.error ?? "Could not load applications");
+      setCount(0);
+      setNumPages(1);
+      const reason = describeFailure(error, "load the applications");
+      const status = error?.response?.status;
+      setSessionExpired(
+        (status === 401 || status === 403) && /session|sign in/i.test(String(reason))
+      );
+      setLoadError(reason);
+      // One id, so a re-render or a retry replaces the message instead of
+      // stacking another copy of it.
+      toast.error(reason, { toastId: "job-reports-load" });
     } finally {
       setLoading(false);
     }
@@ -169,11 +265,11 @@ export default function JobApplicationsReport() {
     setDetailLoading(true);
     try {
       const response = await axios.get(`/jobs/applications/${id}/detail/`, {
-        headers: authHeader,
+        headers: authHeader(),
       });
       setSelected(response.data);
     } catch (error: any) {
-      toast.error(error?.response?.data?.error ?? "Could not load this application");
+      toast.error(describeFailure(error, "open this application"));
     } finally {
       setDetailLoading(false);
     }
@@ -187,24 +283,48 @@ export default function JobApplicationsReport() {
   // ----------------------------
   const fetchApplicationPdf = async (id: number, inline: boolean) => {
     const response = await axios.get(`/jobs/applications/${id}/pdf/`, {
-      headers: authHeader,
+      headers: authHeader(),
       responseType: "blob",
       params: inline ? { inline: 1 } : undefined,
     });
     return new Blob([response.data], { type: "application/pdf" });
   };
 
-  const downloadPdf = async (application: { id: number; emp_full_name: string }) => {
+  // A download is never blocked the way a new window is, so this doubles as the
+  // fallback when a browser cannot show a PDF for printing.
+  const saveToDisk = (url: string, filename: string) => {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
+  const pdfFilename = (application: { id: number; full_name?: string }) =>
+    `${application.id}_${(application.full_name || "application").replace(/\s+/g, "_")}.pdf`;
+
+  /** The server's message, dug out of a blob response. */
+  const blobError = async (error: any) => {
+    if (error?.response?.data instanceof Blob) {
+      try {
+        const parsed = JSON.parse(await error.response.data.text());
+        if (parsed?.error) {
+          return { ...error, response: { ...error.response, data: parsed } };
+        }
+      } catch {
+        /* not JSON - fall through to the generic description */
+      }
+    }
+    return error;
+  };
+
+  const downloadPdf = async (application: { id: number; full_name: string }) => {
     setPdfBusyId(application.id);
     try {
       const blob = await fetchApplicationPdf(application.id, false);
       const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${application.id}_${application.emp_full_name.replace(/\s+/g, "_")}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      saveToDisk(url, pdfFilename(application));
       window.URL.revokeObjectURL(url);
     } catch (error: any) {
       toast.error(error?.response?.data?.error ?? "Could not generate the PDF");
@@ -213,16 +333,62 @@ export default function JobApplicationsReport() {
     }
   };
 
-  const printPdf = async (application: { id: number }) => {
+  const printPdf = async (application: { id: number; full_name?: string }) => {
     setPdfBusyId(application.id);
     try {
       const blob = await fetchApplicationPdf(application.id, true);
       const url = window.URL.createObjectURL(blob);
-      // Opens in the browser's built-in PDF viewer, whose own print button
-      // handles the rest — no extra print pipeline needed.
-      window.open(url, "_blank");
+
+      // Printed from a hidden frame rather than a new tab: the PDF is fetched
+      // first (it needs the auth header), and by the time that request comes
+      // back the click is no longer a fresh user gesture, so a new window gets
+      // treated as a pop-up and blocked. A frame also puts the print dialog up
+      // directly instead of leaving the reviewer to find the viewer's own
+      // print button.
+      const frame = document.createElement("iframe");
+      frame.style.position = "fixed";
+      frame.style.right = "0";
+      frame.style.bottom = "0";
+      frame.style.width = "1px";
+      frame.style.height = "1px";
+      frame.style.opacity = "0";
+      frame.style.border = "0";
+      frame.setAttribute("aria-hidden", "true");
+      frame.dataset.printFrame = String(application.id);
+      frame.src = url;
+
+      let displayed = false;
+      frame.onload = () => {
+        displayed = true;
+        try {
+          frame.contentWindow?.focus();
+          frame.contentWindow?.print();
+        } catch {
+          saveToDisk(url, pdfFilename(application));
+        }
+      };
+
+      document.body.appendChild(frame);
+
+      // Not every browser can display a PDF inside a frame; where it cannot,
+      // nothing loads and no dialog would ever appear, so hand over the file.
+      window.setTimeout(() => {
+        if (!displayed) {
+          saveToDisk(url, pdfFilename(application));
+          toast.info(
+            "This browser cannot show a print preview for PDFs, so the file was downloaded - open it and print from there."
+          );
+        }
+      }, 4000);
+
+      // Kept alive well past the dialog: removing the frame while the dialog is
+      // open cancels the job, and revoking the URL any earlier does the same.
+      window.setTimeout(() => {
+        frame.remove();
+        window.URL.revokeObjectURL(url);
+      }, 60000);
     } catch (error: any) {
-      toast.error(error?.response?.data?.error ?? "Could not generate the PDF");
+      toast.error(describeFailure(await blobError(error), "prepare the PDF for printing"));
     } finally {
       setPdfBusyId(null);
     }
@@ -235,7 +401,7 @@ export default function JobApplicationsReport() {
     setExporting(true);
     try {
       const response = await axios.get("/jobs/applications/export/zip/", {
-        headers: authHeader,
+        headers: authHeader(),
         responseType: "blob",
         params: {
           search: search || undefined,
@@ -256,23 +422,14 @@ export default function JobApplicationsReport() {
       window.URL.revokeObjectURL(url);
       toast.success("Export downloaded");
     } catch (error: any) {
-      // The blob response has to be read as text to see the JSON error body.
-      let message = "Could not export the applications";
-      if (error?.response?.data instanceof Blob) {
-        try {
-          const text = await error.response.data.text();
-          message = JSON.parse(text)?.error || message;
-        } catch {
-          /* keep default message */
-        }
-      } else {
-        message = error?.response?.data?.error ?? message;
-      }
-      toast.error(message);
+      toast.error(describeFailure(await blobError(error), "export the applications"));
     } finally {
       setExporting(false);
     }
   };
+
+  const showDate = (value: string | null) =>
+    value ? moment(value).format("DD MMM YYYY") : "—";
 
   const statusBadge = (value: string) => (
     <Badge color={STATUS_COLORS[value] ?? "light"} size="sm">
@@ -370,9 +527,43 @@ export default function JobApplicationsReport() {
             <p className="py-8 text-center text-sm text-gray-400 dark:text-gray-500">
               Loading applications...
             </p>
+          ) : loadError ? (
+            // Nothing loaded, and this says why - which beats an empty table.
+            <div className="my-4 rounded-lg border border-error-200 bg-error-50 p-5 text-sm dark:border-error-500/40 dark:bg-error-500/10">
+              <p className="font-medium text-error-600 dark:text-error-400">
+                The applications could not be loaded
+              </p>
+              <p className="mt-1.5 text-gray-700 dark:text-gray-300">{loadError}</p>
+              <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                Signed in as {signedInAs} · server {axios.defaults.baseURL}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={() => loadApplications(1)}>
+                  Try again
+                </Button>
+                {sessionExpired && (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() => {
+                      // A token the server will not accept - most often one
+                      // issued by a different backend - is only fixed by
+                      // signing in again against this one.
+                      localStorage.removeItem("token");
+                      localStorage.removeItem("user");
+                      window.location.href = "/";
+                    }}
+                  >
+                    Sign in again
+                  </Button>
+                )}
+              </div>
+            </div>
           ) : applications.length === 0 ? (
             <p className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-              No applications match these filters.
+              {search || status || vacancyId || dateFrom || dateTo
+                ? "No applications match these filters."
+                : "No applications have been submitted yet."}
             </p>
           ) : (
             <>
@@ -380,11 +571,12 @@ export default function JobApplicationsReport() {
                 <table className="min-w-full text-left text-sm">
                   <thead>
                     <tr className="border-b border-gray-200 text-xs uppercase text-gray-500 dark:border-gray-800 dark:text-gray-400">
+                      <th className="py-2 pr-4 font-medium">Reference No.</th>
                       <th className="py-2 pr-4 font-medium">Applicant</th>
-                      <th className="py-2 pr-4 font-medium">Vacancy</th>
+                      <th className="py-2 pr-4 font-medium">Position Applied For</th>
                       <th className="py-2 pr-4 font-medium">Emp ID</th>
                       <th className="py-2 pr-4 font-medium">Contact</th>
-                      <th className="py-2 pr-4 font-medium">Status</th>
+                      <th className="py-2 pr-4 font-medium">HR Verification</th>
                       <th className="py-2 pr-4 font-medium">Submitted</th>
                       <th className="py-2 pr-4 font-medium">Actions</th>
                     </tr>
@@ -392,19 +584,30 @@ export default function JobApplicationsReport() {
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                     {applications.map((application) => (
                       <tr key={application.id} className="text-gray-700 dark:text-gray-300">
+                        <td className="py-2.5 pr-4 font-medium text-gray-800 dark:text-white/90">
+                          {application.reference_no || `#${application.id}`}
+                        </td>
                         <td className="py-2.5 pr-4">
                           <div className="font-medium text-gray-800 dark:text-white/90">
-                            {application.emp_full_name}
+                            {application.full_name}
                           </div>
                           <div className="text-xs text-gray-400">
-                            {application.current_job_title || "—"}
+                            {application.current_designation || "—"}
+                            {application.current_grade ? ` (${application.current_grade})` : ""}
                           </div>
                         </td>
-                        <td className="py-2.5 pr-4">{application.vacancy}</td>
+                        <td className="py-2.5 pr-4">
+                          {application.vacancy}
+                          {application.vacancy_reference_no ? (
+                            <div className="text-xs text-gray-400">
+                              {application.vacancy_reference_no}
+                            </div>
+                          ) : null}
+                        </td>
                         <td className="py-2.5 pr-4">{application.emp_id}</td>
                         <td className="py-2.5 pr-4">
-                          <div>{application.corporate_email}</div>
-                          <div className="text-xs text-gray-400">{application.contact_phone_no}</div>
+                          <div>{application.official_email}</div>
+                          <div className="text-xs text-gray-400">{application.mobile_no}</div>
                         </td>
                         <td className="py-2.5 pr-4">{statusBadge(application.status)}</td>
                         <td className="py-2.5 pr-4">
@@ -484,64 +687,97 @@ export default function JobApplicationsReport() {
                 <div className="mb-4 flex items-start justify-between">
                   <div>
                     <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">
-                      {selected.emp_full_name}
+                      {selected.full_name}
                     </h3>
                     <p className="text-sm text-gray-500 dark:text-gray-400">
-                      Application #{selected.id} · {selected.vacancy}
+                      {selected.reference_no || `Application #${selected.id}`} ·{" "}
+                      {selected.vacancy}
                     </p>
                   </div>
                   {statusBadge(selected.status)}
                 </div>
 
-                <DetailSection title="Target Position & Applicant Identity">
+                <DetailSection title="1. Vacancy Information">
+                  <DetailGrid
+                    rows={[
+                      ["Position Title", selected.vacancy],
+                      ["Advertisement / Reference No.", selected.vacancy_reference_no],
+                      ["Grade", selected.vacancy_grade],
+                      ["Department / Function", selected.vacancy_department],
+                      ["Date of Advertisement", showDate(selected.vacancy_advertisement_date)],
+                      ["Closing Date", showDate(selected.vacancy_closing_date)],
+                      ["Current Designation", selected.current_designation],
+                      ["Current Grade", selected.current_grade],
+                    ]}
+                  />
+                </DetailSection>
+
+                <DetailSection title="2. Personal & Contact Information">
                   <DetailGrid
                     rows={[
                       ["Employee ID", selected.emp_id],
-                      ["Current Department", selected.current_dept_code],
-                      ["Current Position Title", selected.current_job_title],
-                      ["Current Supervisor", selected.current_supervisor_id],
-                      ["CNIC", selected.cnic],
+                      ["Full Name", selected.full_name],
+                      ["Father's / Husband's Name", selected.father_or_husband_name],
+                      ["CNIC No.", selected.cnic],
+                      ["Date of Birth", showDate(selected.date_of_birth)],
+                      ["Gender", selected.gender],
+                      ["Official Email Address", selected.official_email],
+                      ["Mobile / Contact No.", selected.mobile_no],
+                      ["Current Office / Location", selected.current_office_location],
+                      ["Emergency Contact No.", selected.emergency_contact_no],
                     ]}
                   />
                 </DetailSection>
 
-                <DetailSection title="Contact Information">
+                <DetailSection title="3. Current Employment Details">
                   <DetailGrid
                     rows={[
-                      ["Corporate Email", selected.corporate_email],
-                      ["Personal Email", selected.personal_email || "—"],
-                      ["Contact Phone", selected.contact_phone_no],
-                      ["Preferred Channel", selected.preferred_contact_method],
+                      ["Date of Joining ISMO", showDate(selected.date_of_joining_ismo)],
+                      ["Current Designation", selected.current_designation],
+                      ["Current Grade", selected.current_grade],
+                      ["Department / Function", selected.department_function],
+                      [
+                        "Date of Appointment to Current Grade",
+                        showDate(selected.date_of_appointment_to_current_grade),
+                      ],
+                      ["Total Service in ISMO", selected.total_service_ismo],
+                      ["Total Relevant Experience", selected.total_relevant_experience],
+                      [
+                        "Date of Joining Current Position",
+                        showDate(selected.date_of_joining_current_position),
+                      ],
                     ]}
                   />
                 </DetailSection>
 
-                <DetailSection title="Educational Background">
+                <DetailSection title="4. Educational Background">
                   {selected.education.length === 0 ? (
-                    <p className="text-sm text-gray-400">No education records provided.</p>
+                    <p className="text-sm text-gray-400">No qualifications listed.</p>
                   ) : (
-                    <div className="space-y-2">
-                      {selected.education.map((row, i) => (
-                        <div
-                          key={i}
-                          className="rounded-lg border border-gray-200 p-3 text-sm dark:border-gray-800"
-                        >
-                          <span className="font-medium text-gray-800 dark:text-white/90">
-                            {row.edu_degree_title}
-                          </span>{" "}
-                          — {row.edu_institution_name} ({row.edu_graduation_year})
-                          <div className="text-xs text-gray-400">
-                            {row.edu_major_specialization} · {row.edu_grade_score}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                    <DetailTable
+                      headers={[
+                        "Degree / Qualification",
+                        "Major / Field of Study",
+                        "Institution / University",
+                        "Country",
+                        "Year",
+                        "CGPA / Division",
+                      ]}
+                      rows={selected.education.map((row) => [
+                        row.degree_qualification,
+                        row.major_field_of_study,
+                        row.institution_university,
+                        row.country,
+                        String(row.year_of_completion),
+                        row.cgpa_division,
+                      ])}
+                    />
                   )}
                 </DetailSection>
 
-                <DetailSection title="Professional Experience">
+                <DetailSection title="5. Employment History / Professional Experience">
                   {selected.experience.length === 0 ? (
-                    <p className="text-sm text-gray-400">No experience records provided.</p>
+                    <p className="text-sm text-gray-400">No employment history listed.</p>
                   ) : (
                     <div className="space-y-3">
                       {selected.experience.map((row, i) => (
@@ -550,24 +786,21 @@ export default function JobApplicationsReport() {
                           className="rounded-lg border border-gray-200 p-3 text-sm dark:border-gray-800"
                         >
                           <div className="font-medium text-gray-800 dark:text-white/90">
-                            {row.exp_job_title} — {row.exp_company_name}
+                            {row.designation} {DASH_SPACED} {row.organization_employer}
+                            {row.grade ? ` (${row.grade})` : ""}
                           </div>
                           <div className="text-xs text-gray-400">
-                            {row.exp_start_date ? moment(row.exp_start_date).format("MMM YYYY") : "—"} –{" "}
-                            {row.exp_is_current
+                            {row.from_date ? moment(row.from_date).format("MMM YYYY") : "?"} –{" "}
+                            {row.is_current
                               ? "Present"
-                              : row.exp_end_date
-                                ? moment(row.exp_end_date).format("MMM YYYY")
-                                : "—"}
+                              : row.to_date
+                                ? moment(row.to_date).format("MMM YYYY")
+                                : "?"}
+                            {row.duration ? ` · ${row.duration}` : ""}
                           </div>
-                          {row.exp_key_responsibilities && (
+                          {row.key_responsibilities && (
                             <p className="mt-1 text-gray-600 dark:text-gray-300">
-                              {row.exp_key_responsibilities}
-                            </p>
-                          )}
-                          {row.exp_key_achievements && (
-                            <p className="mt-1 italic text-gray-500 dark:text-gray-400">
-                              {row.exp_key_achievements}
+                              {row.key_responsibilities}
                             </p>
                           )}
                         </div>
@@ -576,34 +809,73 @@ export default function JobApplicationsReport() {
                   )}
                 </DetailSection>
 
-                <DetailSection title="Skills & Certifications">
+                <DetailSection title="6. Professional Certifications / Memberships">
+                  {selected.certifications.length === 0 ? (
+                    <p className="text-sm text-gray-400">None declared.</p>
+                  ) : (
+                    <DetailTable
+                      headers={[
+                        "Certification / Membership",
+                        "Certifying Body",
+                        "Date Obtained",
+                        "Expiry Date",
+                        "Registration No.",
+                      ]}
+                      rows={selected.certifications.map((row) => [
+                        row.certification_membership,
+                        row.certifying_body,
+                        showDate(row.date_obtained),
+                        showDate(row.expiry_date),
+                        row.registration_no,
+                      ])}
+                    />
+                  )}
+                </DetailSection>
+
+                <DetailSection title="7. Trainings & Professional Development">
+                  {selected.trainings.length === 0 ? (
+                    <p className="text-sm text-gray-400">None declared.</p>
+                  ) : (
+                    <DetailTable
+                      headers={[
+                        "Training / Course Title",
+                        "Provider / Institute",
+                        "Duration",
+                        "Date / Year",
+                        "Relevant",
+                      ]}
+                      rows={selected.trainings.map((row) => [
+                        row.training_title,
+                        row.training_provider,
+                        row.duration,
+                        row.date_or_year,
+                        row.relevant_to_position ? "Yes" : "No",
+                      ])}
+                    />
+                  )}
+                </DetailSection>
+
+                <DetailSection title="8. Declaration & Undertaking">
                   <p className="text-sm">
-                    <span className="font-medium">Technical:</span>{" "}
-                    {selected.skills_technical.join(", ") || "—"}
-                  </p>
-                  <p className="text-sm">
-                    <span className="font-medium">Soft Skills:</span>{" "}
-                    {selected.skills_soft.join(", ") || "—"}
-                  </p>
-                  <p className="text-sm">
-                    <span className="font-medium">Certifications:</span>{" "}
-                    {selected.certifications_list || "—"}
+                    Accepted by the applicant:{" "}
+                    <strong>{selected.declaration_accepted ? "Yes" : "No"}</strong>
                   </p>
                 </DetailSection>
 
-                <DetailSection title="Statement of Purpose">
-                  <p className="whitespace-pre-wrap text-sm text-gray-600 dark:text-gray-300">
-                    {selected.application_rationale_sop}
-                  </p>
-                </DetailSection>
-
-                <DetailSection title="Acknowledgements">
-                  <p className="text-sm">
-                    Manager notified: <strong>{selected.ack_manager_notified_bool ? "Yes" : "No"}</strong>
-                    {"  ·  "}
-                    Data accuracy confirmed:{" "}
-                    <strong>{selected.ack_data_accuracy_bool ? "Yes" : "No"}</strong>
-                  </p>
+                <DetailSection title="9. Submission Record">
+                  <DetailGrid
+                    rows={[
+                      ["Applicant Name", selected.full_name],
+                      ["Employee ID", selected.emp_id],
+                      [
+                        "Date of Submission",
+                        moment(selected.created_at).format("DD MMM YYYY, HH:mm"),
+                      ],
+                      ["Application Reference No.", selected.reference_no],
+                      ["Electronic Signature / Confirmation", selected.applicant_signature],
+                      ["HR Verification Status", selected.hr_verification_status],
+                    ]}
+                  />
                 </DetailSection>
 
                 <div className="mt-5 flex flex-wrap justify-end gap-3">
@@ -648,6 +920,41 @@ function DetailGrid({ rows }: { rows: [string, string | number][] }) {
           <div className="text-sm text-gray-700 dark:text-gray-300">{value || "—"}</div>
         </div>
       ))}
+    </div>
+  );
+}
+/** One of the form's repeating tables: same columns, same order. */
+function DetailTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
+  return (
+    <div className="max-w-full overflow-x-auto custom-scrollbar">
+      <table className="min-w-full border-collapse text-left text-xs">
+        <thead>
+          <tr className="bg-gray-50 dark:bg-white/[0.03]">
+            {headers.map((header) => (
+              <th
+                key={header}
+                className="border border-gray-200 px-2 py-1.5 font-medium text-gray-600 dark:border-gray-800 dark:text-gray-300"
+              >
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index}>
+              {row.map((cell, cellIndex) => (
+                <td
+                  key={cellIndex}
+                  className="border border-gray-200 px-2 py-1.5 align-top text-gray-700 dark:border-gray-800 dark:text-gray-300"
+                >
+                  {cell || "—"}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

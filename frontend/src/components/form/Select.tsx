@@ -54,14 +54,18 @@ const Select: React.FC<SelectProps> = ({
         value={selectedValue}
         onChange={handleChange}
       >
-        {/* Placeholder option */}
-        <option
-          value=""
-          disabled
-          className="text-gray-700 dark:bg-gray-900 dark:text-gray-400"
-        >
-          {placeholder}
-        </option>
+        {/* Placeholder option - skipped when the caller supplies its own
+            empty-valued entry (an "All ..." filter reset, say), which would
+            otherwise appear twice with the first copy unselectable. */}
+        {!options.some((option) => option.value === "") && (
+          <option
+            value=""
+            disabled
+            className="text-gray-700 dark:bg-gray-900 dark:text-gray-400"
+          >
+            {placeholder}
+          </option>
+        )}
         {/* Map over options */}
         {options.map((option) => (
           <option

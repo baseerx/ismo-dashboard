@@ -27,19 +27,27 @@ DEBUG = True
 CORS_ALLOW_ALL_ORIGINS = True
 USE_TZ = False
 
-# CORS settings
+# CORS settings. CORS_ALLOW_ALL_ORIGINS above already lets any origin call the
+# API; these are listed so the deployed origins stay allowed if that is ever
+# turned off, and so the same list can be reused for CSRF below.
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",  # Vite (React dev server)
+    "http://localhost:5173",   # Vite (React dev server)
+    "http://localhost:5174",
     "http://127.0.0.1:5173",
-     # production frontend
+    "http://192.168.157.55:2025",  # the portal, served by Apache
+    "http://192.168.157.55:9000",
 ]
 
+# Needed for form posts and the Django admin when they come from another origin.
+CSRF_TRUSTED_ORIGINS = list(CORS_ALLOWED_ORIGINS)
+
+# Host names only - an entry with a port never matches, which is why the old
+# "192.168.157.55:9000" line did nothing.
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "192.168.157.55",
-    "192.168.157.55:9000",  # Adjust this to your production frontend URL
-    
+    "172.16.17.50",
 ]
 
 INSTALLED_APPS = [

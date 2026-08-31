@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ToastContainer, toast } from "react-toastify";
 import PageMeta from "../../components/common/PageMeta";
 import PageBreadcrumb from "../../components/common/PageBreadCrumb";
@@ -6,201 +6,297 @@ import ComponentCard from "../../components/common/ComponentCard";
 import Label from "../../components/form/Label";
 import Input from "../../components/form/input/InputField";
 import Select from "../../components/form/Select";
-import Radio from "../../components/form/input/Radio";
 import Checkbox from "../../components/form/input/Checkbox";
 import TextArea from "../../components/form/input/TextArea";
-import SearchableDropdown from "../../components/form/input/SearchableDropDown";
+import MultiSelect from "../../components/form/MultiSelect";
 import Button from "../../components/ui/button/Button";
 import Badge from "../../components/ui/badge/Badge";
 import axios from "../../api/axios";
 import moment from "moment";
 
 /**
- * Kept in step with jobs/validators.py, which enforces the same rules. These
- * checks exist for immediate feedback while typing; the server decides.
+ * ISMO internal recruitment - online application form.
+ *
+ * Follows the printed form section by section, top to bottom: vacancy
+ * information, personal and contact information, current employment details,
+ * educational background, employment history, certifications, trainings, the
+ * declaration, and the submission record.
+ *
+ * One submission may target several vacancies. Each becomes an application of
+ * its own with its own reference number, because each is reviewed separately.
+ *
+ * Every limit and rule here is enforced again in jobs/validators.py, which is
+ * what actually decides - a payload can be sent without going near this page.
  */
+
+// Kept in step with jobs/validators.py.
 const MAX_EDUCATION_ROWS = 15;
 const MAX_EXPERIENCE_ROWS = 20;
-const EARLIEST_GRADUATION_YEAR = 1950;
-const GRADUATION_YEARS_AHEAD = 7;
-
+const MAX_CERTIFICATION_ROWS = 15;
+const MAX_TRAINING_ROWS = 20;
+const MAX_VACANCIES = 10;
 const MAX_RESPONSIBILITIES = 1500;
-const MAX_ACHIEVEMENTS = 2000;
-const MAX_CERTIFICATIONS = 1500;
-const MAX_SOP = 3000;
-const MIN_SOP = 30;
-const MAX_TECHNICAL_SKILLS = 30;
-const MAX_SKILL_LENGTH = 80;
 
-/** Kept identical to SOFT_SKILL_OPTIONS in jobs/validators.py, which only
- *  accepts these; a typo would otherwise become a category nothing matches. */
-const SOFT_SKILL_OPTIONS = [
-  "Leadership",
-  "Team Management",
-  "Communication",
-  "Stakeholder Management",
-  "Problem Solving",
-  "Analytical Thinking",
-  "Decision Making",
-  "Negotiation",
-  "Conflict Resolution",
-  "Mentoring & Coaching",
-  "Time Management",
-  "Adaptability",
-  "Presentation Skills",
-  "Report Writing",
-  "Cross-functional Collaboration",
-];
+const GENDERS = ["Male", "Female", "Other"];
 
-/** Used to seed the first experience row with the applicant's current post. */
-const ORGANISATION_NAME = "Independent System & Market Operator (ISMO)";
+const CNIC = /^\d{5}-\d{7}-\d$/;
+const PHONE = /^\+?[\d][\d\s\-()]{6,20}$/;
+const EMAIL = /^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$/;
 
-const CONTACT_METHODS = ["Teams", "Email", "SMS"] as const;
-type ContactMethod = (typeof CONTACT_METHODS)[number];
+const EARLIEST_QUALIFICATION_YEAR = 1950;
+const FUTURE_QUALIFICATION_YEARS = 6;
 
-/** Common qualifications, plus an escape hatch for anything not listed. */
-const DEGREE_OPTIONS = [
-  "Matriculation",
-  "Intermediate / A-Level",
-  "Diploma",
-  "Bachelor of Science",
-  "Bachelor of Engineering",
-  "Bachelor of Arts",
-  "Bachelor of Commerce",
-  "Bachelor of Business Administration",
-  "Master of Science",
-  "Master of Engineering",
-  "Master of Arts",
-  "MBA",
-  "MPhil",
-  "PhD",
-  "CA / ACCA / CMA",
-  "PMP",
-  "Other certification",
-];
-const DEGREE_OTHER = "__other__";
+const today = () => moment().format("YYYY-MM-DD");
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 type Requisition = {
   id: number;
   title: string;
-  department: string | null;
-  location: string | null;
+  reference_no: string;
+  grade: string;
+  department: string;
+  location: string;
+  advertisement_date: string | null;
   closing_date: string | null;
 };
 
 type EducationRow = {
-  edu_degree_title: string;
-  /** Set when the degree dropdown is on "Other", holding the typed value. */
-  degree_is_custom: boolean;
-  edu_institution_name: string;
-  edu_major_specialization: string;
-  edu_graduation_year: string;
-  edu_grade_score: string;
+  degree_qualification: string;
+  major_field_of_study: string;
+  institution_university: string;
+  country: string;
+  year_of_completion: string;
+  cgpa_division: string;
 };
 
 type ExperienceRow = {
-  exp_job_title: string;
-  exp_company_name: string;
-  exp_start_date: string;
-  exp_end_date: string;
-  exp_is_current: boolean;
-  exp_key_responsibilities: string;
-  exp_key_achievements: string;
+  organization_employer: string;
+  designation: string;
+  grade: string;
+  from_date: string;
+  to_date: string;
+  is_current: boolean;
+  duration: string;
+  key_responsibilities: string;
+};
+
+type CertificationRow = {
+  certification_membership: string;
+  certifying_body: string;
+  date_obtained: string;
+  expiry_date: string;
+  registration_no: string;
+};
+
+type TrainingRow = {
+  training_title: string;
+  training_provider: string;
+  duration: string;
+  date_or_year: string;
+  relevant_to_position: boolean;
 };
 
 type FormState = {
-  target_job_req_id: string;
-  emp_full_name: string;
+  /** Section 1: one submission can target several vacancies. */
+  target_job_req_ids: string[];
+
+  // 2. personal & contact information
   emp_id: string;
-  current_dept_code: string;
-  current_job_title: string;
-  current_supervisor_id: string;
-  current_supervisor_erp_id: number | null;
+  full_name: string;
+  father_or_husband_name: string;
   cnic: string;
-  contact_phone_no: string;
-  corporate_email: string;
-  personal_email: string;
-  preferred_contact_method: ContactMethod | "";
-  certifications_list: string;
-  application_rationale_sop: string;
-  ack_manager_notified_bool: boolean;
-  ack_data_accuracy_bool: boolean;
+  date_of_birth: string;
+  gender: string;
+  official_email: string;
+  mobile_no: string;
+  current_office_location: string;
+  emergency_contact_no: string;
+
+  // 3. current employment details (current designation and grade also head
+  // section 1 of the printed form, and are shown in both places)
+  date_of_joining_ismo: string;
+  current_designation: string;
+  current_grade: string;
+  department_function: string;
+  date_of_appointment_to_current_grade: string;
+  total_service_ismo: string;
+  total_relevant_experience: string;
+  date_of_joining_current_position: string;
+
+  // 8 & 9
+  declaration_accepted: boolean;
+  applicant_signature: string;
 };
 
-type SubmittedApplication = {
+type Submitted = {
   id: number;
+  reference_no: string;
   vacancy: string;
   status: string;
+  hr_verification_status: string;
   created_at: string;
   education_count: number;
-  experience_count?: number;
-  skill_count?: number;
+  experience_count: number;
+  certification_count: number;
+  training_count: number;
 };
 
 const blankEducationRow = (): EducationRow => ({
-  edu_degree_title: "",
-  degree_is_custom: false,
-  edu_institution_name: "",
-  edu_major_specialization: "",
-  edu_graduation_year: "",
-  edu_grade_score: "",
+  degree_qualification: "",
+  major_field_of_study: "",
+  institution_university: "",
+  country: "Pakistan",
+  year_of_completion: "",
+  cgpa_division: "",
 });
 
 const blankExperienceRow = (): ExperienceRow => ({
-  exp_job_title: "",
-  exp_company_name: "",
-  exp_start_date: "",
-  exp_end_date: "",
-  exp_is_current: false,
-  exp_key_responsibilities: "",
-  exp_key_achievements: "",
+  organization_employer: "",
+  designation: "",
+  grade: "",
+  from_date: "",
+  to_date: "",
+  is_current: false,
+  duration: "",
+  key_responsibilities: "",
+});
+
+const blankCertificationRow = (): CertificationRow => ({
+  certification_membership: "",
+  certifying_body: "",
+  date_obtained: "",
+  expiry_date: "",
+  registration_no: "",
+});
+
+const blankTrainingRow = (): TrainingRow => ({
+  training_title: "",
+  training_provider: "",
+  duration: "",
+  date_or_year: "",
+  relevant_to_position: false,
 });
 
 const blankForm = (): FormState => ({
-  target_job_req_id: "",
-  emp_full_name: "",
+  target_job_req_ids: [],
   emp_id: "",
-  current_dept_code: "",
-  current_job_title: "",
-  current_supervisor_id: "",
-  current_supervisor_erp_id: null,
+  full_name: "",
+  father_or_husband_name: "",
   cnic: "",
-  contact_phone_no: "",
-  corporate_email: "",
-  personal_email: "",
-  preferred_contact_method: "",
-  certifications_list: "",
-  application_rationale_sop: "",
-  ack_manager_notified_bool: false,
-  ack_data_accuracy_bool: false,
+  date_of_birth: "",
+  gender: "",
+  official_email: "",
+  mobile_no: "",
+  current_office_location: "",
+  emergency_contact_no: "",
+  date_of_joining_ismo: "",
+  current_designation: "",
+  current_grade: "",
+  department_function: "",
+  date_of_appointment_to_current_grade: "",
+  total_service_ismo: "",
+  total_relevant_experience: "",
+  date_of_joining_current_position: "",
+  declaration_accepted: false,
+  applicant_signature: "",
 });
 
-const EMAIL = /^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$/;
-const digitsOf = (value: string) => value.replace(/\D/g, "");
+/** "3 years 4 months", the way the form's Duration column reads. */
+const describeSpan = (from: string, to: string): string => {
+  if (!from) return "";
+  const start = moment(from, "YYYY-MM-DD");
+  const finish = to ? moment(to, "YYYY-MM-DD") : moment();
+  if (!start.isValid() || !finish.isValid() || finish.isBefore(start)) return "";
 
-/** 13 digits shown as 12345-1234567-1, formatted while the person types. */
-function formatCnic(value: string): string {
-  const digits = digitsOf(value).slice(0, 13);
-  if (digits.length <= 5) return digits;
-  if (digits.length <= 12) return `${digits.slice(0, 5)}-${digits.slice(5)}`;
-  return `${digits.slice(0, 5)}-${digits.slice(5, 12)}-${digits.slice(12)}`;
-}
+  const months = finish.diff(start, "months");
+  const years = Math.floor(months / 12);
+  const remainder = months % 12;
+  const parts: string[] = [];
+  if (years) parts.push(`${years} year${years === 1 ? "" : "s"}`);
+  if (remainder) parts.push(`${remainder} month${remainder === 1 ? "" : "s"}`);
+  return parts.join(" ") || "less than a month";
+};
 
-/** How much of a character limit is used, and a warning as it runs out. */
-function Counter({ used, limit }: { used: number; limit: number }) {
-  const nearlyFull = used > limit * 0.9;
-  return (
-    <p
-      className={`mt-1 text-right text-xs ${
-        nearlyFull ? "text-warning-500" : "text-gray-400 dark:text-gray-500"
-      }`}
-    >
-      {used} / {limit}
-    </p>
-  );
-}
+const nameKey = (value: string) => value.toLowerCase().replace(/[^a-z]/g, "");
+
+// ---------------------------------------------------------------------------
+// Small presentational helpers
+// ---------------------------------------------------------------------------
+
+/** The printed form's numbered blue section bar. */
+const SectionBar = ({ number, title }: { number: number; title: string }) => (
+  <div className="mb-4 rounded-md bg-[#1f4e79] px-3 py-2 text-sm font-semibold uppercase tracking-wide text-white">
+    {number}. {title}
+  </div>
+);
+
+const FieldNote = ({ children }: { children: React.ReactNode }) => (
+  <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">{children}</p>
+);
+
+const RowHeader = ({
+  label,
+  onRemove,
+  removable,
+}: {
+  label: string;
+  onRemove: () => void;
+  removable: boolean;
+}) => (
+  <div className="mb-3 flex items-center justify-between">
+    <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+      {label}
+    </span>
+    {removable && (
+      <button
+        type="button"
+        onClick={onRemove}
+        className="text-xs font-medium text-error-500 hover:text-error-600"
+      >
+        Remove
+      </button>
+    )}
+  </div>
+);
+
+const Counter = ({ value, limit }: { value: number; limit: number }) => (
+  <p className="mt-1 text-right text-xs text-gray-400 dark:text-gray-500">
+    {value} / {limit}
+  </p>
+);
+
+// ---------------------------------------------------------------------------
 
 export default function InternalJobApplication() {
+  const [requisitions, setRequisitions] = useState<Requisition[]>([]);
+  const [form, setForm] = useState<FormState>(blankForm);
+  const [education, setEducation] = useState<EducationRow[]>([blankEducationRow()]);
+  const [experience, setExperience] = useState<ExperienceRow[]>([blankExperienceRow()]);
+  const [certifications, setCertifications] = useState<CertificationRow[]>([
+    blankCertificationRow(),
+  ]);
+  const [trainings, setTrainings] = useState<TrainingRow[]>([blankTrainingRow()]);
+
+  const [declaration, setDeclaration] = useState<string[]>([]);
+  const [submissionNote, setSubmissionNote] = useState("");
+
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [eduErrors, setEduErrors] = useState<Record<number, Record<string, string>>>({});
+  const [expErrors, setExpErrors] = useState<Record<number, Record<string, string>>>({});
+  const [certErrors, setCertErrors] = useState<Record<number, Record<string, string>>>({});
+  const [trainErrors, setTrainErrors] = useState<Record<number, Record<string, string>>>({});
+
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [profileNote, setProfileNote] = useState<string | null>(null);
+  const [prefilled, setPrefilled] = useState<Set<string>>(new Set());
+  const [submissions, setSubmissions] = useState<Submitted[]>([]);
+  // Bumped after a submission so the vacancy picker remounts with nothing chosen.
+  const [vacancyPickerKey, setVacancyPickerKey] = useState(0);
+
   const user = useMemo(() => {
     try {
       return JSON.parse(localStorage.getItem("user") || "{}");
@@ -209,41 +305,10 @@ export default function InternalJobApplication() {
     }
   }, []);
 
-  const [form, setForm] = useState<FormState>(blankForm);
-  const [education, setEducation] = useState<EducationRow[]>([blankEducationRow()]);
-  const [experience, setExperience] = useState<ExperienceRow[]>([blankExperienceRow()]);
-  const [technicalSkills, setTechnicalSkills] = useState<string[]>([]);
-  const [skillDraft, setSkillDraft] = useState("");
-  const [softSkills, setSoftSkills] = useState<string[]>([]);
-  const [requisitions, setRequisitions] = useState<Requisition[]>([]);
-  const [applications, setApplications] = useState<SubmittedApplication[]>([]);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [rowErrors, setRowErrors] = useState<Record<number, Record<string, string>>>({});
-  const [expErrors, setExpErrors] = useState<Record<number, Record<string, string>>>({});
-  const [loadingProfile, setLoadingProfile] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [profileNote, setProfileNote] = useState<string | null>(null);
-
-  // Which fields arrived pre-filled, so the form can say so without claiming
-  // it for something the employee typed themselves.
-  const prefilled = useRef<Set<keyof FormState>>(new Set());
-  // Whether the first experience row came from the employee record.
-  const prefilledExperience = useRef(false);
-
-  const years = useMemo(() => {
-    const latest = new Date().getFullYear() + GRADUATION_YEARS_AHEAD;
-    const list: string[] = [];
-    for (let year = latest; year >= EARLIEST_GRADUATION_YEAR; year -= 1) {
-      list.push(String(year));
-    }
-    return list;
-  }, []);
-
-  // ---- loading ---------------------------------------------------------
   useEffect(() => {
     loadRequisitions();
     loadProfile();
-    loadApplications();
+    loadSubmissions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -253,14 +318,29 @@ export default function InternalJobApplication() {
       setRequisitions(Array.isArray(response.data) ? response.data : []);
     } catch {
       setRequisitions([]);
-      toast.error("Could not load the list of vacancies");
     }
   };
 
+  const loadSubmissions = async () => {
+    if (!user?.erpid) return;
+    try {
+      const response = await axios.get("/jobs/applications/", {
+        params: { erp_id: user.erpid },
+      });
+      setSubmissions(Array.isArray(response.data) ? response.data : []);
+    } catch {
+      setSubmissions([]);
+    }
+  };
+
+  /**
+   * Fills in what the employee record already knows. Every field stays
+   * editable: the record is a starting point, not the last word.
+   */
   const loadProfile = async () => {
     if (!user?.erpid) {
       setLoadingProfile(false);
-      setProfileNote("Sign in again — your employee id is missing from this session.");
+      setProfileNote("Sign in again - your employee id is missing from this session.");
       return;
     }
 
@@ -268,531 +348,739 @@ export default function InternalJobApplication() {
       const response = await axios.get("/jobs/application-profile/", {
         params: { erp_id: user.erpid },
       });
-      const profile = response.data ?? {};
+      const profile = response.data || {};
 
-      // Only fields the employee record actually holds are filled; the rest
-      // stay empty rather than being invented.
-      const filled = new Set<keyof FormState>();
-      const take = (key: keyof FormState, value: unknown): string => {
-        const text = value === null || value === undefined ? "" : String(value);
-        if (text) filled.add(key);
+      setDeclaration(profile.declaration_paragraphs || []);
+      setSubmissionNote(profile.submission_note || "");
+
+      const filled = new Set<string>();
+      const take = (field: keyof FormState, value: unknown) => {
+        const text = value == null ? "" : String(value);
+        if (text) filled.add(field as string);
         return text;
       };
 
       setForm((previous) => ({
         ...previous,
-        emp_full_name: take("emp_full_name", profile.emp_full_name),
         emp_id: take("emp_id", profile.emp_id),
-        current_dept_code: take("current_dept_code", profile.current_dept_code),
-        current_job_title: take("current_job_title", profile.current_job_title),
-        current_supervisor_id: take("current_supervisor_id", profile.current_supervisor_id),
-        current_supervisor_erp_id: profile.current_supervisor_erp_id ?? null,
-        cnic: formatCnic(take("cnic", profile.cnic)),
-        corporate_email: take("corporate_email", profile.corporate_email),
-        contact_phone_no: take("contact_phone_no", profile.contact_phone_no),
+        full_name: take("full_name", profile.full_name),
+        cnic: take("cnic", profile.cnic),
+        gender: take("gender", profile.gender),
+        official_email: take("official_email", profile.official_email),
+        current_office_location: take(
+          "current_office_location",
+          profile.current_office_location
+        ),
+        current_designation: take("current_designation", profile.current_designation),
+        current_grade: take("current_grade", profile.current_grade),
+        department_function: take("department_function", profile.department_function),
+        father_or_husband_name: take(
+          "father_or_husband_name",
+          profile.father_or_husband_name
+        ),
+        mobile_no: take("mobile_no", profile.mobile_no),
       }));
+      setPrefilled(filled);
 
-      prefilled.current = filled;
-
-      // The applicant's current post is the one thing the employee record can
-      // contribute to work history, so the first row starts filled in and
-      // marked as still current. Start date is not held anywhere, so it stays
-      // empty; everything here can be edited or the row removed outright.
-      const currentTitle = String(profile.current_job_title ?? "");
-      if (currentTitle) {
-        setExperience((previous) => {
-          const [first, ...rest] = previous;
-          const untouched =
-            !first ||
-            (!first.exp_job_title &&
-              !first.exp_company_name &&
-              !first.exp_key_responsibilities);
-          if (!untouched) return previous;
-          return [
-            {
-              ...blankExperienceRow(),
-              exp_job_title: currentTitle,
-              exp_company_name: ORGANISATION_NAME,
-              exp_is_current: true,
-            },
-            ...rest,
-          ];
-        });
-        prefilledExperience.current = true;
-      }
+      // The applicant's current post starts section 5 off, since everyone has
+      // one and it is the row reviewers look at first.
+      setExperience((previous) => {
+        if (previous.length !== 1 || previous[0].organization_employer) return previous;
+        return [
+          {
+            ...previous[0],
+            organization_employer: "Independent System & Market Operator (ISMO)",
+            designation: profile.current_designation || "",
+            grade: profile.current_grade || "",
+            is_current: true,
+          },
+        ];
+      });
 
       setProfileNote(null);
     } catch (error: any) {
-      setProfileNote(
-        error?.response?.status === 404
-          ? "No active employee record was found for your ERP id, so nothing could be pre-filled."
-          : "Your employee record could not be loaded, so please fill the form in by hand."
-      );
+      if (error?.response?.status === 404) {
+        setProfileNote(
+          "No active employee record was found for your ID, so nothing could be filled in for you."
+        );
+      } else if (!error?.response) {
+        setProfileNote(
+          "Your details could not be loaded from the server, so the form starts empty."
+        );
+      } else {
+        setProfileNote("Your details could not be filled in automatically.");
+      }
     } finally {
       setLoadingProfile(false);
     }
   };
 
-  const loadApplications = async () => {
-    if (!user?.erpid) return;
-    try {
-      const response = await axios.get("/jobs/applications/", {
-        params: { erp_id: user.erpid },
-      });
-      setApplications(Array.isArray(response.data) ? response.data : []);
-    } catch {
-      setApplications([]);
-    }
-  };
-
-  // ---- editing ---------------------------------------------------------
-  const set = (field: keyof FormState, value: string) => {
-    setForm((previous) => ({ ...previous, [field]: value }));
+  // ---- editing -----------------------------------------------------------
+  const clearError = (field: string) =>
     setErrors((previous) => {
       if (!previous[field]) return previous;
       const next = { ...previous };
       delete next[field];
       return next;
     });
+
+  const set = (field: keyof FormState, value: string | boolean) => {
+    setForm((previous) => {
+      const next = { ...previous, [field]: value } as FormState;
+      // Total service follows the joining date until the applicant edits it.
+      if (field === "date_of_joining_ismo" && typeof value === "string") {
+        const span = describeSpan(value, "");
+        if (span) next.total_service_ismo = span;
+      }
+      return next;
+    });
+    clearError(field as string);
   };
 
-  const setRow = (index: number, field: keyof EducationRow, value: string | boolean) => {
-    setEducation((previous) =>
-      previous.map((row, position) =>
-        position === index ? { ...row, [field]: value } : row
-      )
+  const setVacancies = (selected: string[]) => {
+    setForm((previous) => ({ ...previous, target_job_req_ids: selected }));
+    clearError("target_job_req_ids");
+  };
+
+  const chosenVacancies = useMemo(
+    () =>
+      form.target_job_req_ids
+        .map((id) => requisitions.find((item) => String(item.id) === id))
+        .filter((item): item is Requisition => Boolean(item)),
+    [form.target_job_req_ids, requisitions]
+  );
+
+  // ---- repeaters ---------------------------------------------------------
+  const editEducation = (index: number, field: keyof EducationRow, value: string) => {
+    setEducation((rows) =>
+      rows.map((row, i) => (i === index ? { ...row, [field]: value } : row))
     );
-    setRowErrors((previous) => {
-      const forRow = previous[index];
-      if (!forRow || !forRow[field as string]) return previous;
-      const next = { ...previous, [index]: { ...forRow } };
-      delete next[index][field as string];
+    setEduErrors((previous) => {
+      if (!previous[index]?.[field]) return previous;
+      const next = { ...previous, [index]: { ...previous[index] } };
+      delete next[index][field];
       return next;
     });
   };
 
-  const addRow = () => {
-    if (education.length >= MAX_EDUCATION_ROWS) {
-      toast.info(`Up to ${MAX_EDUCATION_ROWS} qualifications can be listed`);
-      return;
-    }
-    setEducation((previous) => [...previous, blankEducationRow()]);
-  };
-
-  const removeRow = (index: number) => {
-    // One row always remains: the section is required, and an empty grid gives
-    // nothing to type into.
-    if (education.length === 1) {
-      setEducation([blankEducationRow()]);
-      setRowErrors({});
-      return;
-    }
-    setEducation((previous) => previous.filter((_, position) => position !== index));
-    setRowErrors({});
-  };
-
-  const setExpRow = (index: number, field: keyof ExperienceRow, value: string | boolean) => {
-    setExperience((previous) =>
-      previous.map((row, position) =>
-        position === index ? { ...row, [field]: value } : row
-      )
+  const editExperience = (
+    index: number,
+    field: keyof ExperienceRow,
+    value: string | boolean
+  ) => {
+    setExperience((rows) =>
+      rows.map((row, i) => {
+        if (i !== index) return row;
+        const updated = { ...row, [field]: value } as ExperienceRow;
+        if (field === "is_current" && value === true) updated.to_date = "";
+        // Duration follows the dates unless the applicant types their own.
+        if (["from_date", "to_date", "is_current"].includes(field as string)) {
+          const span = describeSpan(
+            updated.from_date,
+            updated.is_current ? "" : updated.to_date
+          );
+          if (span) updated.duration = span;
+        }
+        return updated;
+      })
     );
     setExpErrors((previous) => {
-      const forRow = previous[index];
-      if (!forRow || !forRow[field as string]) return previous;
-      const next = { ...previous, [index]: { ...forRow } };
+      if (!previous[index]?.[field as string]) return previous;
+      const next = { ...previous, [index]: { ...previous[index] } };
       delete next[index][field as string];
       return next;
     });
   };
 
-  const addExpRow = () => {
-    if (experience.length >= MAX_EXPERIENCE_ROWS) {
-      toast.info(`Up to ${MAX_EXPERIENCE_ROWS} positions can be listed`);
-      return;
-    }
-    setExperience((previous) => [...previous, blankExperienceRow()]);
-  };
-
-  const removeExpRow = (index: number) => {
-    if (experience.length === 1) {
-      setExperience([blankExperienceRow()]);
-      setExpErrors({});
-      prefilledExperience.current = false;
-      return;
-    }
-    setExperience((previous) => previous.filter((_, position) => position !== index));
-    setExpErrors({});
-    if (index === 0) prefilledExperience.current = false;
-  };
-
-  /** Adds whatever is in the tag box, if it is new. */
-  const commitSkill = () => {
-    const tag = skillDraft.trim();
-    if (!tag) return;
-
-    if (tag.length > MAX_SKILL_LENGTH) {
-      toast.error(`Keep each skill within ${MAX_SKILL_LENGTH} characters`);
-      return;
-    }
-    if (technicalSkills.length >= MAX_TECHNICAL_SKILLS) {
-      toast.info(`Up to ${MAX_TECHNICAL_SKILLS} skills can be listed`);
-      return;
-    }
-    // Case-insensitive, so "python" does not join "Python" in the list.
-    if (technicalSkills.some((skill) => skill.toLowerCase() === tag.toLowerCase())) {
-      setSkillDraft("");
-      return;
-    }
-
-    setTechnicalSkills((previous) => [...previous, tag]);
-    setSkillDraft("");
-    setErrors((previous) => {
-      if (!previous.skills_technical_tags) return previous;
-      const next = { ...previous };
-      delete next.skills_technical_tags;
+  const editCertification = (
+    index: number,
+    field: keyof CertificationRow,
+    value: string
+  ) => {
+    setCertifications((rows) =>
+      rows.map((row, i) => (i === index ? { ...row, [field]: value } : row))
+    );
+    setCertErrors((previous) => {
+      if (!previous[index]?.[field]) return previous;
+      const next = { ...previous, [index]: { ...previous[index] } };
+      delete next[index][field];
       return next;
     });
   };
 
-  const toggleSoftSkill = (skill: string) => {
-    setSoftSkills((previous) =>
-      previous.includes(skill)
-        ? previous.filter((item) => item !== skill)
-        : [...previous, skill]
+  const editTraining = (
+    index: number,
+    field: keyof TrainingRow,
+    value: string | boolean
+  ) => {
+    setTrainings((rows) =>
+      rows.map((row, i) => (i === index ? { ...row, [field]: value } : row))
     );
+    setTrainErrors((previous) => {
+      if (!previous[index]?.[field as string]) return previous;
+      const next = { ...previous, [index]: { ...previous[index] } };
+      delete next[index][field as string];
+      return next;
+    });
   };
 
-  // ---- validation ------------------------------------------------------
+  const removeAt = <T,>(
+    rows: T[],
+    index: number,
+    setRows: (rows: T[]) => void,
+    resetErrors: () => void
+  ) => {
+    setRows(rows.filter((_, i) => i !== index));
+    resetErrors();
+  };
+
+  // ---- validation --------------------------------------------------------
   const validate = (): boolean => {
     const problems: Record<string, string> = {};
 
-    if (!form.target_job_req_id) {
-      problems.target_job_req_id = "Select the vacancy you are applying for";
+    // 1. vacancy information
+    if (form.target_job_req_ids.length === 0) {
+      problems.target_job_req_ids = "Select at least one vacancy to apply for";
+    } else if (form.target_job_req_ids.length > MAX_VACANCIES) {
+      problems.target_job_req_ids = `Apply for at most ${MAX_VACANCIES} vacancies at a time`;
     }
-    if (!form.emp_full_name.trim()) {
-      problems.emp_full_name = "Employee full name is required";
-    } else if (form.emp_full_name.trim().length < 3) {
-      problems.emp_full_name = "Employee full name looks too short";
-    }
-    if (!form.emp_id.trim()) {
-      problems.emp_id = "Employee ID is required";
-    } else if (!/^\d+$/.test(form.emp_id.trim())) {
+
+    // 2. personal & contact information
+    if (!form.emp_id.trim() || Number(form.emp_id) <= 0) {
       problems.emp_id = "Employee ID must be a number";
     }
-    if (!form.current_dept_code.trim()) problems.current_dept_code = "Current department is required";
-    if (!form.current_job_title.trim()) problems.current_job_title = "Current position title is required";
-    if (!form.current_supervisor_id.trim()) {
-      problems.current_supervisor_id = "Current supervisor name is required";
+    if (!form.full_name.trim()) problems.full_name = "Full name is required";
+    else if (form.full_name.trim().length < 3) problems.full_name = "That looks too short";
+
+    if (!form.father_or_husband_name.trim()) {
+      problems.father_or_husband_name = "Father's / husband's name is required";
+    } else if (form.father_or_husband_name.trim().length < 3) {
+      problems.father_or_husband_name = "That looks too short";
     }
 
-    const cnicDigits = digitsOf(form.cnic);
-    if (!cnicDigits) problems.cnic = "CNIC is required";
-    else if (cnicDigits.length !== 13) problems.cnic = "CNIC must be 13 digits, like 12345-1234567-1";
-
-    const phoneDigits = digitsOf(form.contact_phone_no);
-    if (!form.contact_phone_no.trim()) {
-      problems.contact_phone_no = "Contact phone number is required";
-    } else if (phoneDigits.length < 10 || phoneDigits.length > 15) {
-      problems.contact_phone_no = "Enter a phone number like +92-300-1234567";
+    if (!form.cnic.trim()) problems.cnic = "CNIC number is required";
+    else if (!CNIC.test(form.cnic.trim())) {
+      problems.cnic = "CNIC must be 13 digits, like 12345-1234567-1";
     }
 
-    if (!form.corporate_email.trim()) {
-      problems.corporate_email = "Corporate email address is required";
-    } else if (!EMAIL.test(form.corporate_email.trim())) {
-      problems.corporate_email = "That does not look like an email address";
-    }
-
-    if (form.personal_email.trim()) {
-      if (!EMAIL.test(form.personal_email.trim())) {
-        problems.personal_email = "That does not look like an email address";
-      } else if (
-        form.personal_email.trim().toLowerCase() === form.corporate_email.trim().toLowerCase()
-      ) {
-        problems.personal_email = "Personal email should differ from the corporate one";
+    if (!form.date_of_birth) problems.date_of_birth = "Date of birth is required";
+    else {
+      const years = moment().diff(moment(form.date_of_birth, "YYYY-MM-DD"), "years", true);
+      if (years < 18) problems.date_of_birth = "An applicant must be at least 18";
+      else if (years > 70) {
+        problems.date_of_birth = "Check the date of birth - that is over 70 years ago";
       }
     }
 
-    if (!form.preferred_contact_method) {
-      problems.preferred_contact_method = "Choose how you would like to be contacted";
+    if (!form.gender) problems.gender = "Gender is required";
+
+    if (!form.official_email.trim()) {
+      problems.official_email = "Official email address is required";
+    } else if (!EMAIL.test(form.official_email.trim())) {
+      problems.official_email = "That does not look like an email address";
     }
 
-    const rows: Record<number, Record<string, string>> = {};
+    const digits = (value: string) => (value.match(/\d/g) || []).length;
+    if (!form.mobile_no.trim()) problems.mobile_no = "Mobile / contact number is required";
+    else if (!PHONE.test(form.mobile_no.trim()) || digits(form.mobile_no) < 7) {
+      problems.mobile_no = "Enter a number like +92-300-1234567";
+    }
+
+    if (!form.current_office_location.trim()) {
+      problems.current_office_location = "Current office / location is required";
+    }
+
+    if (
+      form.emergency_contact_no.trim() &&
+      (!PHONE.test(form.emergency_contact_no.trim()) || digits(form.emergency_contact_no) < 7)
+    ) {
+      problems.emergency_contact_no = "Enter a number like +92-300-1234567";
+    }
+
+    // 3. current employment details
+    if (!form.date_of_joining_ismo) {
+      problems.date_of_joining_ismo = "Date of joining ISMO is required";
+    } else if (form.date_of_joining_ismo > today()) {
+      problems.date_of_joining_ismo = "That date cannot be in the future";
+    }
+
+    if (!form.current_designation.trim()) {
+      problems.current_designation = "Current designation is required";
+    }
+    if (!form.current_grade.trim()) problems.current_grade = "Current grade is required";
+    if (!form.department_function.trim()) {
+      problems.department_function = "Department / function is required";
+    }
+
+    if (!form.date_of_appointment_to_current_grade) {
+      problems.date_of_appointment_to_current_grade =
+        "Date of appointment to current grade is required";
+    } else if (form.date_of_appointment_to_current_grade > today()) {
+      problems.date_of_appointment_to_current_grade = "That date cannot be in the future";
+    } else if (
+      form.date_of_joining_ismo &&
+      form.date_of_appointment_to_current_grade < form.date_of_joining_ismo
+    ) {
+      problems.date_of_appointment_to_current_grade =
+        "This cannot be before the date of joining ISMO";
+    }
+
+    if (!form.date_of_joining_current_position) {
+      problems.date_of_joining_current_position =
+        "Date of joining current position is required";
+    } else if (form.date_of_joining_current_position > today()) {
+      problems.date_of_joining_current_position = "That date cannot be in the future";
+    } else if (
+      form.date_of_joining_ismo &&
+      form.date_of_joining_current_position < form.date_of_joining_ismo
+    ) {
+      problems.date_of_joining_current_position =
+        "This cannot be before the date of joining ISMO";
+    }
+
+    if (!form.total_service_ismo.trim()) {
+      problems.total_service_ismo = "Total service in ISMO is required";
+    }
+    if (!form.total_relevant_experience.trim()) {
+      problems.total_relevant_experience = "Total relevant experience is required";
+    }
+
+    // 4. educational background
+    const educationProblems: Record<number, Record<string, string>> = {};
+    const thisYear = moment().year();
     education.forEach((row, index) => {
       const rowProblems: Record<string, string> = {};
-      if (!row.edu_degree_title.trim()) rowProblems.edu_degree_title = "Degree / certificate is required";
-      if (!row.edu_institution_name.trim()) rowProblems.edu_institution_name = "Institution is required";
-      if (!row.edu_major_specialization.trim()) {
-        rowProblems.edu_major_specialization = "Major / field of study is required";
+      if (!row.degree_qualification.trim()) {
+        rowProblems.degree_qualification = "Degree / qualification is required";
       }
-      if (!row.edu_graduation_year) rowProblems.edu_graduation_year = "Select the year of completion";
-      if (!row.edu_grade_score.trim()) rowProblems.edu_grade_score = "CGPA / grade is required";
-      if (Object.keys(rowProblems).length) rows[index] = rowProblems;
+      if (!row.major_field_of_study.trim()) {
+        rowProblems.major_field_of_study = "Major / field of study is required";
+      }
+      if (!row.institution_university.trim()) {
+        rowProblems.institution_university = "Institution / university is required";
+      }
+      if (!row.country.trim()) rowProblems.country = "Country is required";
+      if (!row.year_of_completion.trim()) {
+        rowProblems.year_of_completion = "Year of completion is required";
+      } else {
+        const year = Number(row.year_of_completion);
+        if (
+          !Number.isInteger(year) ||
+          year < EARLIEST_QUALIFICATION_YEAR ||
+          year > thisYear + FUTURE_QUALIFICATION_YEARS
+        ) {
+          rowProblems.year_of_completion = `Year must be between ${EARLIEST_QUALIFICATION_YEAR} and ${
+            thisYear + FUTURE_QUALIFICATION_YEARS
+          }`;
+        }
+      }
+      if (!row.cgpa_division.trim()) rowProblems.cgpa_division = "CGPA / division is required";
+      if (Object.keys(rowProblems).length) educationProblems[index] = rowProblems;
     });
+    if (education.length === 0) problems.education = "Add at least one qualification";
 
-    // --- section 4 ------------------------------------------------------
-    const today = moment().format("YYYY-MM-DD");
-    const expRows: Record<number, Record<string, string>> = {};
-
-    if (experience.length === 0) {
-      problems.experience = "Add at least one position, including your current role";
-    }
-
+    // 5. employment history
+    const experienceProblems: Record<number, Record<string, string>> = {};
     experience.forEach((row, index) => {
       const rowProblems: Record<string, string> = {};
-
-      if (!row.exp_job_title.trim()) rowProblems.exp_job_title = "Job position title is required";
-      if (!row.exp_company_name.trim()) {
-        rowProblems.exp_company_name = "Organization / company name is required";
+      if (!row.organization_employer.trim()) {
+        rowProblems.organization_employer = "Organization / employer is required";
       }
+      if (!row.designation.trim()) rowProblems.designation = "Designation is required";
+      if (!row.from_date) rowProblems.from_date = "From date is required";
+      else if (row.from_date > today()) rowProblems.from_date = "That date cannot be in the future";
 
-      if (!row.exp_start_date) {
-        rowProblems.exp_start_date = "Select the employment start date";
-      } else if (row.exp_start_date > today) {
-        rowProblems.exp_start_date = "Start date cannot be in the future";
-      }
-
-      if (!row.exp_is_current) {
-        if (!row.exp_end_date) {
-          rowProblems.exp_end_date = "Select the end date, or tick 'Currently in this role'";
-        } else if (row.exp_end_date > today) {
-          rowProblems.exp_end_date = "End date cannot be in the future";
-        } else if (row.exp_start_date && row.exp_end_date < row.exp_start_date) {
-          rowProblems.exp_end_date = "End date cannot be before the start date";
+      if (!row.is_current) {
+        if (!row.to_date) rowProblems.to_date = "To date is required";
+        else if (row.to_date > today()) rowProblems.to_date = "That date cannot be in the future";
+        else if (row.from_date && row.to_date < row.from_date) {
+          rowProblems.to_date = "The To date cannot be before the From date";
         }
       }
 
-      if (!row.exp_key_responsibilities.trim()) {
-        rowProblems.exp_key_responsibilities = "Key responsibilities are required";
-      } else if (row.exp_key_responsibilities.length > MAX_RESPONSIBILITIES) {
-        rowProblems.exp_key_responsibilities = `Keep this within ${MAX_RESPONSIBILITIES} characters`;
+      if (!row.key_responsibilities.trim()) {
+        rowProblems.key_responsibilities = "Key responsibilities are required";
+      } else if (row.key_responsibilities.trim().length < 10) {
+        rowProblems.key_responsibilities = "Add a little more detail";
       }
+      if (Object.keys(rowProblems).length) experienceProblems[index] = rowProblems;
+    });
+    if (experience.length === 0) {
+      problems.experience = "Add at least one post, including your current one";
+    }
 
-      if (row.exp_key_achievements.length > MAX_ACHIEVEMENTS) {
-        rowProblems.exp_key_achievements = `Keep this within ${MAX_ACHIEVEMENTS} characters`;
+    // 6. certifications - optional, but complete once a row is started
+    const certificationProblems: Record<number, Record<string, string>> = {};
+    certifications.forEach((row, index) => {
+      const started =
+        row.certification_membership.trim() ||
+        row.certifying_body.trim() ||
+        row.date_obtained ||
+        row.expiry_date ||
+        row.registration_no.trim();
+      if (!started) return;
+
+      const rowProblems: Record<string, string> = {};
+      if (!row.certification_membership.trim()) {
+        rowProblems.certification_membership = "Certification / membership is required";
       }
-
-      if (Object.keys(rowProblems).length) expRows[index] = rowProblems;
+      if (!row.certifying_body.trim()) {
+        rowProblems.certifying_body = "Certifying body is required";
+      }
+      if (row.date_obtained && row.date_obtained > today()) {
+        rowProblems.date_obtained = "That date cannot be in the future";
+      }
+      if (row.date_obtained && row.expiry_date && row.expiry_date < row.date_obtained) {
+        rowProblems.expiry_date = "Expiry cannot be before the date obtained";
+      }
+      if (Object.keys(rowProblems).length) certificationProblems[index] = rowProblems;
     });
 
-    // --- section 5 ------------------------------------------------------
-    if (technicalSkills.length === 0) {
-      problems.skills_technical_tags = "Add at least one technical skill";
-    }
-    if (form.certifications_list.length > MAX_CERTIFICATIONS) {
-      problems.certifications_list = `Keep this within ${MAX_CERTIFICATIONS} characters`;
+    // 7. trainings - same rule
+    const trainingProblems: Record<number, Record<string, string>> = {};
+    trainings.forEach((row, index) => {
+      const started =
+        row.training_title.trim() ||
+        row.training_provider.trim() ||
+        row.duration.trim() ||
+        row.date_or_year.trim();
+      if (!started) return;
+
+      const rowProblems: Record<string, string> = {};
+      if (!row.training_title.trim()) {
+        rowProblems.training_title = "Training / course title is required";
+      }
+      if (!row.training_provider.trim()) {
+        rowProblems.training_provider = "Training provider is required";
+      }
+      if (/^\d{4}$/.test(row.date_or_year.trim())) {
+        const year = Number(row.date_or_year);
+        if (year < EARLIEST_QUALIFICATION_YEAR || year > thisYear) {
+          rowProblems.date_or_year = `Year must be between ${EARLIEST_QUALIFICATION_YEAR} and ${thisYear}`;
+        }
+      }
+      if (Object.keys(rowProblems).length) trainingProblems[index] = rowProblems;
+    });
+
+    // 8. declaration
+    if (!form.declaration_accepted) {
+      problems.declaration_accepted =
+        "Read and accept the declaration and undertaking before submitting";
     }
 
-    // --- section 6 ------------------------------------------------------
-    const statement = form.application_rationale_sop.trim();
-    if (!statement) {
-      problems.application_rationale_sop = "Tell us why you are applying";
-    } else if (statement.length < MIN_SOP) {
-      problems.application_rationale_sop = `Please give a little more detail — at least ${MIN_SOP} characters`;
-    } else if (statement.length > MAX_SOP) {
-      problems.application_rationale_sop = `Keep this within ${MAX_SOP} characters`;
-    }
-    if (!form.ack_manager_notified_bool) {
-      problems.ack_manager_notified_bool = "Confirm your current manager is aware of this request";
-    }
-    if (!form.ack_data_accuracy_bool) {
-      problems.ack_data_accuracy_bool = "Confirm the details match the corporate record";
+    // 9. submission record
+    if (!form.applicant_signature.trim()) {
+      problems.applicant_signature = "Type your full name to sign the application";
+    } else if (
+      form.full_name.trim() &&
+      nameKey(form.applicant_signature) !== nameKey(form.full_name)
+    ) {
+      problems.applicant_signature = "The signature must be your full name as entered above";
     }
 
     setErrors(problems);
-    setRowErrors(rows);
-    setExpErrors(expRows);
+    setEduErrors(educationProblems);
+    setExpErrors(experienceProblems);
+    setCertErrors(certificationProblems);
+    setTrainErrors(trainingProblems);
 
-    const total =
-      Object.keys(problems).length + Object.keys(rows).length + Object.keys(expRows).length;
-    if (total > 0) {
-      toast.error("Please correct the highlighted fields");
-    }
-    return total === 0;
+    const clean =
+      Object.keys(problems).length === 0 &&
+      Object.keys(educationProblems).length === 0 &&
+      Object.keys(experienceProblems).length === 0 &&
+      Object.keys(certificationProblems).length === 0 &&
+      Object.keys(trainingProblems).length === 0;
+
+    if (!clean) toast.error("Please correct the highlighted fields");
+    return clean;
   };
 
-  // ---- submitting ------------------------------------------------------
+  // ---- submitting --------------------------------------------------------
   const submit = async () => {
     if (!validate()) return;
 
     setSubmitting(true);
+    const hasContent = (values: string[]) => values.some((value) => value.trim());
+
     try {
       const response = await axios.post("/jobs/applications/create/", {
         applicant_erp_id: user.erpid,
-        target_job_req_id: Number(form.target_job_req_id),
-        emp_full_name: form.emp_full_name.trim(),
+        target_job_req_ids: form.target_job_req_ids.map(Number),
+
         emp_id: Number(form.emp_id),
-        current_dept_code: form.current_dept_code.trim(),
-        current_job_title: form.current_job_title.trim(),
-        current_supervisor_id: form.current_supervisor_id.trim(),
-        current_supervisor_erp_id: form.current_supervisor_erp_id,
-        cnic: form.cnic,
-        contact_phone_no: form.contact_phone_no.trim(),
-        corporate_email: form.corporate_email.trim(),
-        personal_email: form.personal_email.trim() || null,
-        preferred_contact_method: form.preferred_contact_method,
-        certifications_list: form.certifications_list.trim() || null,
-        application_rationale_sop: form.application_rationale_sop.trim(),
-        ack_manager_notified_bool: form.ack_manager_notified_bool,
-        ack_data_accuracy_bool: form.ack_data_accuracy_bool,
-        skills_technical_tags: technicalSkills,
-        skills_soft_checkboxes: softSkills,
-        experience: experience.map((row, index) => ({
-          exp_job_title: row.exp_job_title.trim(),
-          exp_company_name: row.exp_company_name.trim(),
-          exp_start_date: row.exp_start_date,
-          // The toggle wins: an end date left behind by unticking and
-          // reticking it would contradict "currently in this role".
-          exp_end_date: row.exp_is_current ? null : row.exp_end_date,
-          exp_is_current: row.exp_is_current,
-          exp_key_responsibilities: row.exp_key_responsibilities.trim(),
-          exp_key_achievements: row.exp_key_achievements.trim() || null,
-          row_order: index,
+        full_name: form.full_name.trim(),
+        father_or_husband_name: form.father_or_husband_name.trim(),
+        cnic: form.cnic.trim(),
+        date_of_birth: form.date_of_birth,
+        gender: form.gender,
+        official_email: form.official_email.trim(),
+        mobile_no: form.mobile_no.trim(),
+        current_office_location: form.current_office_location.trim(),
+        emergency_contact_no: form.emergency_contact_no.trim(),
+
+        date_of_joining_ismo: form.date_of_joining_ismo,
+        current_designation: form.current_designation.trim(),
+        current_grade: form.current_grade.trim(),
+        department_function: form.department_function.trim(),
+        date_of_appointment_to_current_grade: form.date_of_appointment_to_current_grade,
+        total_service_ismo: form.total_service_ismo.trim(),
+        total_relevant_experience: form.total_relevant_experience.trim(),
+        date_of_joining_current_position: form.date_of_joining_current_position,
+
+        education: education.map((row) => ({
+          ...row,
+          year_of_completion: Number(row.year_of_completion),
         })),
-        education: education.map((row, index) => ({
-          edu_degree_title: row.edu_degree_title.trim(),
-          edu_institution_name: row.edu_institution_name.trim(),
-          edu_major_specialization: row.edu_major_specialization.trim(),
-          edu_graduation_year: Number(row.edu_graduation_year),
-          edu_grade_score: row.edu_grade_score.trim(),
-          row_order: index,
+        experience: experience.map((row) => ({
+          ...row,
+          to_date: row.is_current ? null : row.to_date || null,
         })),
+        certifications: certifications
+          .filter((row) =>
+            hasContent([
+              row.certification_membership,
+              row.certifying_body,
+              row.date_obtained,
+              row.expiry_date,
+              row.registration_no,
+            ])
+          )
+          .map((row) => ({
+            ...row,
+            date_obtained: row.date_obtained || null,
+            expiry_date: row.expiry_date || null,
+          })),
+        trainings: trainings.filter((row) =>
+          hasContent([
+            row.training_title,
+            row.training_provider,
+            row.duration,
+            row.date_or_year,
+          ])
+        ),
+
+        declaration_accepted: form.declaration_accepted,
+        applicant_signature: form.applicant_signature.trim(),
       });
 
       toast.success(response.data?.message ?? "Your application has been submitted");
-      // The identity and employment fields are pre-filled again by the reload;
-      // only what the applicant typed for this vacancy is cleared.
-      setForm((previous) => ({
-        ...previous,
-        target_job_req_id: "",
-        personal_email: "",
-        preferred_contact_method: "",
-      }));
-      setEducation([blankEducationRow()]);
-      setExperience([blankExperienceRow()]);
-      setTechnicalSkills([]);
-      setSoftSkills([]);
-      setSkillDraft("");
-      setForm((previous) => ({
-        ...previous,
-        certifications_list: "",
-        application_rationale_sop: "",
-        ack_manager_notified_bool: false,
-        ack_data_accuracy_bool: false,
-      }));
-      setErrors({});
-      setRowErrors({});
-      setExpErrors({});
-      loadApplications();
-    } catch (error: any) {
-      const returned = error?.response?.data?.errors;
-      if (returned) {
-        // The server keys its complaints the same way, so they land next to the
-        // same inputs the browser would have flagged.
-        const {
-          education_rows: returnedRows,
-          experience_rows: returnedExpRows,
-          ...fields
-        } = returned;
-        setErrors(fields as Record<string, string>);
 
-        const byIndex = (rows: unknown) => {
+      // What the applicant typed for these vacancies is cleared; their own
+      // details stay, so applying again later needs little retyping.
+      setForm((previous) => ({
+        ...previous,
+        target_job_req_ids: [],
+        declaration_accepted: false,
+        applicant_signature: "",
+      }));
+      setVacancyPickerKey((key) => key + 1);
+      setErrors({});
+      loadSubmissions();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (error: any) {
+      const returned = error?.response?.data;
+      const fields = returned?.errors;
+      if (fields) {
+        const flat: Record<string, string> = {};
+        Object.entries(fields).forEach(([key, value]) => {
+          if (typeof value === "string") flat[key] = value;
+        });
+        setErrors(flat);
+
+        const byIndex = (rows: any) => {
           const mapped: Record<number, Record<string, string>> = {};
-          Object.entries((rows ?? {}) as Record<string, Record<string, string>>).forEach(
-            ([index, problems]) => {
-              mapped[Number(index)] = problems;
-            }
-          );
+          Object.entries(rows || {}).forEach(([index, value]) => {
+            mapped[Number(index)] = value as Record<string, string>;
+          });
           return mapped;
         };
-        if (returnedRows) setRowErrors(byIndex(returnedRows));
-        if (returnedExpRows) setExpErrors(byIndex(returnedExpRows));
+        if (fields.education_rows) setEduErrors(byIndex(fields.education_rows));
+        if (fields.experience_rows) setExpErrors(byIndex(fields.experience_rows));
+        if (fields.certification_rows) setCertErrors(byIndex(fields.certification_rows));
+        if (fields.training_rows) setTrainErrors(byIndex(fields.training_rows));
+
+        const conflict = error?.response?.status === 409;
         toast.error(
-          typeof fields.target_job_req_id === "string" && error?.response?.status === 409
-            ? fields.target_job_req_id
+          conflict && typeof fields.target_job_req_ids === "string"
+            ? fields.target_job_req_ids
             : "Please correct the highlighted fields"
         );
       } else if (!error?.response) {
         toast.error("Could not reach the server. Please try again.");
       } else {
-        toast.error("Your application could not be submitted");
+        toast.error(returned?.error ?? "The application could not be submitted");
       }
     } finally {
       setSubmitting(false);
     }
   };
 
-  // ---- rendering -------------------------------------------------------
-  const autoFilled = (field: keyof FormState) =>
-    prefilled.current.has(field) ? (
-      <span className="ml-2 text-[10px] font-normal uppercase tracking-wide text-gray-400 dark:text-gray-500">
+  const autoFilled = (field: string) =>
+    prefilled.has(field) ? (
+      <span className="ml-2 align-middle text-[10px] font-medium uppercase tracking-wide text-brand-500">
         auto-filled
       </span>
     ) : null;
 
-  const requisitionOptions = requisitions.map((item) => ({
-    label: [item.title, item.department, item.location].filter(Boolean).join(" · "),
+  const vacancyOptions = requisitions.map((item) => ({
+    text: [item.title, item.reference_no || null, item.grade || null]
+      .filter(Boolean)
+      .join(" · "),
     value: String(item.id),
   }));
+
+  const showDate = (value: string | null) =>
+    value ? moment(value).format("DD MMM YYYY") : "—";
 
   return (
     <>
       <PageMeta
-        title="ISMO - Internal Job Application"
-        description="Apply for an advertised internal vacancy"
+        title="ISMO - Internal Recruitment Application"
+        description="Internal recruitment online application form"
       />
-      <PageBreadcrumb pageTitle="Internal Job Application" />
+      <PageBreadcrumb pageTitle="Internal Recruitment - Online Application Form" />
       <ToastContainer position="bottom-right" />
 
       <div className="space-y-6">
-        {profileNote && (
-          <div className="rounded-2xl border border-warning-200 bg-warning-50 px-5 py-3 text-sm text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/15 dark:text-orange-400">
-            {profileNote}
-          </div>
-        )}
+        <div className="rounded-2xl border border-gray-200 bg-white px-6 py-5 text-center dark:border-gray-800 dark:bg-white/[0.03]">
+          <h2 className="text-base font-semibold text-gray-800 dark:text-white/90">
+            INDEPENDENT SYSTEM AND MARKET OPERATOR (ISMO)
+          </h2>
+          <p className="mt-1 text-sm font-medium text-gray-700 dark:text-gray-300">
+            INTERNAL RECRUITMENT – ONLINE APPLICATION FORM
+          </p>
+          <p className="mt-1 text-xs italic text-gray-500 dark:text-gray-400">
+            For applications against internally advertised positions
+          </p>
+          {loadingProfile && (
+            <p className="mt-3 text-xs text-gray-400">Filling in your details...</p>
+          )}
+          {profileNote && (
+            <p className="mt-3 text-xs text-warning-600 dark:text-warning-400">{profileNote}</p>
+          )}
+        </div>
 
-        {/* ---------------- Section 1 ---------------- */}
-        <ComponentCard
-          title="1. Target Position & Internal Validation"
-          desc="Your details are filled in from your employee record. Correct anything that is out of date before submitting."
-        >
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="md:col-span-2">
-              <Label htmlFor="requisition-dropdown">
-                Job Requisition / Opening <span className="text-error-500">*</span>
-              </Label>
-              {requisitions.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-gray-300 px-4 py-3 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                  No vacancies are advertised at the moment. HR can add one from the admin panel.
-                </p>
-              ) : (
-                <SearchableDropdown
-                  options={requisitionOptions}
-                  placeholder="Select advertised vacancy..."
-                  id="requisition-dropdown"
-                  value={form.target_job_req_id}
-                  onChange={(value) => set("target_job_req_id", value ? String(value) : "")}
-                  error={!!errors.target_job_req_id}
-                  hint={errors.target_job_req_id}
+        {/* ------------------------- 1. vacancy information ------------------ */}
+        <ComponentCard title="" desc="">
+          <SectionBar number={1} title="Vacancy Information" />
+
+          <div>
+            <Label htmlFor="requisition-dropdown">
+              Position Title <span className="text-error-500">*</span>
+            </Label>
+            {requisitions.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-gray-300 px-4 py-3 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                No vacancies are advertised at the moment. They are added from Job
+                Openings under Internal Recruitment Portal.
+              </p>
+            ) : (
+              <div id="requisition-dropdown">
+                <MultiSelect
+                  key={`vacancies-${requisitions.length}-${vacancyPickerKey}`}
+                  label=""
+                  options={vacancyOptions}
+                  defaultSelected={form.target_job_req_ids}
+                  onChange={setVacancies}
                 />
-              )}
-            </div>
+                <FieldNote>
+                  Pick as many advertised positions as you want to apply for. The rest
+                  of this form is submitted once for each, and each one gets its own
+                  reference number and is reviewed separately.
+                </FieldNote>
+                {errors.target_job_req_ids && (
+                  <p className="mt-1 text-xs text-error-500">{errors.target_job_req_ids}</p>
+                )}
+              </div>
+            )}
+          </div>
 
+          {chosenVacancies.length > 0 && (
+            <div className="mt-4 space-y-3">
+              {chosenVacancies.map((vacancy) => (
+                <div
+                  key={vacancy.id}
+                  className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]"
+                  data-vacancy-card={vacancy.id}
+                >
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <div>
+                      <p className="text-xs text-gray-400">Position Title</p>
+                      <p className="text-sm font-medium text-gray-800 dark:text-white/90">
+                        {vacancy.title}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Advertisement / Reference No.</p>
+                      <p className="text-sm text-gray-700 dark:text-gray-300">
+                        {vacancy.reference_no || "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Grade</p>
+                      <p className="text-sm text-gray-700 dark:text-gray-300">
+                        {vacancy.grade || "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Department / Function</p>
+                      <p className="text-sm text-gray-700 dark:text-gray-300">
+                        {vacancy.department || "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Date of Advertisement</p>
+                      <p className="text-sm text-gray-700 dark:text-gray-300">
+                        {showDate(vacancy.advertisement_date)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Closing Date</p>
+                      <p className="text-sm text-gray-700 dark:text-gray-300">
+                        {showDate(vacancy.closing_date)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="emp_full_name">
-                Employee Full Name <span className="text-error-500">*</span>
-                {autoFilled("emp_full_name")}
+              <Label htmlFor="current_designation_top">
+                Current Designation <span className="text-error-500">*</span>
+                {autoFilled("current_designation")}
               </Label>
               <Input
-                id="emp_full_name"
-                placeholder="Auto-filled from your employee record"
-                value={form.emp_full_name}
-                onChange={(e) => set("emp_full_name", e.target.value)}
-                error={!!errors.emp_full_name}
-                hint={errors.emp_full_name}
+                id="current_designation_top"
+                value={form.current_designation}
+                onChange={(e) => set("current_designation", e.target.value)}
+                error={!!errors.current_designation}
+                hint={errors.current_designation}
               />
             </div>
+            <div>
+              <Label htmlFor="current_grade_top">
+                Current Grade <span className="text-error-500">*</span>
+                {autoFilled("current_grade")}
+              </Label>
+              <Input
+                id="current_grade_top"
+                placeholder="e.g., G-09"
+                value={form.current_grade}
+                onChange={(e) => set("current_grade", e.target.value)}
+                error={!!errors.current_grade}
+                hint={errors.current_grade}
+              />
+            </div>
+          </div>
+        </ComponentCard>
 
+        {/* --------------- 2. personal & contact information ---------------- */}
+        <ComponentCard title="" desc="">
+          <SectionBar number={2} title="Personal &amp; Contact Information" />
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <Label htmlFor="emp_id">
                 Employee ID <span className="text-error-500">*</span>
@@ -800,279 +1088,362 @@ export default function InternalJobApplication() {
               </Label>
               <Input
                 id="emp_id"
-                placeholder="Auto-filled numeric ID"
                 value={form.emp_id}
                 onChange={(e) => set("emp_id", e.target.value.replace(/\D/g, ""))}
                 error={!!errors.emp_id}
                 hint={errors.emp_id}
               />
             </div>
-
             <div>
-              <Label htmlFor="current_dept_code">
-                Current Department <span className="text-error-500">*</span>
-                {autoFilled("current_dept_code")}
+              <Label htmlFor="full_name">
+                Full Name <span className="text-error-500">*</span>
+                {autoFilled("full_name")}
               </Label>
               <Input
-                id="current_dept_code"
-                placeholder="Auto-filled current business unit"
-                value={form.current_dept_code}
-                onChange={(e) => set("current_dept_code", e.target.value)}
-                error={!!errors.current_dept_code}
-                hint={errors.current_dept_code}
+                id="full_name"
+                value={form.full_name}
+                onChange={(e) => set("full_name", e.target.value)}
+                error={!!errors.full_name}
+                hint={errors.full_name}
               />
             </div>
-
             <div>
-              <Label htmlFor="current_job_title">
-                Current Position Title <span className="text-error-500">*</span>
-                {autoFilled("current_job_title")}
+              <Label htmlFor="father_or_husband_name">
+                Father&apos;s / Husband&apos;s Name <span className="text-error-500">*</span>
               </Label>
               <Input
-                id="current_job_title"
-                placeholder="Auto-filled current designation"
-                value={form.current_job_title}
-                onChange={(e) => set("current_job_title", e.target.value)}
-                error={!!errors.current_job_title}
-                hint={errors.current_job_title}
+                id="father_or_husband_name"
+                value={form.father_or_husband_name}
+                onChange={(e) => set("father_or_husband_name", e.target.value)}
+                error={!!errors.father_or_husband_name}
+                hint={errors.father_or_husband_name}
               />
             </div>
-
-            <div className="md:col-span-2">
-              <Label htmlFor="current_supervisor_id">
-                Current Supervisor Name <span className="text-error-500">*</span>
-                {autoFilled("current_supervisor_id")}
-              </Label>
-              <Input
-                id="current_supervisor_id"
-                placeholder="Auto-filled reporting manager"
-                value={form.current_supervisor_id}
-                onChange={(e) => {
-                  set("current_supervisor_id", e.target.value);
-                  // Typing a different name detaches the stored ERP id: it no
-                  // longer refers to whoever is named here.
-                  setForm((previous) => ({ ...previous, current_supervisor_erp_id: null }));
-                }}
-                error={!!errors.current_supervisor_id}
-                hint={errors.current_supervisor_id}
-              />
-            </div>
-          </div>
-        </ComponentCard>
-
-        {/* ---------------- Section 2 ---------------- */}
-        <ComponentCard
-          title="2. Personal & Contact Information"
-          desc="How HR should reach you about this application, including outside internal channels."
-        >
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <Label htmlFor="cnic">
-                CNIC <span className="text-error-500">*</span>
+                CNIC No. <span className="text-error-500">*</span>
                 {autoFilled("cnic")}
               </Label>
               <Input
                 id="cnic"
                 placeholder="12345-1234567-1"
                 value={form.cnic}
-                onChange={(e) => set("cnic", formatCnic(e.target.value))}
+                onChange={(e) => set("cnic", e.target.value)}
                 error={!!errors.cnic}
                 hint={errors.cnic}
               />
             </div>
-
             <div>
-              <Label htmlFor="contact_phone_no">
-                Contact Phone Number <span className="text-error-500">*</span>
-                {autoFilled("contact_phone_no")}
+              <Label htmlFor="date_of_birth">
+                Date of Birth <span className="text-error-500">*</span>
               </Label>
               <Input
-                id="contact_phone_no"
-                type="tel"
-                placeholder="+92-3XX-XXXXXXX or equivalent"
-                value={form.contact_phone_no}
-                onChange={(e) => set("contact_phone_no", e.target.value)}
-                error={!!errors.contact_phone_no}
-                hint={errors.contact_phone_no}
+                id="date_of_birth"
+                type="date"
+                max={today()}
+                value={form.date_of_birth}
+                onChange={(e) => set("date_of_birth", e.target.value)}
+                error={!!errors.date_of_birth}
+                hint={errors.date_of_birth}
               />
             </div>
-
             <div>
-              <Label htmlFor="corporate_email">
-                Corporate Email Address <span className="text-error-500">*</span>
-                {autoFilled("corporate_email")}
-              </Label>
-              <Input
-                id="corporate_email"
-                type="email"
-                placeholder="username@company.com"
-                value={form.corporate_email}
-                onChange={(e) => set("corporate_email", e.target.value)}
-                error={!!errors.corporate_email}
-                hint={errors.corporate_email}
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="personal_email">Personal Email Address (optional)</Label>
-              <Input
-                id="personal_email"
-                type="email"
-                placeholder="alternative.email@domain.com"
-                value={form.personal_email}
-                onChange={(e) => set("personal_email", e.target.value)}
-                error={!!errors.personal_email}
-                hint={errors.personal_email}
-              />
-            </div>
-
-            <div className="md:col-span-2">
               <Label>
-                Internal Communication Channel <span className="text-error-500">*</span>
+                Gender <span className="text-error-500">*</span>
+                {autoFilled("gender")}
               </Label>
-              <div className="mt-2 flex flex-wrap items-center gap-6">
-                {CONTACT_METHODS.map((method) => (
-                  <Radio
-                    key={method}
-                    id={`contact-${method}`}
-                    name="preferred_contact_method"
-                    value={method}
-                    label={method}
-                    checked={form.preferred_contact_method === method}
-                    onChange={(value) => set("preferred_contact_method", value)}
-                  />
-                ))}
-              </div>
-              {errors.preferred_contact_method && (
-                <p className="mt-1.5 text-xs text-error-500">
-                  {errors.preferred_contact_method}
-                </p>
-              )}
+              <Select
+                options={GENDERS.map((value) => ({ label: value, value }))}
+                placeholder="Select gender"
+                value={form.gender}
+                onChange={(value) => set("gender", value)}
+                error={!!errors.gender}
+                hint={errors.gender}
+              />
+            </div>
+            <div>
+              <Label htmlFor="official_email">
+                Official Email Address <span className="text-error-500">*</span>
+                {autoFilled("official_email")}
+              </Label>
+              <Input
+                id="official_email"
+                type="email"
+                value={form.official_email}
+                onChange={(e) => set("official_email", e.target.value)}
+                error={!!errors.official_email}
+                hint={errors.official_email}
+              />
+            </div>
+            <div>
+              <Label htmlFor="mobile_no">
+                Mobile / Contact No. <span className="text-error-500">*</span>
+              </Label>
+              <Input
+                id="mobile_no"
+                placeholder="+92-300-1234567"
+                value={form.mobile_no}
+                onChange={(e) => set("mobile_no", e.target.value)}
+                error={!!errors.mobile_no}
+                hint={errors.mobile_no}
+              />
+            </div>
+            <div>
+              <Label htmlFor="current_office_location">
+                Current Office / Location <span className="text-error-500">*</span>
+                {autoFilled("current_office_location")}
+              </Label>
+              <Input
+                id="current_office_location"
+                value={form.current_office_location}
+                onChange={(e) => set("current_office_location", e.target.value)}
+                error={!!errors.current_office_location}
+                hint={errors.current_office_location}
+              />
+            </div>
+            <div>
+              <Label htmlFor="emergency_contact_no">Emergency Contact No. (optional)</Label>
+              <Input
+                id="emergency_contact_no"
+                placeholder="+92-300-1234567"
+                value={form.emergency_contact_no}
+                onChange={(e) => set("emergency_contact_no", e.target.value)}
+                error={!!errors.emergency_contact_no}
+                hint={errors.emergency_contact_no}
+              />
             </div>
           </div>
         </ComponentCard>
 
-        {/* ---------------- Section 3 ---------------- */}
-        <ComponentCard
-          title="3. Educational Background"
-          desc="List every degree or certificate, oldest first. Add a row for each one."
-        >
-          {errors.education && (
-            <p className="mb-3 text-sm text-error-500">{errors.education}</p>
-          )}
+        {/* ------------------ 3. current employment details ----------------- */}
+        <ComponentCard title="" desc="">
+          <SectionBar number={3} title="Current Employment Details" />
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <Label htmlFor="date_of_joining_ismo">
+                Date of Joining ISMO <span className="text-error-500">*</span>
+              </Label>
+              <Input
+                id="date_of_joining_ismo"
+                type="date"
+                max={today()}
+                value={form.date_of_joining_ismo}
+                onChange={(e) => set("date_of_joining_ismo", e.target.value)}
+                error={!!errors.date_of_joining_ismo}
+                hint={errors.date_of_joining_ismo}
+              />
+            </div>
+            <div>
+              <Label htmlFor="current_designation">
+                Current Designation <span className="text-error-500">*</span>
+                {autoFilled("current_designation")}
+              </Label>
+              <Input
+                id="current_designation"
+                value={form.current_designation}
+                onChange={(e) => set("current_designation", e.target.value)}
+                error={!!errors.current_designation}
+                hint={errors.current_designation}
+              />
+            </div>
+            <div>
+              <Label htmlFor="current_grade">
+                Current Grade <span className="text-error-500">*</span>
+                {autoFilled("current_grade")}
+              </Label>
+              <Input
+                id="current_grade"
+                value={form.current_grade}
+                onChange={(e) => set("current_grade", e.target.value)}
+                error={!!errors.current_grade}
+                hint={errors.current_grade}
+              />
+            </div>
+            <div>
+              <Label htmlFor="department_function">
+                Department / Function <span className="text-error-500">*</span>
+                {autoFilled("department_function")}
+              </Label>
+              <Input
+                id="department_function"
+                value={form.department_function}
+                onChange={(e) => set("department_function", e.target.value)}
+                error={!!errors.department_function}
+                hint={errors.department_function}
+              />
+            </div>
+            <div>
+              <Label htmlFor="date_of_appointment_to_current_grade">
+                Date of Appointment to Current Grade{" "}
+                <span className="text-error-500">*</span>
+              </Label>
+              <Input
+                id="date_of_appointment_to_current_grade"
+                type="date"
+                max={today()}
+                value={form.date_of_appointment_to_current_grade}
+                onChange={(e) =>
+                  set("date_of_appointment_to_current_grade", e.target.value)
+                }
+                error={!!errors.date_of_appointment_to_current_grade}
+                hint={errors.date_of_appointment_to_current_grade}
+              />
+            </div>
+            <div>
+              <Label htmlFor="total_service_ismo">
+                Total Service in ISMO <span className="text-error-500">*</span>
+              </Label>
+              <Input
+                id="total_service_ismo"
+                placeholder="e.g., 8 years 4 months"
+                value={form.total_service_ismo}
+                onChange={(e) => set("total_service_ismo", e.target.value)}
+                error={!!errors.total_service_ismo}
+                hint={errors.total_service_ismo}
+              />
+              <FieldNote>Worked out from your joining date - correct it if needed.</FieldNote>
+            </div>
+            <div>
+              <Label htmlFor="total_relevant_experience">
+                Total Relevant Experience <span className="text-error-500">*</span>
+              </Label>
+              <Input
+                id="total_relevant_experience"
+                placeholder="e.g., 12 years"
+                value={form.total_relevant_experience}
+                onChange={(e) => set("total_relevant_experience", e.target.value)}
+                error={!!errors.total_relevant_experience}
+                hint={errors.total_relevant_experience}
+              />
+            </div>
+            <div>
+              <Label htmlFor="date_of_joining_current_position">
+                Date of Joining Current Position <span className="text-error-500">*</span>
+              </Label>
+              <Input
+                id="date_of_joining_current_position"
+                type="date"
+                max={today()}
+                value={form.date_of_joining_current_position}
+                onChange={(e) => set("date_of_joining_current_position", e.target.value)}
+                error={!!errors.date_of_joining_current_position}
+                hint={errors.date_of_joining_current_position}
+              />
+            </div>
+          </div>
+        </ComponentCard>
+
+        {/* ------------------- 4. educational background -------------------- */}
+        <ComponentCard title="" desc="">
+          <SectionBar number={4} title="Educational Background" />
 
           <div className="space-y-4">
             {education.map((row, index) => {
-              const rowProblems = rowErrors[index] ?? {};
-              const usingCustomDegree =
-                row.degree_is_custom ||
-                (!!row.edu_degree_title && !DEGREE_OPTIONS.includes(row.edu_degree_title));
-
+              const rowProblems = eduErrors[index] || {};
               return (
                 <div
                   key={index}
-                  className="rounded-2xl border border-gray-200 p-4 dark:border-gray-800"
+                  className="rounded-lg border border-gray-200 p-4 dark:border-gray-800"
+                  data-education-row={index}
                 >
-                  <div className="mb-3 flex items-center justify-between">
-                    <Badge color="light" size="sm">
-                      Qualification {index + 1}
-                    </Badge>
-                    <button
-                      type="button"
-                      onClick={() => removeRow(index)}
-                      className="text-xs font-medium text-error-500 hover:text-error-600"
-                    >
-                      Remove
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <RowHeader
+                    label={`Qualification ${index + 1}`}
+                    removable={education.length > 1}
+                    onRemove={() =>
+                      removeAt(education, index, setEducation, () => setEduErrors({}))
+                    }
+                  />
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                     <div>
-                      <Label>
-                        Degree / Certificate Earned <span className="text-error-500">*</span>
-                      </Label>
-                      <Select
-                        options={[
-                          ...DEGREE_OPTIONS.map((degree) => ({ label: degree, value: degree })),
-                          { label: "Other (type it in)", value: DEGREE_OTHER },
-                        ]}
-                        placeholder="e.g., Bachelor of Science, MBA, PMP"
-                        value={usingCustomDegree ? DEGREE_OTHER : row.edu_degree_title}
-                        onChange={(value) => {
-                          if (value === DEGREE_OTHER) {
-                            setRow(index, "degree_is_custom", true);
-                            setRow(index, "edu_degree_title", "");
-                          } else {
-                            setRow(index, "degree_is_custom", false);
-                            setRow(index, "edu_degree_title", value);
-                          }
-                        }}
-                        error={!!rowProblems.edu_degree_title}
-                        hint={usingCustomDegree ? undefined : rowProblems.edu_degree_title}
-                      />
-                      {usingCustomDegree && (
-                        <div className="mt-2">
-                          <Input
-                            placeholder="Type the degree or certificate"
-                            value={row.edu_degree_title}
-                            onChange={(e) => setRow(index, "edu_degree_title", e.target.value)}
-                            error={!!rowProblems.edu_degree_title}
-                            hint={rowProblems.edu_degree_title}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    <div>
-                      <Label>
-                        Institution / University Name <span className="text-error-500">*</span>
+                      <Label htmlFor={`edu-${index}-degree`}>
+                        Degree / Qualification <span className="text-error-500">*</span>
                       </Label>
                       <Input
-                        placeholder="Enter name of school/university"
-                        value={row.edu_institution_name}
-                        onChange={(e) => setRow(index, "edu_institution_name", e.target.value)}
-                        error={!!rowProblems.edu_institution_name}
-                        hint={rowProblems.edu_institution_name}
+                        id={`edu-${index}-degree`}
+                        placeholder="e.g., BSc Electrical Engineering"
+                        value={row.degree_qualification}
+                        onChange={(e) =>
+                          editEducation(index, "degree_qualification", e.target.value)
+                        }
+                        error={!!rowProblems.degree_qualification}
+                        hint={rowProblems.degree_qualification}
                       />
                     </div>
-
                     <div>
-                      <Label>
+                      <Label htmlFor={`edu-${index}-major`}>
                         Major / Field of Study <span className="text-error-500">*</span>
                       </Label>
                       <Input
-                        placeholder="e.g., Computer Science, Finance, HR Management"
-                        value={row.edu_major_specialization}
-                        onChange={(e) => setRow(index, "edu_major_specialization", e.target.value)}
-                        error={!!rowProblems.edu_major_specialization}
-                        hint={rowProblems.edu_major_specialization}
+                        id={`edu-${index}-major`}
+                        placeholder="e.g., Power Systems"
+                        value={row.major_field_of_study}
+                        onChange={(e) =>
+                          editEducation(index, "major_field_of_study", e.target.value)
+                        }
+                        error={!!rowProblems.major_field_of_study}
+                        hint={rowProblems.major_field_of_study}
                       />
                     </div>
-
                     <div>
-                      <Label>
-                        Graduation Year <span className="text-error-500">*</span>
-                      </Label>
-                      <Select
-                        options={years.map((year) => ({ label: year, value: year }))}
-                        placeholder="Select Year of Completion"
-                        value={row.edu_graduation_year}
-                        onChange={(value) => setRow(index, "edu_graduation_year", value)}
-                        error={!!rowProblems.edu_graduation_year}
-                        hint={rowProblems.edu_graduation_year}
-                      />
-                    </div>
-
-                    <div>
-                      <Label>
-                        CGPA / Percentage / Grade <span className="text-error-500">*</span>
+                      <Label htmlFor={`edu-${index}-institution`}>
+                        Institution / University <span className="text-error-500">*</span>
                       </Label>
                       <Input
-                        placeholder="e.g., 3.8 / 4.0 or Grade A"
-                        value={row.edu_grade_score}
-                        onChange={(e) => setRow(index, "edu_grade_score", e.target.value)}
-                        error={!!rowProblems.edu_grade_score}
-                        hint={rowProblems.edu_grade_score}
+                        id={`edu-${index}-institution`}
+                        placeholder="e.g., UET Lahore"
+                        value={row.institution_university}
+                        onChange={(e) =>
+                          editEducation(index, "institution_university", e.target.value)
+                        }
+                        error={!!rowProblems.institution_university}
+                        hint={rowProblems.institution_university}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`edu-${index}-country`}>
+                        Country <span className="text-error-500">*</span>
+                      </Label>
+                      <Input
+                        id={`edu-${index}-country`}
+                        value={row.country}
+                        onChange={(e) => editEducation(index, "country", e.target.value)}
+                        error={!!rowProblems.country}
+                        hint={rowProblems.country}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`edu-${index}-year`}>
+                        Year of Completion <span className="text-error-500">*</span>
+                      </Label>
+                      <Input
+                        id={`edu-${index}-year`}
+                        placeholder="e.g., 2014"
+                        value={row.year_of_completion}
+                        onChange={(e) =>
+                          editEducation(
+                            index,
+                            "year_of_completion",
+                            e.target.value.replace(/\D/g, "").slice(0, 4)
+                          )
+                        }
+                        error={!!rowProblems.year_of_completion}
+                        hint={rowProblems.year_of_completion}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`edu-${index}-grade`}>
+                        CGPA / Division <span className="text-error-500">*</span>
+                      </Label>
+                      <Input
+                        id={`edu-${index}-grade`}
+                        placeholder="e.g., 3.6 or First Division"
+                        value={row.cgpa_division}
+                        onChange={(e) =>
+                          editEducation(index, "cgpa_division", e.target.value)
+                        }
+                        error={!!rowProblems.cgpa_division}
+                        hint={rowProblems.cgpa_division}
                       />
                     </div>
                   </div>
@@ -1082,161 +1453,154 @@ export default function InternalJobApplication() {
           </div>
 
           <div className="mt-4 flex items-center justify-between">
-            <Button size="sm" variant="outline" onClick={addRow}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setEducation((rows) => [...rows, blankEducationRow()])}
+              disabled={education.length >= MAX_EDUCATION_ROWS}
+            >
               + Add another qualification
             </Button>
-            <span className="text-xs text-gray-400 dark:text-gray-500">
+            <span className="text-xs text-gray-400">
               {education.length} of {MAX_EDUCATION_ROWS}
             </span>
           </div>
+          {errors.education && (
+            <p className="mt-2 text-xs text-error-500">{errors.education}</p>
+          )}
         </ComponentCard>
 
-        {/* ---------------- Section 4 ---------------- */}
-        <ComponentCard
-          title="4. Professional Experience"
-          desc="Every post you have held — outside the organisation and internal promotions alike. Your current role starts filled in."
-        >
-          {errors.experience && (
-            <p className="mb-3 text-sm text-error-500">{errors.experience}</p>
-          )}
+        {/* ----------- 5. employment history / professional experience ------ */}
+        <ComponentCard title="" desc="">
+          <SectionBar number={5} title="Employment History / Professional Experience" />
 
           <div className="space-y-4">
             {experience.map((row, index) => {
-              const problems = expErrors[index] ?? {};
+              const rowProblems = expErrors[index] || {};
               return (
                 <div
                   key={index}
-                  className="rounded-2xl border border-gray-200 p-4 dark:border-gray-800"
+                  className="rounded-lg border border-gray-200 p-4 dark:border-gray-800"
+                  data-experience-row={index}
                 >
-                  <div className="mb-3 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Badge color="light" size="sm">
-                        Position {index + 1}
-                      </Badge>
-                      {index === 0 && prefilledExperience.current && (
-                        <span className="text-[10px] font-normal uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                          auto-filled — your current role
-                        </span>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removeExpRow(index)}
-                      className="text-xs font-medium text-error-500 hover:text-error-600"
-                    >
-                      Remove
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <RowHeader
+                    label={`Position ${index + 1}`}
+                    removable={experience.length > 1}
+                    onRemove={() =>
+                      removeAt(experience, index, setExperience, () => setExpErrors({}))
+                    }
+                  />
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                     <div>
-                      <Label>
-                        Job Position Title <span className="text-error-500">*</span>
+                      <Label htmlFor={`exp-${index}-employer`}>
+                        Organization / Employer <span className="text-error-500">*</span>
                       </Label>
                       <Input
-                        placeholder="e.g., Senior Software Engineer, Assistant Manager"
-                        value={row.exp_job_title}
-                        onChange={(e) => setExpRow(index, "exp_job_title", e.target.value)}
-                        error={!!problems.exp_job_title}
-                        hint={problems.exp_job_title}
+                        id={`exp-${index}-employer`}
+                        value={row.organization_employer}
+                        onChange={(e) =>
+                          editExperience(index, "organization_employer", e.target.value)
+                        }
+                        error={!!rowProblems.organization_employer}
+                        hint={rowProblems.organization_employer}
                       />
                     </div>
-
                     <div>
-                      <Label>
-                        Organization / Company Name <span className="text-error-500">*</span>
+                      <Label htmlFor={`exp-${index}-designation`}>
+                        Designation <span className="text-error-500">*</span>
                       </Label>
                       <Input
-                        placeholder="Enter employer name or internal subsidiary"
-                        value={row.exp_company_name}
-                        onChange={(e) => setExpRow(index, "exp_company_name", e.target.value)}
-                        error={!!problems.exp_company_name}
-                        hint={problems.exp_company_name}
+                        id={`exp-${index}-designation`}
+                        value={row.designation}
+                        onChange={(e) => editExperience(index, "designation", e.target.value)}
+                        error={!!rowProblems.designation}
+                        hint={rowProblems.designation}
                       />
                     </div>
-
                     <div>
-                      <Label>
-                        Employment Start Date <span className="text-error-500">*</span>
+                      <Label htmlFor={`exp-${index}-grade`}>Grade (if applicable)</Label>
+                      <Input
+                        id={`exp-${index}-grade`}
+                        placeholder="e.g., G-08"
+                        value={row.grade}
+                        onChange={(e) => editExperience(index, "grade", e.target.value)}
+                        error={!!rowProblems.grade}
+                        hint={rowProblems.grade}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`exp-${index}-from`}>
+                        From <span className="text-error-500">*</span>
                       </Label>
                       <Input
+                        id={`exp-${index}-from`}
                         type="date"
-                        max={moment().format("YYYY-MM-DD")}
-                        value={row.exp_start_date}
-                        onChange={(e) => setExpRow(index, "exp_start_date", e.target.value)}
-                        error={!!problems.exp_start_date}
-                        hint={problems.exp_start_date}
+                        max={today()}
+                        value={row.from_date}
+                        onChange={(e) => editExperience(index, "from_date", e.target.value)}
+                        error={!!rowProblems.from_date}
+                        hint={rowProblems.from_date}
                       />
                     </div>
-
                     <div>
-                      <Label>
-                        Employment End Date{" "}
-                        {!row.exp_is_current && <span className="text-error-500">*</span>}
+                      <Label htmlFor={`exp-${index}-to`}>
+                        To{" "}
+                        {!row.is_current && <span className="text-error-500">*</span>}
                       </Label>
                       <Input
+                        id={`exp-${index}-to`}
                         type="date"
-                        max={moment().format("YYYY-MM-DD")}
-                        min={row.exp_start_date || undefined}
-                        value={row.exp_is_current ? "" : row.exp_end_date}
-                        disabled={row.exp_is_current}
-                        onChange={(e) => setExpRow(index, "exp_end_date", e.target.value)}
-                        error={!!problems.exp_end_date}
-                        hint={problems.exp_end_date}
+                        max={today()}
+                        value={row.to_date}
+                        disabled={row.is_current}
+                        onChange={(e) => editExperience(index, "to_date", e.target.value)}
+                        error={!!rowProblems.to_date}
+                        hint={rowProblems.to_date}
                       />
                       <div className="mt-2">
                         <Checkbox
-                          id={`exp-current-${index}`}
-                          label="Currently in this role"
-                          checked={row.exp_is_current}
-                          onChange={(checked) => {
-                            setExpRow(index, "exp_is_current", checked);
-                            // Clearing the date keeps the two from disagreeing.
-                            if (checked) setExpRow(index, "exp_end_date", "");
-                          }}
+                          id={`exp-${index}-current`}
+                          label="Currently in this position"
+                          checked={row.is_current}
+                          onChange={(checked) =>
+                            editExperience(index, "is_current", checked)
+                          }
                         />
                       </div>
                     </div>
-
-                    <div className="md:col-span-2">
-                      <Label>
-                        Key Responsibilities & Roles <span className="text-error-500">*</span>
+                    <div>
+                      <Label htmlFor={`exp-${index}-duration`}>Duration</Label>
+                      <Input
+                        id={`exp-${index}-duration`}
+                        placeholder="e.g., 5 years 2 months"
+                        value={row.duration}
+                        onChange={(e) => editExperience(index, "duration", e.target.value)}
+                      />
+                      <FieldNote>Worked out from the dates above.</FieldNote>
+                    </div>
+                    <div className="md:col-span-3">
+                      <Label htmlFor={`exp-${index}-responsibilities`}>
+                        Key Responsibilities / Relevant Experience{" "}
+                        <span className="text-error-500">*</span>
                       </Label>
                       <TextArea
+                        id={`exp-${index}-responsibilities`}
                         rows={3}
-                        placeholder="Summarize core day-to-day functional mandates..."
-                        value={row.exp_key_responsibilities}
+                        placeholder="What the post covered, and the parts relevant to the position applied for..."
+                        value={row.key_responsibilities}
                         onChange={(value) =>
-                          setExpRow(
+                          editExperience(
                             index,
-                            "exp_key_responsibilities",
+                            "key_responsibilities",
                             value.slice(0, MAX_RESPONSIBILITIES)
                           )
                         }
-                        error={!!problems.exp_key_responsibilities}
-                        hint={problems.exp_key_responsibilities}
+                        error={!!rowProblems.key_responsibilities}
+                        hint={rowProblems.key_responsibilities}
                       />
                       <Counter
-                        used={row.exp_key_responsibilities.length}
+                        value={row.key_responsibilities.length}
                         limit={MAX_RESPONSIBILITIES}
-                      />
-                    </div>
-
-                    <div className="md:col-span-2">
-                      <Label>Key Achievements & Projects (optional)</Label>
-                      <TextArea
-                        rows={3}
-                        placeholder="List quantifiable achievements (e.g., 'Boosted efficiency by 20%')"
-                        value={row.exp_key_achievements}
-                        onChange={(value) =>
-                          setExpRow(index, "exp_key_achievements", value.slice(0, MAX_ACHIEVEMENTS))
-                        }
-                        error={!!problems.exp_key_achievements}
-                        hint={problems.exp_key_achievements}
-                      />
-                      <Counter
-                        used={row.exp_key_achievements.length}
-                        limit={MAX_ACHIEVEMENTS}
                       />
                     </div>
                   </div>
@@ -1246,238 +1610,371 @@ export default function InternalJobApplication() {
           </div>
 
           <div className="mt-4 flex items-center justify-between">
-            <Button size="sm" variant="outline" onClick={addExpRow}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setExperience((rows) => [...rows, blankExperienceRow()])}
+              disabled={experience.length >= MAX_EXPERIENCE_ROWS}
+            >
               + Add another position
             </Button>
-            <span className="text-xs text-gray-400 dark:text-gray-500">
+            <span className="text-xs text-gray-400">
               {experience.length} of {MAX_EXPERIENCE_ROWS}
+            </span>
+          </div>
+          {errors.experience && (
+            <p className="mt-2 text-xs text-error-500">{errors.experience}</p>
+          )}
+        </ComponentCard>
+
+        {/* ------- 6. professional certifications / memberships ------------- */}
+        <ComponentCard title="" desc="">
+          <SectionBar number={6} title="Professional Certifications / Memberships" />
+          <p className="-mt-2 mb-4 text-xs text-gray-500 dark:text-gray-400">
+            Leave blank if you have none. Once a row is started, the certification and
+            the body that issued it are both needed.
+          </p>
+
+          <div className="space-y-4">
+            {certifications.map((row, index) => {
+              const rowProblems = certErrors[index] || {};
+              return (
+                <div
+                  key={index}
+                  className="rounded-lg border border-gray-200 p-4 dark:border-gray-800"
+                  data-certification-row={index}
+                >
+                  <RowHeader
+                    label={`Certification ${index + 1}`}
+                    removable={certifications.length > 1}
+                    onRemove={() =>
+                      removeAt(certifications, index, setCertifications, () =>
+                        setCertErrors({})
+                      )
+                    }
+                  />
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                      <Label htmlFor={`cert-${index}-name`}>Certification / Membership</Label>
+                      <Input
+                        id={`cert-${index}-name`}
+                        placeholder="e.g., PMP"
+                        value={row.certification_membership}
+                        onChange={(e) =>
+                          editCertification(index, "certification_membership", e.target.value)
+                        }
+                        error={!!rowProblems.certification_membership}
+                        hint={rowProblems.certification_membership}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`cert-${index}-body`}>
+                        Certifying / Professional Body
+                      </Label>
+                      <Input
+                        id={`cert-${index}-body`}
+                        placeholder="e.g., Pakistan Engineering Council"
+                        value={row.certifying_body}
+                        onChange={(e) =>
+                          editCertification(index, "certifying_body", e.target.value)
+                        }
+                        error={!!rowProblems.certifying_body}
+                        hint={rowProblems.certifying_body}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`cert-${index}-registration`}>
+                        Registration / Membership No.
+                      </Label>
+                      <Input
+                        id={`cert-${index}-registration`}
+                        value={row.registration_no}
+                        onChange={(e) =>
+                          editCertification(index, "registration_no", e.target.value)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`cert-${index}-obtained`}>Date Obtained</Label>
+                      <Input
+                        id={`cert-${index}-obtained`}
+                        type="date"
+                        max={today()}
+                        value={row.date_obtained}
+                        onChange={(e) =>
+                          editCertification(index, "date_obtained", e.target.value)
+                        }
+                        error={!!rowProblems.date_obtained}
+                        hint={rowProblems.date_obtained}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`cert-${index}-expiry`}>
+                        Expiry Date (if applicable)
+                      </Label>
+                      <Input
+                        id={`cert-${index}-expiry`}
+                        type="date"
+                        value={row.expiry_date}
+                        onChange={(e) =>
+                          editCertification(index, "expiry_date", e.target.value)
+                        }
+                        error={!!rowProblems.expiry_date}
+                        hint={rowProblems.expiry_date}
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 flex items-center justify-between">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                setCertifications((rows) => [...rows, blankCertificationRow()])
+              }
+              disabled={certifications.length >= MAX_CERTIFICATION_ROWS}
+            >
+              + Add another certification
+            </Button>
+            <span className="text-xs text-gray-400">
+              {certifications.length} of {MAX_CERTIFICATION_ROWS}
             </span>
           </div>
         </ComponentCard>
 
-        {/* ---------------- Section 5 ---------------- */}
-        <ComponentCard
-          title="5. Skills Matrix & Professional Certifications"
-          desc="Keywords here are what reviewers filter on, so be specific."
-        >
-          <div className="space-y-5">
-            <div>
-              <Label htmlFor="skill-input">
-                Core Technical Skills <span className="text-error-500">*</span>
-              </Label>
-              <div
-                className={`rounded-lg border px-3 py-2.5 ${
-                  errors.skills_technical_tags
-                    ? "border-error-500"
-                    : "border-gray-300 dark:border-gray-700"
-                }`}
-              >
-                {technicalSkills.length > 0 && (
-                  <div className="mb-2 flex flex-wrap gap-2">
-                    {technicalSkills.map((skill) => (
-                      <span
-                        key={skill}
-                        className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-600 dark:bg-brand-500/15 dark:text-brand-300"
-                      >
-                        {skill}
-                        <button
-                          type="button"
-                          aria-label={`Remove ${skill}`}
-                          onClick={() =>
-                            setTechnicalSkills((previous) =>
-                              previous.filter((item) => item !== skill)
-                            )
-                          }
-                          className="text-brand-400 hover:text-error-500"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <input
-                  id="skill-input"
-                  type="text"
-                  value={skillDraft}
-                  placeholder="Type and press Enter (e.g., Python, SAP, Agile)"
-                  className="w-full bg-transparent text-sm text-gray-800 outline-none placeholder:text-gray-400 dark:text-white/90"
-                  onChange={(e) => setSkillDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    // Enter or comma commits a tag; backspace on an empty box
-                    // removes the last one, as tag inputs usually behave.
-                    if (e.key === "Enter" || e.key === ",") {
-                      e.preventDefault();
-                      commitSkill();
-                    } else if (e.key === "Backspace" && !skillDraft && technicalSkills.length) {
-                      setTechnicalSkills((previous) => previous.slice(0, -1));
+        {/* --------- 7. trainings & professional development ---------------- */}
+        <ComponentCard title="" desc="">
+          <SectionBar number={7} title="Trainings &amp; Professional Development" />
+          <p className="-mt-2 mb-4 text-xs text-gray-500 dark:text-gray-400">
+            Leave blank if you have none to declare.
+          </p>
+
+          <div className="space-y-4">
+            {trainings.map((row, index) => {
+              const rowProblems = trainErrors[index] || {};
+              return (
+                <div
+                  key={index}
+                  className="rounded-lg border border-gray-200 p-4 dark:border-gray-800"
+                  data-training-row={index}
+                >
+                  <RowHeader
+                    label={`Training ${index + 1}`}
+                    removable={trainings.length > 1}
+                    onRemove={() =>
+                      removeAt(trainings, index, setTrainings, () => setTrainErrors({}))
                     }
-                  }}
-                  onBlur={commitSkill}
-                />
-              </div>
-              <div className="mt-1.5 flex items-center justify-between">
-                <span className="text-xs text-error-500">
-                  {errors.skills_technical_tags ?? ""}
-                </span>
-                <span className="text-xs text-gray-400 dark:text-gray-500">
-                  {technicalSkills.length} of {MAX_TECHNICAL_SKILLS}
-                </span>
-              </div>
-            </div>
-
-            <div>
-              <Label>Soft Skills / Leadership Capabilities</Label>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {SOFT_SKILL_OPTIONS.map((skill) => (
-                  <Checkbox
-                    key={skill}
-                    id={`soft-${skill}`}
-                    label={skill}
-                    checked={softSkills.includes(skill)}
-                    onChange={() => toggleSoftSkill(skill)}
                   />
-                ))}
-              </div>
-            </div>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                    <div>
+                      <Label htmlFor={`train-${index}-title`}>Training / Course Title</Label>
+                      <Input
+                        id={`train-${index}-title`}
+                        placeholder="e.g., Grid Code Compliance"
+                        value={row.training_title}
+                        onChange={(e) => editTraining(index, "training_title", e.target.value)}
+                        error={!!rowProblems.training_title}
+                        hint={rowProblems.training_title}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`train-${index}-provider`}>
+                        Training Provider / Institute
+                      </Label>
+                      <Input
+                        id={`train-${index}-provider`}
+                        placeholder="e.g., NPCC"
+                        value={row.training_provider}
+                        onChange={(e) =>
+                          editTraining(index, "training_provider", e.target.value)
+                        }
+                        error={!!rowProblems.training_provider}
+                        hint={rowProblems.training_provider}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`train-${index}-duration`}>Duration</Label>
+                      <Input
+                        id={`train-${index}-duration`}
+                        placeholder="e.g., 2 weeks"
+                        value={row.duration}
+                        onChange={(e) => editTraining(index, "duration", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`train-${index}-when`}>Date / Year</Label>
+                      <Input
+                        id={`train-${index}-when`}
+                        placeholder="e.g., 2023"
+                        value={row.date_or_year}
+                        onChange={(e) => editTraining(index, "date_or_year", e.target.value)}
+                        error={!!rowProblems.date_or_year}
+                        hint={rowProblems.date_or_year}
+                      />
+                    </div>
+                    <div className="md:col-span-4">
+                      <Checkbox
+                        id={`train-${index}-relevant`}
+                        label="Relevant to the position applied for"
+                        checked={row.relevant_to_position}
+                        onChange={(checked) =>
+                          editTraining(index, "relevant_to_position", checked)
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
 
-            <div>
-              <Label htmlFor="certifications_list">Active Professional Certifications</Label>
-              <TextArea
-                rows={3}
-                placeholder="List dynamic credentials (e.g., AWS Architect, ACCA, Six Sigma)"
-                value={form.certifications_list}
-                onChange={(value) =>
-                  set("certifications_list", value.slice(0, MAX_CERTIFICATIONS))
-                }
-                error={!!errors.certifications_list}
-                hint={errors.certifications_list}
-              />
-              <Counter used={form.certifications_list.length} limit={MAX_CERTIFICATIONS} />
-            </div>
+          <div className="mt-4 flex items-center justify-between">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setTrainings((rows) => [...rows, blankTrainingRow()])}
+              disabled={trainings.length >= MAX_TRAINING_ROWS}
+            >
+              + Add another training
+            </Button>
+            <span className="text-xs text-gray-400">
+              {trainings.length} of {MAX_TRAINING_ROWS}
+            </span>
           </div>
         </ComponentCard>
 
-        {/* ---------------- Section 6 ---------------- */}
-        <ComponentCard
-          title="6. Statement of Purpose & Acknowledgement"
-          desc="The last step before your application reaches the HR queue."
-        >
-          <div className="space-y-5">
+        {/* ------------------ 8. declaration & undertaking ------------------ */}
+        <ComponentCard title="" desc="">
+          <SectionBar number={8} title="Declaration &amp; Undertaking" />
+
+          <div className="space-y-3 text-sm leading-relaxed text-gray-700 dark:text-gray-300">
+            {declaration.length > 0 ? (
+              declaration.map((paragraph, index) => <p key={index}>{paragraph}</p>)
+            ) : (
+              <p className="text-xs text-gray-400">
+                The declaration could not be loaded from the server. Reload the page
+                before submitting.
+              </p>
+            )}
+          </div>
+
+          <div className="mt-4 rounded-lg border border-gray-200 p-4 dark:border-gray-800">
+            <Checkbox
+              id="declaration_accepted"
+              label="I have read, understood and accept the declaration and undertaking above"
+              checked={form.declaration_accepted}
+              onChange={(checked) => set("declaration_accepted", checked)}
+            />
+            {errors.declaration_accepted && (
+              <p className="mt-2 text-xs text-error-500">{errors.declaration_accepted}</p>
+            )}
+          </div>
+        </ComponentCard>
+
+        {/* ---------------------- 9. submission record ---------------------- */}
+        <ComponentCard title="" desc="">
+          <SectionBar number={9} title="Submission Record" />
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="application_rationale_sop">
-                Why are you applying for this position?{" "}
+              <Label>Applicant Name</Label>
+              <Input value={form.full_name} disabled />
+              <FieldNote>Taken from section 2.</FieldNote>
+            </div>
+            <div>
+              <Label>Employee ID</Label>
+              <Input value={form.emp_id} disabled />
+            </div>
+            <div>
+              <Label>Date of Submission</Label>
+              <Input value={moment().format("DD MMM YYYY")} disabled />
+            </div>
+            <div>
+              <Label>Application Reference No.</Label>
+              <Input value="Issued when you submit" disabled />
+              <FieldNote>
+                One reference number per position applied for, shown after submitting.
+              </FieldNote>
+            </div>
+            <div>
+              <Label htmlFor="applicant_signature">
+                Applicant&apos;s Electronic Signature / Confirmation{" "}
                 <span className="text-error-500">*</span>
               </Label>
-              <TextArea
-                rows={6}
-                placeholder="Provide detailed reasoning and business alignment rationale..."
-                value={form.application_rationale_sop}
-                onChange={(value) =>
-                  set("application_rationale_sop", value.slice(0, MAX_SOP))
-                }
-                error={!!errors.application_rationale_sop}
-                hint={errors.application_rationale_sop}
+              <Input
+                id="applicant_signature"
+                placeholder="Type your full name exactly as in section 2"
+                value={form.applicant_signature}
+                onChange={(e) => set("applicant_signature", e.target.value)}
+                error={!!errors.applicant_signature}
+                hint={errors.applicant_signature}
               />
-              <Counter used={form.application_rationale_sop.length} limit={MAX_SOP} />
             </div>
-
-            <div className="space-y-3 rounded-2xl bg-gray-50 p-4 dark:bg-white/[0.03]">
-              <div>
-                <Checkbox
-                  id="ack_manager_notified_bool"
-                  label="I certify that my current manager is aware of this transfer request"
-                  checked={form.ack_manager_notified_bool}
-                  onChange={(checked) => {
-                    setForm((previous) => ({
-                      ...previous,
-                      ack_manager_notified_bool: checked,
-                    }));
-                    setErrors((previous) => {
-                      if (!previous.ack_manager_notified_bool) return previous;
-                      const next = { ...previous };
-                      delete next.ack_manager_notified_bool;
-                      return next;
-                    });
-                  }}
-                />
-                {errors.ack_manager_notified_bool && (
-                  <p className="mt-1 text-xs text-error-500">
-                    {errors.ack_manager_notified_bool}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <Checkbox
-                  id="ack_data_accuracy_bool"
-                  label="I confirm all provided data details match official corporate record"
-                  checked={form.ack_data_accuracy_bool}
-                  onChange={(checked) => {
-                    setForm((previous) => ({
-                      ...previous,
-                      ack_data_accuracy_bool: checked,
-                    }));
-                    setErrors((previous) => {
-                      if (!previous.ack_data_accuracy_bool) return previous;
-                      const next = { ...previous };
-                      delete next.ack_data_accuracy_bool;
-                      return next;
-                    });
-                  }}
-                />
-                {errors.ack_data_accuracy_bool && (
-                  <p className="mt-1 text-xs text-error-500">
-                    {errors.ack_data_accuracy_bool}
-                  </p>
-                )}
-              </div>
+            <div>
+              <Label>HR Verification Status</Label>
+              <Input value="Pending verification" disabled />
             </div>
+          </div>
+
+          {submissionNote && (
+            <p className="mt-4 text-center text-xs italic text-gray-500 dark:text-gray-400">
+              Note: {submissionNote}
+            </p>
+          )}
+
+          <div className="mt-6 flex justify-center">
+            <Button
+              size="md"
+              variant="primary"
+              onClick={submit}
+              disabled={submitting || requisitions.length === 0}
+              className="min-w-60"
+            >
+              {submitting ? "Submitting..." : "Submit Application"}
+            </Button>
           </div>
         </ComponentCard>
 
-        <div className="flex justify-center">
-          <Button
-            size="md"
-            variant="primary"
-            className="w-full md:w-1/3"
-            onClick={submit}
-            disabled={submitting || loadingProfile || requisitions.length === 0}
+        {/* ------------------------- what has been filed -------------------- */}
+        {submissions.length > 0 && (
+          <ComponentCard
+            title="My Applications"
+            desc="Everything you have submitted, newest first."
           >
-            {submitting ? "Submitting..." : "Submit Application"}
-          </Button>
-        </div>
-
-        {applications.length > 0 && (
-          <ComponentCard title="My Applications">
             <div className="max-w-full overflow-x-auto custom-scrollbar">
               <table className="min-w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 text-xs uppercase text-gray-500 dark:border-gray-800 dark:text-gray-400">
-                    <th className="py-2 pr-4 font-medium">Vacancy</th>
-                    <th className="py-2 pr-4 font-medium">Qualifications</th>
-                    <th className="py-2 pr-4 font-medium">Positions</th>
-                    <th className="py-2 pr-4 font-medium">Skills</th>
-                    <th className="py-2 pr-4 font-medium">Status</th>
+                    <th className="py-2 pr-4 font-medium">Reference No.</th>
+                    <th className="py-2 pr-4 font-medium">Position</th>
                     <th className="py-2 pr-4 font-medium">Submitted</th>
+                    <th className="py-2 pr-4 font-medium">Sections</th>
+                    <th className="py-2 pr-4 font-medium">HR Verification</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                  {applications.map((application) => (
-                    <tr key={application.id} className="text-gray-700 dark:text-gray-300">
+                  {submissions.map((row) => (
+                    <tr key={row.id} className="text-gray-700 dark:text-gray-300">
                       <td className="py-2.5 pr-4 font-medium text-gray-800 dark:text-white/90">
-                        {application.vacancy}
+                        {row.reference_no || `#${row.id}`}
                       </td>
-                      <td className="py-2.5 pr-4">{application.education_count}</td>
-                      <td className="py-2.5 pr-4">{application.experience_count ?? "—"}</td>
-                      <td className="py-2.5 pr-4">{application.skill_count ?? "—"}</td>
+                      <td className="py-2.5 pr-4">{row.vacancy}</td>
                       <td className="py-2.5 pr-4">
-                        <Badge color="success" size="sm">
-                          {application.status}
+                        {moment(row.created_at).format("DD MMM YYYY, HH:mm")}
+                      </td>
+                      <td className="py-2.5 pr-4 text-xs text-gray-500 dark:text-gray-400">
+                        {row.education_count} qualification(s) · {row.experience_count} post(s)
+                        · {row.certification_count} certification(s) · {row.training_count}{" "}
+                        training(s)
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        <Badge size="sm" color="light">
+                          {row.hr_verification_status}
                         </Badge>
-                      </td>
-                      <td className="py-2.5 pr-4">
-                        {moment(application.created_at).format("DD MMM YYYY, HH:mm")}
                       </td>
                     </tr>
                   ))}

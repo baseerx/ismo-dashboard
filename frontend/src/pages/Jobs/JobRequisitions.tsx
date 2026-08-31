@@ -14,16 +14,22 @@ import moment from "moment";
 
 /** Kept in step with jobs/requisition_views.py, which enforces the same rules. */
 const MAX_TITLE = 200;
+const MAX_REFERENCE = 100;
+const MAX_GRADE = 40;
 const MAX_DEPARTMENT = 200;
 const MAX_LOCATION = 200;
 const MAX_DESCRIPTION = 4000;
 
 type Requisition = {
   id: number;
+  /** "Position Title" in section 1 of the application form. */
   title: string;
+  reference_no: string | null;
+  grade: string | null;
   department: string | null;
   location: string | null;
   description: string | null;
+  advertisement_date: string | null;
   closing_date: string | null;
   is_open: boolean;
   /** Open, but its closing date has already passed. */
@@ -34,8 +40,11 @@ type Requisition = {
 
 type FormState = {
   title: string;
+  reference_no: string;
+  grade: string;
   department: string;
   location: string;
+  advertisement_date: string;
   closing_date: string;
   description: string;
   is_open: boolean;
@@ -43,8 +52,11 @@ type FormState = {
 
 const blankForm = (): FormState => ({
   title: "",
+  reference_no: "",
+  grade: "",
   department: "",
   location: "",
+  advertisement_date: "",
   closing_date: "",
   description: "",
   is_open: true,
@@ -99,6 +111,22 @@ export default function JobRequisitions() {
     else if (title.length < 3) problems.title = "That title looks too short";
     else if (title.length > MAX_TITLE) problems.title = `Keep the title within ${MAX_TITLE} characters`;
 
+    if (form.reference_no.length > MAX_REFERENCE) {
+      problems.reference_no = `Keep the reference number within ${MAX_REFERENCE} characters`;
+    }
+    if (form.grade.length > MAX_GRADE) {
+      problems.grade = `Keep the grade within ${MAX_GRADE} characters`;
+    }
+    if (form.advertisement_date && form.advertisement_date > moment().format("YYYY-MM-DD")) {
+      problems.advertisement_date = "The advertisement date cannot be in the future";
+    }
+    if (
+      form.advertisement_date &&
+      form.closing_date &&
+      form.closing_date < form.advertisement_date
+    ) {
+      problems.closing_date = "The closing date is before the advertisement date";
+    }
     if (form.department.length > MAX_DEPARTMENT) {
       problems.department = `Keep the department within ${MAX_DEPARTMENT} characters`;
     }
@@ -133,9 +161,12 @@ export default function JobRequisitions() {
     setSaving(true);
     const payload = {
       title: form.title.trim(),
+      reference_no: form.reference_no.trim(),
+      grade: form.grade.trim(),
       department: form.department.trim(),
       location: form.location.trim(),
       description: form.description.trim(),
+      advertisement_date: form.advertisement_date || null,
       closing_date: form.closing_date || null,
       is_open: form.is_open,
     };
@@ -173,8 +204,11 @@ export default function JobRequisitions() {
     setErrors({});
     setForm({
       title: requisition.title,
+      reference_no: requisition.reference_no ?? "",
+      grade: requisition.grade ?? "",
       department: requisition.department ?? "",
       location: requisition.location ?? "",
+      advertisement_date: requisition.advertisement_date ?? "",
       closing_date: requisition.closing_date ?? "",
       description: requisition.description ?? "",
       is_open: requisition.is_open,
@@ -195,9 +229,12 @@ export default function JobRequisitions() {
         `/jobs/requisitions/${requisition.id}/update/`,
         {
           title: requisition.title,
+          reference_no: requisition.reference_no ?? "",
+          grade: requisition.grade ?? "",
           department: requisition.department ?? "",
           location: requisition.location ?? "",
           description: requisition.description ?? "",
+          advertisement_date: requisition.advertisement_date,
           closing_date: requisition.closing_date,
           is_open: !requisition.is_open,
         },
@@ -249,12 +286,12 @@ export default function JobRequisitions() {
       <div className="space-y-6">
         <ComponentCard
           title={editingId ? "Edit Vacancy" : "Advertise a Vacancy"}
-          desc="Open vacancies appear in the Job Requisition / Opening list on the internal job application form."
+          desc="What is entered here becomes section 1 (Vacancy Information) of the application form."
         >
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="md:col-span-2">
+            <div>
               <Label htmlFor="title">
-                Job Title <span className="text-error-500">*</span>
+                Position Title <span className="text-error-500">*</span>
               </Label>
               <Input
                 id="title"
@@ -267,7 +304,31 @@ export default function JobRequisitions() {
             </div>
 
             <div>
-              <Label htmlFor="department">Department / Business Unit</Label>
+              <Label htmlFor="reference_no">Advertisement / Reference No.</Label>
+              <Input
+                id="reference_no"
+                placeholder="e.g., ISMO/HR/IR-2026/07"
+                value={form.reference_no}
+                onChange={(e) => set("reference_no", e.target.value)}
+                error={!!errors.reference_no}
+                hint={errors.reference_no}
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="grade">Grade</Label>
+              <Input
+                id="grade"
+                placeholder="e.g., G-09"
+                value={form.grade}
+                onChange={(e) => set("grade", e.target.value)}
+                error={!!errors.grade}
+                hint={errors.grade}
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="department">Department / Function</Label>
               <Input
                 id="department"
                 placeholder="e.g., System Operation"
@@ -279,14 +340,14 @@ export default function JobRequisitions() {
             </div>
 
             <div>
-              <Label htmlFor="location">Location</Label>
+              <Label htmlFor="advertisement_date">Date of Advertisement</Label>
               <Input
-                id="location"
-                placeholder="e.g., Islamabad"
-                value={form.location}
-                onChange={(e) => set("location", e.target.value)}
-                error={!!errors.location}
-                hint={errors.location}
+                id="advertisement_date"
+                type="date"
+                value={form.advertisement_date}
+                onChange={(e) => set("advertisement_date", e.target.value)}
+                error={!!errors.advertisement_date}
+                hint={errors.advertisement_date}
               />
             </div>
 
@@ -304,6 +365,18 @@ export default function JobRequisitions() {
                 Leave empty to keep it open until closed by hand. Past the closing
                 date it stops appearing on the form.
               </p>
+            </div>
+
+            <div>
+              <Label htmlFor="location">Location</Label>
+              <Input
+                id="location"
+                placeholder="e.g., Islamabad"
+                value={form.location}
+                onChange={(e) => set("location", e.target.value)}
+                error={!!errors.location}
+                hint={errors.location}
+              />
             </div>
 
             <div className="flex items-end pb-2">
@@ -365,9 +438,11 @@ export default function JobRequisitions() {
               <table className="min-w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 text-xs uppercase text-gray-500 dark:border-gray-800 dark:text-gray-400">
-                    <th className="py-2 pr-4 font-medium">Title</th>
-                    <th className="py-2 pr-4 font-medium">Department</th>
-                    <th className="py-2 pr-4 font-medium">Location</th>
+                    <th className="py-2 pr-4 font-medium">Position Title</th>
+                    <th className="py-2 pr-4 font-medium">Reference No.</th>
+                    <th className="py-2 pr-4 font-medium">Grade</th>
+                    <th className="py-2 pr-4 font-medium">Department / Function</th>
+                    <th className="py-2 pr-4 font-medium">Advertised</th>
                     <th className="py-2 pr-4 font-medium">Closing</th>
                     <th className="py-2 pr-4 font-medium">Status</th>
                     <th className="py-2 pr-4 font-medium">Applications</th>
@@ -382,8 +457,19 @@ export default function JobRequisitions() {
                         <td className="py-2.5 pr-4 font-medium text-gray-800 dark:text-white/90">
                           {requisition.title}
                         </td>
-                        <td className="py-2.5 pr-4">{requisition.department ?? "—"}</td>
-                        <td className="py-2.5 pr-4">{requisition.location ?? "—"}</td>
+                        <td className="py-2.5 pr-4">{requisition.reference_no || "—"}</td>
+                        <td className="py-2.5 pr-4">{requisition.grade || "—"}</td>
+                        <td className="py-2.5 pr-4">
+                          {requisition.department || "—"}
+                          {requisition.location ? (
+                            <div className="text-xs text-gray-400">{requisition.location}</div>
+                          ) : null}
+                        </td>
+                        <td className="py-2.5 pr-4">
+                          {requisition.advertisement_date
+                            ? moment(requisition.advertisement_date).format("DD MMM YYYY")
+                            : "—"}
+                        </td>
                         <td className="py-2.5 pr-4">
                           {requisition.closing_date
                             ? moment(requisition.closing_date).format("DD MMM YYYY")

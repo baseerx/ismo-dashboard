@@ -36,7 +36,8 @@ def identity_from_request(request):
     token = header[7:].strip() if header.lower().startswith("bearer ") else header.strip()
 
     if not token:
-        return None, "Sign in to manage vacancies."
+        # Shared by the vacancy and reports pages, so nothing page-specific.
+        return None, "Sign in again to continue."
 
     try:
         payload = jwt.decode(

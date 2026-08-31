@@ -1,21 +1,42 @@
+"""Tables behind the ISMO internal recruitment online application form.
+
+The shape follows the printed form section by section - vacancy information,
+personal and contact information, current employment details, then the four
+repeating tables (education, employment history, certifications, trainings),
+the declaration, and the submission record. Anything the form prints in more
+than one place is stored once and rendered twice.
+"""
+
 from django.db import models
 
 
 class JobRequisition(models.Model):
-    """An advertised internal vacancy, the thing an application targets.
+    """An advertised internal vacancy - what section 1 of the form describes.
 
-    Maintained by HR — registered in the Django admin so openings can be added
-    without a screen of their own. Closing one hides it from the application
-    form without touching applications already submitted against it.
+    Maintained from Job Openings under Internal Recruitment Portal. Closing one
+    hides it from the application form without touching applications already
+    submitted against it.
     """
 
+    # "Position Title" on the form.
     title = models.CharField(max_length=200)
-    # Free text rather than a foreign key to `sections`: a requisition is often
-    # advertised for a business unit that is not one section exactly.
+    # "Advertisement / Reference No." - the number the advertisement carries, so
+    # an application can be traced back to the notice it answered.
+    reference_no = models.CharField(max_length=100, null=True, blank=True)
+    # The grade the post is advertised at, as text ("G-09"): grades come and go
+    # and a closed vacancy should still print what it said at the time.
+    grade = models.CharField(max_length=40, null=True, blank=True)
+    # "Department / Function" - free text rather than a foreign key to
+    # `sections`, because a post is often advertised for a business unit that is
+    # not one section exactly.
     department = models.CharField(max_length=200, null=True, blank=True)
+    advertisement_date = models.DateField(null=True, blank=True)
+    closing_date = models.DateField(null=True, blank=True)
+
+    # Not printed in section 1, but needed to advertise the post at all.
     location = models.CharField(max_length=200, null=True, blank=True)
     description = models.TextField(null=True, blank=True)
-    closing_date = models.DateField(null=True, blank=True)
+
     is_open = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -28,17 +49,25 @@ class JobRequisition(models.Model):
 
 
 class InternalJobApplication(models.Model):
-    """One employee's application against one requisition.
+    """One employee's application against one vacancy.
 
-    The auto-filled fields are stored as submitted rather than looked up on
-    read: `employees` changes over time, and an application should still show
-    the department and job title the applicant actually held when they applied.
+    An applicant may apply for several vacancies at once; each becomes a row of
+    its own, because each is reviewed and progresses separately.
+
+    The vacancy and employment details are stored as submitted rather than
+    looked up on read: both `employees` and the advertisement change over time,
+    and a submitted application should still print what it said on the day.
     """
 
-    TEAMS = "Teams"
-    EMAIL = "Email"
-    SMS = "SMS"
-    CONTACT_METHODS = (TEAMS, EMAIL, SMS)
+    PENDING = "submitted"
+    HR_STATUS_LABELS = {
+        "submitted": "Pending verification",
+        "under_review": "Under review",
+        "verified": "Verified",
+        "shortlisted": "Shortlisted",
+        "rejected": "Rejected",
+        "hired": "Selected",
+    }
 
     # Who applied, taken from the session rather than the form, so the record
     # cannot be filed under somebody else by editing the page.
@@ -48,71 +77,97 @@ class InternalJobApplication(models.Model):
         JobRequisition, on_delete=models.PROTECT, related_name="applications"
     )
 
-    # --- section 1: target position and internal validation ---------------
-    emp_full_name = models.CharField(max_length=150)
+    # --- 1. vacancy information (copied from the advertisement) -----------
+    vacancy_position_title = models.CharField(max_length=200, default="")
+    vacancy_reference_no = models.CharField(max_length=100, null=True, blank=True)
+    vacancy_grade = models.CharField(max_length=40, null=True, blank=True)
+    vacancy_department = models.CharField(max_length=200, null=True, blank=True)
+    vacancy_advertisement_date = models.DateField(null=True, blank=True)
+    vacancy_closing_date = models.DateField(null=True, blank=True)
+
+    # --- 2. personal & contact information --------------------------------
     emp_id = models.IntegerField()
-    current_dept_code = models.CharField(max_length=200)
-    current_job_title = models.CharField(max_length=200)
-    # The label asks for a name; the ERP id is kept alongside it when the
-    # supervisor was the one the system proposed, so the record can be traced
-    # back to a person rather than a spelling.
-    current_supervisor_id = models.CharField(max_length=150)
-    current_supervisor_erp_id = models.IntegerField(null=True, blank=True)
-
-    # --- section 2: personal and contact information ----------------------
+    full_name = models.CharField(max_length=150)
+    father_or_husband_name = models.CharField(max_length=150, default="")
     cnic = models.CharField(max_length=15)
-    contact_phone_no = models.CharField(max_length=25)
-    corporate_email = models.EmailField(max_length=150)
-    personal_email = models.EmailField(max_length=150, null=True, blank=True)
-    preferred_contact_method = models.CharField(max_length=10)
+    date_of_birth = models.DateField(null=True, blank=True)
+    gender = models.CharField(max_length=10, default="")
+    official_email = models.EmailField(max_length=150)
+    mobile_no = models.CharField(max_length=25)
+    current_office_location = models.CharField(max_length=200, default="")
+    # The one field the form itself marks optional.
+    emergency_contact_no = models.CharField(max_length=25, null=True, blank=True)
 
-    # --- section 5: skills matrix and certifications ----------------------
-    # Individual skills live in their own table so applications can be filtered
-    # by them; this column is the free-text list of credentials the form asks
-    # for as prose.
-    certifications_list = models.TextField(null=True, blank=True)
+    # --- 3. current employment details ------------------------------------
+    # Current designation and grade also head section 1 of the printed form;
+    # they are held once here and rendered in both places.
+    date_of_joining_ismo = models.DateField(null=True, blank=True)
+    current_designation = models.CharField(max_length=200, default="")
+    current_grade = models.CharField(max_length=40, default="")
+    department_function = models.CharField(max_length=200, default="")
+    date_of_appointment_to_current_grade = models.DateField(null=True, blank=True)
+    # Free text ("8 years 3 months"): the form asks for a span, and the figure
+    # the applicant claims is what should be on the record, not a computed one.
+    total_service_ismo = models.CharField(max_length=60, default="")
+    total_relevant_experience = models.CharField(max_length=60, default="")
+    date_of_joining_current_position = models.DateField(null=True, blank=True)
 
-    # --- section 6: statement of purpose and acknowledgements -------------
-    # Required to submit - see jobs/validators.py. The column default exists
-    # only so the field could be added to a table that already existed; nothing
-    # can be stored through the form without it.
-    application_rationale_sop = models.TextField(default="")
-    # Both are required to submit, and are kept as a record of what the
-    # applicant certified at the time.
-    ack_manager_notified_bool = models.BooleanField(default=False)
-    ack_data_accuracy_bool = models.BooleanField(default=False)
+    # --- 8. declaration & undertaking -------------------------------------
+    # Required to submit - see jobs/validators.py. Kept as a record of what the
+    # applicant accepted at the time.
+    declaration_accepted = models.BooleanField(default=False)
 
-    status = models.CharField(max_length=20, default="submitted")
+    # --- 9. submission record ---------------------------------------------
+    # Typed confirmation standing in for a signature, which is what the form
+    # calls an electronic signature.
+    applicant_signature = models.CharField(max_length=150, default="")
+    # Issued on submission, unique, and printed on the application.
+    application_reference_no = models.CharField(
+        max_length=40, null=True, blank=True, db_index=True
+    )
+
+    # Drives both the report filters and the form's "HR Verification Status".
+    status = models.CharField(max_length=20, default=PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'internal_job_applications'
         ordering = ['-created_at']
+        constraints = [
+            # One application per person per vacancy: two against the same post
+            # would leave reviewers guessing which one counts.
+            models.UniqueConstraint(
+                fields=["applicant_erp_id", "target_job_req"],
+                name="one_application_per_vacancy",
+            )
+        ]
 
     def __str__(self):
-        return f"{self.emp_full_name} -> {self.target_job_req_id}"
+        return f"{self.full_name} -> {self.target_job_req_id}"
+
+    @property
+    def hr_verification_status(self) -> str:
+        """What section 9 prints for the current status."""
+        return self.HR_STATUS_LABELS.get(self.status, self.status)
 
 
 class InternalJobApplicationEducation(models.Model):
-    """One degree or certificate on an application.
-
-    A separate table rather than repeated columns: the form is a repeater and
-    the number of degrees is not knowable in advance.
-    """
+    """4. Educational background - one row per qualification."""
 
     application = models.ForeignKey(
         InternalJobApplication, on_delete=models.CASCADE, related_name="education"
     )
 
-    edu_degree_title = models.CharField(max_length=200)
-    edu_institution_name = models.CharField(max_length=200)
-    edu_major_specialization = models.CharField(max_length=200)
-    edu_graduation_year = models.IntegerField()
-    edu_grade_score = models.CharField(max_length=40)
+    degree_qualification = models.CharField(max_length=200)
+    major_field_of_study = models.CharField(max_length=200)
+    institution_university = models.CharField(max_length=200)
+    country = models.CharField(max_length=100)
+    year_of_completion = models.IntegerField()
+    cgpa_division = models.CharField(max_length=40)
 
-    # The order the applicant listed them in, so a chronological list comes
-    # back the way it was entered.
+    # The order the applicant listed them in, so the list comes back the way it
+    # was entered.
     row_order = models.IntegerField(default=0)
 
     class Meta:
@@ -120,31 +175,33 @@ class InternalJobApplicationEducation(models.Model):
         ordering = ['row_order', 'id']
 
     def __str__(self):
-        return f"{self.edu_degree_title} ({self.edu_graduation_year})"
+        return f"{self.degree_qualification} ({self.year_of_completion})"
 
 
 class InternalJobApplicationExperience(models.Model):
-    """One post held, whether outside the organisation or inside it.
+    """5. Employment history / professional experience - one row per post.
 
-    Internal promotions belong here alongside external employment, which is why
-    the company name is free text rather than a flag: an applicant lists the
-    subsidiary or the department they held the post in, in their own words.
+    Internal promotions belong here alongside outside employment, which is why
+    the employer is free text: an applicant names the organisation or the
+    department they held the post in, in their own words.
     """
 
     application = models.ForeignKey(
         InternalJobApplication, on_delete=models.CASCADE, related_name="experience"
     )
 
-    exp_job_title = models.CharField(max_length=200)
-    exp_company_name = models.CharField(max_length=200)
-    exp_start_date = models.DateField()
-    # Null while the applicant still holds the post, which is what the form's
-    # "Currently in this role" toggle means.
-    exp_end_date = models.DateField(null=True, blank=True)
-    exp_is_current = models.BooleanField(default=False)
-
-    exp_key_responsibilities = models.TextField()
-    exp_key_achievements = models.TextField(null=True, blank=True)
+    organization_employer = models.CharField(max_length=200)
+    designation = models.CharField(max_length=200)
+    # "Grade (if applicable)" - blank for posts held outside ISMO.
+    grade = models.CharField(max_length=40, null=True, blank=True)
+    from_date = models.DateField()
+    # Null while the applicant still holds the post.
+    to_date = models.DateField(null=True, blank=True)
+    is_current = models.BooleanField(default=False)
+    # Worked out from the dates when the applicant leaves it alone, but stored
+    # rather than computed on read so the printed form matches what was filed.
+    duration = models.CharField(max_length=60, default="")
+    key_responsibilities = models.TextField()
 
     row_order = models.IntegerField(default=0)
 
@@ -153,31 +210,53 @@ class InternalJobApplicationExperience(models.Model):
         ordering = ['row_order', 'id']
 
     def __str__(self):
-        return f"{self.exp_job_title} at {self.exp_company_name}"
+        return f"{self.designation} at {self.organization_employer}"
 
 
-class InternalJobApplicationSkill(models.Model):
-    """One skill on an application, technical or soft.
-
-    A row per skill rather than a delimited column, because the point of the
-    section is filtering applicants by skill - which a text column cannot do
-    without a LIKE over every row.
-    """
-
-    TECHNICAL = "technical"
-    SOFT = "soft"
-    SKILL_TYPES = (TECHNICAL, SOFT)
+class InternalJobApplicationCertification(models.Model):
+    """6. Professional certifications / memberships - one row each."""
 
     application = models.ForeignKey(
-        InternalJobApplication, on_delete=models.CASCADE, related_name="skills"
+        InternalJobApplication, on_delete=models.CASCADE, related_name="certifications"
     )
 
-    skill_type = models.CharField(max_length=10, db_index=True)
-    skill_name = models.CharField(max_length=80)
+    certification_membership = models.CharField(max_length=200)
+    certifying_body = models.CharField(max_length=200)
+    date_obtained = models.DateField(null=True, blank=True)
+    # Blank for credentials that do not lapse.
+    expiry_date = models.DateField(null=True, blank=True)
+    registration_no = models.CharField(max_length=100, null=True, blank=True)
+
+    row_order = models.IntegerField(default=0)
 
     class Meta:
-        db_table = 'internal_job_application_skills'
-        ordering = ['skill_type', 'id']
+        db_table = 'internal_job_application_certifications'
+        ordering = ['row_order', 'id']
 
     def __str__(self):
-        return f"{self.skill_name} ({self.skill_type})"
+        return self.certification_membership
+
+
+class InternalJobApplicationTraining(models.Model):
+    """7. Trainings & professional development - one row each."""
+
+    application = models.ForeignKey(
+        InternalJobApplication, on_delete=models.CASCADE, related_name="trainings"
+    )
+
+    training_title = models.CharField(max_length=200)
+    training_provider = models.CharField(max_length=200)
+    duration = models.CharField(max_length=60, null=True, blank=True)
+    # "Date / Year" on the form: a year alone is a perfectly good answer, so it
+    # is text rather than a date.
+    date_or_year = models.CharField(max_length=40, null=True, blank=True)
+    relevant_to_position = models.BooleanField(default=False)
+
+    row_order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = 'internal_job_application_trainings'
+        ordering = ['row_order', 'id']
+
+    def __str__(self):
+        return self.training_title
