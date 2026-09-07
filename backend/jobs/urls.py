@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import requisition_views, views, reports_views
+from . import jd_views, requisition_views, views, reports_views
 
 urlpatterns = [
     # --- the application form ---------------------------------------------
@@ -17,6 +17,15 @@ urlpatterns = [
     path('requisitions/create/', requisition_views.create_requisition),
     path('requisitions/<int:requisition_id>/update/', requisition_views.update_requisition),
     path('requisitions/<int:requisition_id>/delete/', requisition_views.delete_requisition),
+
+    # --- the job description library --------------------------------------
+    # Active descriptions, for the picker on the vacancy screen.
+    path('descriptions/', jd_views.description_list),
+    # Every description, with how many vacancies use each.
+    path('descriptions/manage/', jd_views.manage_list),
+    path('descriptions/create/', jd_views.create_description),
+    path('descriptions/<int:description_id>/update/', jd_views.update_description),
+    path('descriptions/<int:description_id>/delete/', jd_views.delete_description),
 
     path('applications/manage/', reports_views.list_applications_report),
     path('applications/<int:application_id>/detail/', reports_views.application_detail),

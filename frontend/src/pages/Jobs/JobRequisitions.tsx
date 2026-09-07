@@ -7,6 +7,7 @@ import Label from "../../components/form/Label";
 import Input from "../../components/form/input/InputField";
 import TextArea from "../../components/form/input/TextArea";
 import Checkbox from "../../components/form/input/Checkbox";
+import Select from "../../components/form/Select";
 import Button from "../../components/ui/button/Button";
 import Badge from "../../components/ui/badge/Badge";
 import axios from "../../api/axios";
@@ -31,6 +32,10 @@ type Requisition = {
   description: string | null;
   advertisement_date: string | null;
   closing_date: string | null;
+  /** The description attached to this vacancy, from the JD library. */
+  job_description_id: number | null;
+  job_description_title: string;
+  job_description_code: string;
   is_open: boolean;
   /** Open, but its closing date has already passed. */
   has_expired: boolean;
@@ -47,6 +52,7 @@ type FormState = {
   advertisement_date: string;
   closing_date: string;
   description: string;
+  job_description_id: string;
   is_open: boolean;
 };
 
@@ -59,11 +65,21 @@ const blankForm = (): FormState => ({
   advertisement_date: "",
   closing_date: "",
   description: "",
+  job_description_id: "",
   is_open: true,
 });
 
+type DescriptionOption = {
+  id: number;
+  title: string;
+  code: string;
+  department: string;
+  grade: string;
+};
+
 export default function JobRequisitions() {
   const [requisitions, setRequisitions] = useState<Requisition[]>([]);
+  const [jobDescriptions, setJobDescriptions] = useState<DescriptionOption[]>([]);
   const [form, setForm] = useState<FormState>(blankForm);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -78,7 +94,18 @@ export default function JobRequisitions() {
 
   useEffect(() => {
     load();
+    loadDescriptions();
   }, []);
+
+  /** The active descriptions a vacancy can be advertised against. */
+  const loadDescriptions = async () => {
+    try {
+      const response = await axios.get("/jobs/descriptions/");
+      setJobDescriptions(Array.isArray(response.data) ? response.data : []);
+    } catch {
+      setJobDescriptions([]);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -168,6 +195,7 @@ export default function JobRequisitions() {
       description: form.description.trim(),
       advertisement_date: form.advertisement_date || null,
       closing_date: form.closing_date || null,
+      job_description_id: form.job_description_id || null,
       is_open: form.is_open,
     };
 
@@ -211,6 +239,9 @@ export default function JobRequisitions() {
       advertisement_date: requisition.advertisement_date ?? "",
       closing_date: requisition.closing_date ?? "",
       description: requisition.description ?? "",
+      job_description_id: requisition.job_description_id
+        ? String(requisition.job_description_id)
+        : "",
       is_open: requisition.is_open,
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -236,6 +267,7 @@ export default function JobRequisitions() {
           description: requisition.description ?? "",
           advertisement_date: requisition.advertisement_date,
           closing_date: requisition.closing_date,
+          job_description_id: requisition.job_description_id,
           is_open: !requisition.is_open,
         },
         authHeader
@@ -379,6 +411,30 @@ export default function JobRequisitions() {
               />
             </div>
 
+            <div>
+              <Label htmlFor="job_description_id">Job Description</Label>
+              <Select
+                key={`jd-${editingId ?? "new"}-${jobDescriptions.length}`}
+                options={[
+                  { label: "No job description attached", value: "" },
+                  ...jobDescriptions.map((item) => ({
+                    label: [item.code, item.title].filter(Boolean).join(" - "),
+                    value: String(item.id),
+                  })),
+                ]}
+                placeholder="No job description attached"
+                value={form.job_description_id}
+                onChange={(value) => set("job_description_id", value)}
+                error={!!errors.job_description_id}
+                hint={errors.job_description_id}
+              />
+              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                {jobDescriptions.length === 0
+                  ? "None written yet - add them under Job Descriptions."
+                  : "Applicants see this under the position on the application form."}
+              </p>
+            </div>
+
             <div className="flex items-end pb-2">
               <Checkbox
                 id="is_open"
@@ -442,6 +498,7 @@ export default function JobRequisitions() {
                     <th className="py-2 pr-4 font-medium">Reference No.</th>
                     <th className="py-2 pr-4 font-medium">Grade</th>
                     <th className="py-2 pr-4 font-medium">Department / Function</th>
+                    <th className="py-2 pr-4 font-medium">Job Description</th>
                     <th className="py-2 pr-4 font-medium">Advertised</th>
                     <th className="py-2 pr-4 font-medium">Closing</th>
                     <th className="py-2 pr-4 font-medium">Status</th>
@@ -464,6 +521,20 @@ export default function JobRequisitions() {
                           {requisition.location ? (
                             <div className="text-xs text-gray-400">{requisition.location}</div>
                           ) : null}
+                        </td>
+                        <td className="py-2.5 pr-4">
+                          {requisition.job_description_title ? (
+                            <>
+                              {requisition.job_description_title}
+                              {requisition.job_description_code ? (
+                                <div className="text-xs text-gray-400">
+                                  {requisition.job_description_code}
+                                </div>
+                              ) : null}
+                            </>
+                          ) : (
+                            "—"
+                          )}
                         </td>
                         <td className="py-2.5 pr-4">
                           {requisition.advertisement_date

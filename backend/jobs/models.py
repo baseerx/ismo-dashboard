@@ -10,6 +10,45 @@ than one place is stored once and rendered twice.
 from django.db import models
 
 
+class JobDescription(models.Model):
+    """A job description, written once and attached to the vacancies for it.
+
+    Kept apart from `JobRequisition` on purpose: the same post is advertised
+    again and again, and its description outlives any one advertisement. A
+    vacancy points at one of these, and the application form shows it to the
+    applicant alongside the vacancy details.
+    """
+
+    title = models.CharField(max_length=200)
+    # HR's own reference for the description, e.g. "JD/SO/DM-09".
+    code = models.CharField(max_length=60, null=True, blank=True, db_index=True)
+    department = models.CharField(max_length=200, null=True, blank=True)
+    grade = models.CharField(max_length=40, null=True, blank=True)
+    reports_to = models.CharField(max_length=200, null=True, blank=True)
+
+    # The body of the description. Only the responsibilities are compulsory:
+    # a description without them says nothing about the job.
+    job_purpose = models.TextField(null=True, blank=True)
+    key_responsibilities = models.TextField()
+    qualifications = models.TextField(null=True, blank=True)
+    experience_required = models.TextField(null=True, blank=True)
+    skills_competencies = models.TextField(null=True, blank=True)
+
+    # Retired descriptions stay on file for the vacancies that used them, but
+    # are not offered when advertising a new post.
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'job_descriptions'
+        ordering = ['title']
+
+    def __str__(self):
+        return f"{self.code} - {self.title}" if self.code else self.title
+
+
 class JobRequisition(models.Model):
     """An advertised internal vacancy - what section 1 of the form describes.
 
@@ -35,7 +74,17 @@ class JobRequisition(models.Model):
 
     # Not printed in section 1, but needed to advertise the post at all.
     location = models.CharField(max_length=200, null=True, blank=True)
+    # A short note on this particular advertisement. The full duties live on the
+    # job description below, which is shared between advertisements.
     description = models.TextField(null=True, blank=True)
+
+    # PROTECT rather than SET_NULL: losing the description an applicant read
+    # when they applied would leave the record incomplete, so a description in
+    # use has to be retired instead of deleted.
+    job_description = models.ForeignKey(
+        JobDescription, null=True, blank=True,
+        on_delete=models.PROTECT, related_name="requisitions",
+    )
 
     is_open = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

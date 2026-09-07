@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 # The management page. A user granted this sub-menu may maintain vacancies.
 MANAGE_URI = "/job-requisitions"
+# The job description library, granted separately: writing the duties for a
+# post and deciding when it is advertised are different jobs.
+DESCRIPTIONS_URI = "/job-descriptions"
 
 
 def identity_from_request(request):
@@ -99,4 +102,28 @@ def require_requisition_manager(request):
     return None, (
         "You do not have rights to manage vacancies. An administrator can grant "
         "them from Assign Rights."
+    )
+
+
+def require_description_manager(request):
+    """Returns (identity, refusal). Exactly one is set.
+
+    Whoever maintains vacancies may also maintain the descriptions behind them,
+    so either right opens this - one fewer grant to remember for the common
+    case where the same person does both.
+    """
+    identity, refusal = identity_from_request(request)
+    if refusal:
+        return None, refusal
+
+    if identity.get("is_superuser"):
+        return identity, None
+
+    user_id = identity.get("user_id")
+    if _has_menu_right(user_id, DESCRIPTIONS_URI) or _has_menu_right(user_id, MANAGE_URI):
+        return identity, None
+
+    return None, (
+        "You do not have rights to maintain job descriptions. An administrator "
+        "can grant them from Assign Rights."
     )

@@ -24,6 +24,7 @@ import SectionAttendanceReport from "./pages/Tables/SectionAttendanceReport";
 import ApplyLeave from "./pages/Leaves/ApplyLeave";
 import InternalJobApplication from "./pages/Jobs/InternalJobApplication";
 import JobRequisitions from "./pages/Jobs/JobRequisitions";
+import JobDescriptions from "./pages/Jobs/JobDescriptions";
 import PublicHoliday from "./pages/Leaves/PublicHolidays";
 // import TodaysAttendance from "./pages/Tables/TodaysAttendance";
 import IndividualAttendance from "./pages/Tables/IndividualAttendance";
@@ -171,6 +172,7 @@ export default function App() {
                 element={<InternalJobApplication />}
               />
               <Route path="/job-requisitions" element={<JobRequisitions />} />
+              <Route path="/job-descriptions" element={<JobDescriptions />} />
               <Route path="/job-reports" element={<JobApplicationsReport />} />
               <Route
                 path="/leaves/public-holidays"

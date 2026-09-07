@@ -6,8 +6,18 @@ from .models import (
     InternalJobApplicationEducation,
     InternalJobApplicationExperience,
     InternalJobApplicationTraining,
+    JobDescription,
     JobRequisition,
 )
+
+
+@admin.register(JobDescription)
+class JobDescriptionAdmin(admin.ModelAdmin):
+    """The library of descriptions the vacancies point at."""
+
+    list_display = ("title", "code", "department", "grade", "is_active", "updated_at")
+    list_filter = ("is_active", "department", "grade")
+    search_fields = ("title", "code", "department", "key_responsibilities")
 
 
 @admin.register(JobRequisition)
@@ -20,7 +30,7 @@ class JobRequisitionAdmin(admin.ModelAdmin):
 
     list_display = (
         "title", "reference_no", "grade", "department",
-        "advertisement_date", "closing_date", "is_open", "created_at",
+        "job_description", "advertisement_date", "closing_date", "is_open", "created_at",
     )
     list_filter = ("is_open", "department", "grade")
     search_fields = ("title", "reference_no", "department", "location")

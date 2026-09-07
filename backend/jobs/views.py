@@ -20,6 +20,7 @@ from sqlalchemy import text
 from db import SessionLocal
 
 from .form_text import DECLARATION_PARAGRAPHS, SUBMISSION_NOTE
+from .jd_views import body_for_form
 from .models import (
     InternalJobApplication,
     InternalJobApplicationCertification,
@@ -35,17 +36,27 @@ logger = logging.getLogger(__name__)
 GENDER_NAMES = {"M": "Male", "F": "Female", "male": "Male", "female": "Female"}
 
 
-def _requisition_payload(row) -> dict:
-    """A vacancy as section 1 of the form needs it."""
+def _requisition_payload(requisition: JobRequisition) -> dict:
+    """A vacancy as section 1 of the form needs it, with its description.
+
+    The description travels with the vacancy so choosing a position in the
+    dropdown can show its duties straight away.
+    """
     return {
-        "id": row["id"],
-        "title": row["title"],
-        "reference_no": row["reference_no"] or "",
-        "grade": row["grade"] or "",
-        "department": row["department"] or "",
-        "location": row["location"] or "",
-        "advertisement_date": row["advertisement_date"].isoformat() if row["advertisement_date"] else None,
-        "closing_date": row["closing_date"].isoformat() if row["closing_date"] else None,
+        "id": requisition.id,
+        "title": requisition.title,
+        "reference_no": requisition.reference_no or "",
+        "grade": requisition.grade or "",
+        "department": requisition.department or "",
+        "location": requisition.location or "",
+        "advertisement_date": requisition.advertisement_date.isoformat()
+        if requisition.advertisement_date else None,
+        "closing_date": requisition.closing_date.isoformat()
+        if requisition.closing_date else None,
+        # A note about this advertisement, as opposed to the description of the
+        # post itself.
+        "notes": requisition.description or "",
+        "job_description": body_for_form(requisition.job_description),
     }
 
 
@@ -58,12 +69,9 @@ def requisitions(request):
     got round to closing it.
     """
     rows = (
-        JobRequisition.objects.filter(is_open=True)
+        JobRequisition.objects.select_related("job_description")
+        .filter(is_open=True)
         .filter(Q(closing_date__isnull=True) | Q(closing_date__gte=date.today()))
-        .values(
-            "id", "title", "reference_no", "grade", "department", "location",
-            "advertisement_date", "closing_date",
-        )
     )
 
     return JsonResponse([_requisition_payload(row) for row in rows], safe=False, status=200)

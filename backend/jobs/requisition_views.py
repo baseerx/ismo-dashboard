@@ -15,7 +15,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from .models import JobRequisition
+from .models import JobDescription, JobRequisition
 from .permissions import require_requisition_manager
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,15 @@ def _serialize(requisition: JobRequisition, application_count: int = 0) -> dict:
         "description": requisition.description,
         "advertisement_date": advertised.isoformat() if advertised else None,
         "closing_date": closing.isoformat() if closing else None,
+        # The description behind the post, so the screen can show which one is
+        # attached without a second request.
+        "job_description_id": requisition.job_description_id,
+        "job_description_title": (
+            requisition.job_description.title if requisition.job_description_id else ""
+        ),
+        "job_description_code": (
+            requisition.job_description.code or "" if requisition.job_description_id else ""
+        ),
         "is_open": requisition.is_open,
         # Distinguishes "closed by HR" from "the closing date has passed", which
         # look the same to an applicant but not to whoever is maintaining it.
@@ -112,6 +121,25 @@ def _validate(data, existing: JobRequisition | None = None):
                 errors["closing_date"] = "The closing date is before the advertisement date"
     cleaned["closing_date"] = closing
 
+    raw_description = data.get("job_description_id")
+    description_id = None
+    if raw_description not in (None, "", 0, "0"):
+        try:
+            description_id = int(raw_description)
+        except (TypeError, ValueError):
+            errors["job_description_id"] = "That is not a job description"
+        else:
+            description = JobDescription.objects.filter(id=description_id).first()
+            if description is None:
+                errors["job_description_id"] = "That job description no longer exists"
+            elif not description.is_active and (
+                existing is None or existing.job_description_id != description_id
+            ):
+                # A retired description stays on the vacancies that already use
+                # it, but should not be attached to another.
+                errors["job_description_id"] = "That job description is no longer active"
+    cleaned["job_description_id"] = description_id
+
     cleaned["is_open"] = bool(data.get("is_open", True))
 
     # A duplicate title is almost always a double submission rather than two
@@ -138,7 +166,7 @@ def _validate(data, existing: JobRequisition | None = None):
 def manage_list(request):
     """Every vacancy, open or closed, with how many have applied to each."""
     rows = (
-        JobRequisition.objects.all()
+        JobRequisition.objects.select_related("job_description")
         .annotate(application_count=Count("applications"))
         .order_by("-created_at")
     )

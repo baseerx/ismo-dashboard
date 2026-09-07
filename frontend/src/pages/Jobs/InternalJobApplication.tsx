@@ -52,6 +52,20 @@ const today = () => moment().format("YYYY-MM-DD");
 // Types
 // ---------------------------------------------------------------------------
 
+type JobDescriptionBody = {
+  id: number;
+  title: string;
+  code: string;
+  department: string;
+  grade: string;
+  reports_to: string;
+  job_purpose: string;
+  key_responsibilities: string;
+  qualifications: string;
+  experience_required: string;
+  skills_competencies: string;
+};
+
 type Requisition = {
   id: number;
   title: string;
@@ -61,6 +75,10 @@ type Requisition = {
   location: string;
   advertisement_date: string | null;
   closing_date: string | null;
+  /** A note about this advertisement, as opposed to the description below. */
+  notes: string;
+  /** The description of the post, written once in the Job Descriptions library. */
+  job_description: JobDescriptionBody | null;
 };
 
 type EducationRow = {
@@ -262,6 +280,85 @@ const RowHeader = ({
   </div>
 );
 
+/** The description of the post, shown under the position it belongs to. */
+const JobDescriptionPanel = ({
+  description,
+  open,
+  onToggle,
+}: {
+  description: JobDescriptionBody;
+  open: boolean;
+  onToggle: () => void;
+}) => {
+  const sections = (
+    [
+      ["Job Purpose", description.job_purpose],
+      ["Key Responsibilities", description.key_responsibilities],
+      ["Qualifications", description.qualifications],
+      ["Experience Required", description.experience_required],
+      ["Skills & Competencies", description.skills_competencies],
+    ] as [string, string][]
+  ).filter(([, value]) => value);
+
+  return (
+    <div className="mt-3 rounded-lg border border-brand-200 bg-brand-50/40 dark:border-brand-500/30 dark:bg-brand-500/5">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between px-4 py-2.5 text-left"
+      >
+        <span className="text-sm font-medium text-brand-600 dark:text-brand-400">
+          Job Description
+          {description.code ? (
+            <span className="ml-2 text-xs font-normal text-gray-500">{description.code}</span>
+          ) : null}
+        </span>
+        <span className="text-xs text-gray-500">{open ? "Hide" : "Show"}</span>
+      </button>
+
+      {open && (
+        <div className="space-y-3 border-t border-brand-200 px-4 py-3 dark:border-brand-500/30">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <p className="text-xs text-gray-400">Description Title</p>
+              <p className="text-sm text-gray-700 dark:text-gray-300">{description.title}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Grade</p>
+              <p className="text-sm text-gray-700 dark:text-gray-300">
+                {description.grade || "—"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Reports To</p>
+              <p className="text-sm text-gray-700 dark:text-gray-300">
+                {description.reports_to || "—"}
+              </p>
+            </div>
+          </div>
+
+          {sections.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              No further detail has been written for this post yet.
+            </p>
+          ) : (
+            sections.map(([label, value]) => (
+              <div key={label}>
+                <p className="text-xs font-medium uppercase tracking-wide text-brand-500">
+                  {label}
+                </p>
+                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-gray-700 dark:text-gray-300">
+                  {value}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Counter = ({ value, limit }: { value: number; limit: number }) => (
   <p className="mt-1 text-right text-xs text-gray-400 dark:text-gray-500">
     {value} / {limit}
@@ -296,6 +393,10 @@ export default function InternalJobApplication() {
   const [submissions, setSubmissions] = useState<Submitted[]>([]);
   // Bumped after a submission so the vacancy picker remounts with nothing chosen.
   const [vacancyPickerKey, setVacancyPickerKey] = useState(0);
+  // Which chosen positions have their description expanded. The first one opens
+  // by default; with several selected the rest start folded so the form stays
+  // navigable.
+  const [openDescriptions, setOpenDescriptions] = useState<number[]>([]);
 
   const user = useMemo(() => {
     try {
@@ -440,7 +541,17 @@ export default function InternalJobApplication() {
   const setVacancies = (selected: string[]) => {
     setForm((previous) => ({ ...previous, target_job_req_ids: selected }));
     clearError("target_job_req_ids");
+    // The first position picked shows its description straight away; anything
+    // added after that is left folded.
+    setOpenDescriptions(selected.length === 1 ? [Number(selected[0])] : []);
   };
+
+  const toggleDescription = (requisitionId: number) =>
+    setOpenDescriptions((open) =>
+      open.includes(requisitionId)
+        ? open.filter((id) => id !== requisitionId)
+        : [...open, requisitionId]
+    );
 
   const chosenVacancies = useMemo(
     () =>
@@ -1040,6 +1151,24 @@ export default function InternalJobApplication() {
                       </p>
                     </div>
                   </div>
+
+                  {vacancy.notes ? (
+                    <p className="mt-3 whitespace-pre-wrap text-sm text-gray-600 dark:text-gray-400">
+                      {vacancy.notes}
+                    </p>
+                  ) : null}
+
+                  {vacancy.job_description ? (
+                    <JobDescriptionPanel
+                      description={vacancy.job_description}
+                      open={openDescriptions.includes(vacancy.id)}
+                      onToggle={() => toggleDescription(vacancy.id)}
+                    />
+                  ) : (
+                    <p className="mt-3 text-xs text-gray-400 dark:text-gray-500">
+                      No job description has been attached to this position yet.
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
