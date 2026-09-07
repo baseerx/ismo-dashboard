@@ -429,9 +429,21 @@ export default function JobRequisitions() {
                 hint={errors.job_description_id}
               />
               <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                {jobDescriptions.length === 0
-                  ? "None written yet - add them under Job Descriptions."
-                  : "Applicants see this under the position on the application form."}
+                {jobDescriptions.length === 0 ? (
+                  <>
+                    This list is filled from{" "}
+                    <a
+                      href="/job-descriptions"
+                      className="font-medium text-brand-500 underline hover:text-brand-600"
+                    >
+                      Job Descriptions
+                    </a>
+                    , and nothing has been written there yet. Add one and it appears
+                    here.
+                  </>
+                ) : (
+                  "Applicants see this under the position on the application form."
+                )}
               </p>
             </div>
 

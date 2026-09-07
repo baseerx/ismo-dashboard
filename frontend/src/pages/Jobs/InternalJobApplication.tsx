@@ -393,9 +393,9 @@ export default function InternalJobApplication() {
   const [submissions, setSubmissions] = useState<Submitted[]>([]);
   // Bumped after a submission so the vacancy picker remounts with nothing chosen.
   const [vacancyPickerKey, setVacancyPickerKey] = useState(0);
-  // Which chosen positions have their description expanded. The first one opens
-  // by default; with several selected the rest start folded so the form stays
-  // navigable.
+  // Which chosen positions have their description expanded. Everything picked
+  // starts open - the point of choosing a position is to read what it involves -
+  // and each panel can be folded away.
   const [openDescriptions, setOpenDescriptions] = useState<number[]>([]);
 
   const user = useMemo(() => {
@@ -541,9 +541,7 @@ export default function InternalJobApplication() {
   const setVacancies = (selected: string[]) => {
     setForm((previous) => ({ ...previous, target_job_req_ids: selected }));
     clearError("target_job_req_ids");
-    // The first position picked shows its description straight away; anything
-    // added after that is left folded.
-    setOpenDescriptions(selected.length === 1 ? [Number(selected[0])] : []);
+    setOpenDescriptions(selected.map(Number));
   };
 
   const toggleDescription = (requisitionId: number) =>
