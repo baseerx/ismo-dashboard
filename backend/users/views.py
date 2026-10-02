@@ -1,6 +1,6 @@
 from django.shortcuts import render
 from django.http import JsonResponse
-from .models import Users, Employees  # Assuming you have a Users model defined
+from .models import Users, Employees  
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 import json
@@ -13,12 +13,11 @@ from django.contrib.auth import authenticate
 from django.conf import settings
 import jwt
 from addtouser.models import CustomUser
-# Assuming you have an AssignRights model defined
+
 from assignrights.models import AssignRightsModel
 from datetime import date, timedelta
-# Import CustomUser from another app named 'addtousers'
+
 from addtouser.models import CustomUser
-# Import LeaveModel from another app named 'attendance'
 from attendance.models import Attendance
 from sections.models import Grades, Sections
 from holidays.models import Holiday
@@ -26,7 +25,8 @@ from sqlalchemy import text
 from db import SessionLocal
 import random
 import requests
-# Create your views here.
+from leaves.location_groups import category_for_location
+
 
 
 class UsersView:
@@ -37,7 +37,7 @@ class UsersView:
             'uid', 'user_id', 'name', 'privilege', 'password', 'group_id', 'card'
         )
         users_list = list(records_list)
-        return JsonResponse(users_list, safe=False)  # Return as JSON response
+        return JsonResponse(users_list, safe=False)  
 
     @csrf_exempt
     @require_POST
@@ -136,23 +136,19 @@ class UsersView:
 
         AssignRightsModel.objects.create(
             user_id=user.pk,
-            main_menu=5,  # Assuming 5 is the main menu ID for 'Users'
-            sub_menu=3   # Assuming 3 is the sub menu ID for 'Create User'
+            main_menu=5,  
+            sub_menu=3   
         )
-        # AssignRightsModel.objects.create(
-        #     user_id=user.pk,
-        #     main_menu=8,  # Assuming 5 is the main menu ID for 'Users'
-        #     sub_menu=18   # Assuming 3 is the sub menu ID for 'Create User'
-        # )
+       
         AssignRightsModel.objects.create(
             user_id=user.pk,
-            main_menu=9,  # Assuming 5 is the main menu ID for 'Users'
-            sub_menu=12   # Assuming 3 is the sub menu ID for 'Create User'
+            main_menu=9,  
+            sub_menu=12   
         )
         AssignRightsModel.objects.create(
             user_id=user.pk,
-            main_menu=9,  # Assuming 5 is the main menu ID for 'Users'
-            sub_menu=16   # Assuming 3 is the sub menu ID for 'Create User'
+            main_menu=9,  
+            sub_menu=16   
         )
 
         if profile_tbl is not None:
@@ -175,7 +171,7 @@ class UsersView:
             return JsonResponse({'success': False, 'error': 'Invalid credentials'}, status=401)
 
         user = authenticate(username=username, password=password)
-        # print(f"User authenticated: {user}")  # Debugging line to check user authentication
+       
         if user is not None:
             erpid = CustomUser.objects.filter(
                 authid=user.pk).values_list('erpid', flat=True).first()
@@ -187,7 +183,7 @@ class UsersView:
             section_name = Sections.objects.filter(id=section_id).values_list(
                 'name', flat=True).first() if section_id else None
             if erpid is not None:
-                # return user details alongside token and success status
+               
                 payload = {
                     'success': True,
                     'user_id': user.pk,
@@ -219,7 +215,7 @@ class UsersView:
         records_list = records.values(
             'id', 'username', 'first_name', 'last_name', 'email', 'is_staff', 'is_active', 'is_superuser'
         )
-        # Add 'success': True and rename 'id' to 'user_id' for each user
+        
         users_list = [
             {
                 'success': True,
@@ -235,7 +231,7 @@ class UsersView:
             for user in records_list
         ]
         users_list = list(records_list)
-        return JsonResponse(users_list, safe=False)  # Return as JSON response
+        return JsonResponse(users_list, safe=False)  
 
     @csrf_exempt
     @require_POST
@@ -295,17 +291,36 @@ class EmployeesView:
     def get(request):
         records = Employees.objects.all()
         records_list = records.values(
-            'id', 'erp_id', 'hris_id', 'name', 'cnic', 'gender', 'section_id', 'location_id', 'grade_id', 'designation_id', 'position', 'flag'
+            'id', 'erp_id', 'hris_id', 'name', 'cnic', 'gender', 'section_id', 'location_id', 'grade_id', 'designation_id', 'position', 'flag',
+           
+            'date_of_joining', 'date_of_birth',
         )
         employees_list = list(records_list)
 
-        # The grade's own label ("G-09"), so callers can show and rank seniority
-        # without hardcoding a mapping from grade_id. Eleven rows, fetched once.
+       
         grade_names = dict(Grades.objects.values_list('id', 'name'))
+
+        session = SessionLocal()
+        try:
+            designation_titles = {
+                r[0]: r[1] for r in session.execute(
+                    text("SELECT id, title FROM designations")).fetchall()
+            }
+            location_names = {
+                r[0]: r[1] for r in session.execute(
+                    text("SELECT id, name FROM locations")).fetchall()
+            }
+        finally:
+            session.close()
+
         for employee in employees_list:
             employee['grade'] = grade_names.get(employee.get('grade_id'))
+            employee['designation'] = designation_titles.get(employee.get('designation_id'))
+            location = location_names.get(employee.get('location_id'))
+            employee['location'] = location
+            employee['category'] = category_for_location(location)
 
-        # Return as JSON response
+        
         return JsonResponse(employees_list, safe=False)
 
     @require_GET
@@ -317,7 +332,7 @@ class EmployeesView:
             shift_employees = shift_employees_response.json()
         except Exception:
             shift_employees = []
-        # Filter only NCC employees
+       
         ncc_employees = [emp for emp in shift_employees if emp.get('Shift_Type') == 'NCC']
         query = text("""
          SELECT
@@ -328,7 +343,7 @@ class EmployeesView:
         """)
         shiftdata = session.execute(query).fetchall()
 
-        # Prepare sets for fast comparison (case-insensitive, strip spaces)
+        
         ncc_names = set(str(emp.get('Name', '')).strip().lower() for emp in ncc_employees if emp.get('Name'))
         ncc_usernames = set(str(emp.get('Name', '')).strip().lower() for emp in ncc_employees if emp.get('Name'))
 
@@ -336,14 +351,13 @@ class EmployeesView:
         for row in shiftdata:
             empname = str(row.empname).strip().lower() if row.empname else ""
             sdxp_username = str(row.Sdxp_Username).strip().lower() if row.Sdxp_Username else ""
-            # Compare Sdxp_Username and empname with NCC names
+          
             if empname in ncc_names or sdxp_username in ncc_usernames:
                 matched_employees.append({
                     "empname": row.empname,
                     "hris_id": row.hris_id
                 })
 
-        # Convert shiftdata to list of dicts (for original output)
         shiftdata_list = [
             dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
             for row in shiftdata
@@ -359,7 +373,7 @@ class EmployeesView:
             shift_employees = shift_employees_response.json()
         except Exception:
             shift_employees = []
-        # Filter only NCC employees
+       
         ncc_employees = [emp for emp in shift_employees if emp.get('Shift_Type') == 'RCC']
         query = text("""
          SELECT
@@ -370,7 +384,7 @@ class EmployeesView:
         """)
         shiftdata = session.execute(query).fetchall()
 
-        # Prepare sets for fast comparison (case-insensitive, strip spaces)
+        
         ncc_names = set(str(emp.get('Name', '')).strip().lower() for emp in ncc_employees if emp.get('Name'))
         ncc_usernames = set(str(emp.get('Name', '')).strip().lower() for emp in ncc_employees if emp.get('Name'))
 
@@ -378,14 +392,13 @@ class EmployeesView:
         for row in shiftdata:
             empname = str(row.empname).strip().lower() if row.empname else ""
             sdxp_username = str(row.Sdxp_Username).strip().lower() if row.Sdxp_Username else ""
-            # Compare Sdxp_Username and empname with NCC names
+           
             if empname in ncc_names or sdxp_username in ncc_usernames:
                 matched_employees.append({
                     "empname": row.empname,
                     "hris_id": row.hris_id
                 })
 
-        # Convert shiftdata to list of dicts (for original output)
         shiftdata_list = [
             dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
             for row in shiftdata
@@ -397,7 +410,6 @@ class EmployeesView:
         try:
             session = SessionLocal()
 
-            # SQL with joins to fetch all employee attributes + section/location/grade/designation
             employees_query = text('''
                 SELECT e.id, e.erp_id, e.hris_id, e.name, e.cnic, e.gender, 
                     e.section_id, e.location_id, e.grade_id, e.designation_id, 
@@ -487,7 +499,7 @@ class EmployeesView:
 
         total_employees = Employees.objects.filter(flag=1).count()
 
-        # Get unique user_ids from attendance where timestamp is today
+
         present_user_ids = Attendance.objects.filter(
             timestamp__date=today
         ).values_list('user_id', flat=True).distinct()
@@ -525,7 +537,7 @@ class EmployeesView:
 
         today = date.today()
 
-        # Pakistan Financial Year: 1 July -> 30 June
+        
         if today.month >= 7:
             fy_start = date(today.year, 7, 1)
             fy_end = date(today.year + 1, 6, 30)
@@ -533,8 +545,7 @@ class EmployeesView:
             fy_start = date(today.year - 1, 7, 1)
             fy_end = date(today.year, 6, 30)
 
-        # 20 calendar days back yields ~14 working days once weekends and
-        # holidays are removed.
+       
         trend_start = today - timedelta(days=19)
         month_trend_start = (today.replace(day=1) - timedelta(days=150)).replace(day=1)
 
@@ -547,9 +558,7 @@ class EmployeesView:
 
         session = SessionLocal()
         try:
-            # --------------------------------------------------
-            # EMPLOYEE COUNTS (total / gender / grade breakdown)
-            # --------------------------------------------------
+            
             emp_row = session.execute(text(f"""
                 SELECT
                     COUNT(*) AS total,
@@ -568,9 +577,7 @@ class EmployeesView:
                 ORDER BY count DESC
             """), base_params).fetchall()
 
-            # --------------------------------------------------
-            # ATTENDANCE TODAY (grouped by section for the org view)
-            # --------------------------------------------------
+           
             att_today_rows = session.execute(text(f"""
                 WITH employees_data AS (
                     SELECT e.erp_id, e.hris_id, s.id AS section_id, ISNULL(s.name, '-') AS section
@@ -621,17 +628,7 @@ class EmployeesView:
                 "is_weekend_today": 1 if is_weekend_today else 0,
             }).fetchall()
 
-            # --------------------------------------------------
-            # ATTENDANCE TREND (working days only, present vs total)
-            #
-            # Saturdays, Sundays and public holidays are left out entirely.
-            # Nobody is expected in on those days, so including them drew a
-            # dip to zero every weekend that read as mass absence.
-            #
-            # The weekday test is arithmetic rather than DATEPART(WEEKDAY),
-            # which shifts with the connection's DATEFIRST setting.
-            # 1900-01-01 was a Monday, so the modulo gives 0=Mon .. 6=Sun.
-            # --------------------------------------------------
+            
             trend_rows = session.execute(text(f"""
                 WITH date_range AS (
                     SELECT DATEADD(DAY, v.number, :trend_start) AS att_date
@@ -700,9 +697,7 @@ class EmployeesView:
                 ORDER BY dr.att_date
             """), {**base_params, "trend_start": trend_start, "today": today}).fetchall()
 
-            # --------------------------------------------------
-            # LEAVE STATS
-            # --------------------------------------------------
+            
             leave_pending = session.execute(text(f"""
                 SELECT COUNT(*) AS pending
                 FROM leaves l
@@ -732,9 +727,7 @@ class EmployeesView:
                 ORDER BY yr, mo
             """), {**base_params, "month_trend_start": month_trend_start}).fetchall()
 
-            # --------------------------------------------------
-            # OFFICIAL WORK STATS
-            # --------------------------------------------------
+
             official_pending = session.execute(text(f"""
                 SELECT COUNT(*) AS pending
                 FROM official_work_leaves ow
@@ -764,9 +757,8 @@ class EmployeesView:
                 ORDER BY yr, mo
             """), {**base_params, "month_trend_start": month_trend_start}).fetchall()
 
-            # --------------------------------------------------
-            # ORG-WIDE SECTION BREAKDOWN (admin only)
-            # --------------------------------------------------
+
+           
             by_section = []
             if org_wide:
                 section_emp_rows = session.execute(text("""
@@ -852,8 +844,9 @@ class EmployeesView:
                     }
                     for r in trend_rows
                 ],
-                # Mon-Fri, minus public holidays. Weekends are non-working days
-                # here, so they are excluded from every absence figure.
+
+
+               
                 "trend_basis": "working days (Mon-Fri, excluding public holidays)",
                 "is_working_day": not (is_weekend_today or is_holiday_today),
                 "leaves": {
@@ -906,7 +899,7 @@ class EmployeesView:
             for section in sections_data
         ]
 
-        # fetching location data
+
         location_query = text('''
             SELECT id, name FROM locations
         ''')
@@ -941,7 +934,7 @@ class EmployeesView:
             }
             for location in location_data
         ]
-        # generate random HRIS id which is not in column
+        
         existing_hris_ids = Employees.objects.values_list('hris_id', flat=True)
         new_hris_id = EmployeesView.generate_random_hris_id(existing_hris_ids)
         return JsonResponse({"success": True, "sections": sections, "locations": locations, "grades": grades, "designations": designations, "new_hris_id": new_hris_id})
@@ -950,7 +943,7 @@ class EmployeesView:
     @require_POST
     def create_employee(request):
         data = json.loads(request.body.decode('utf-8'))
-        # Validate required fields
+        
         required_fields = [
             'erp_id', 'hris_id', 'name', 'cnic', 'gender',
             'section_id', 'location_id', 'grade_id', 'designation_id', 'position'
@@ -971,7 +964,10 @@ class EmployeesView:
                 grade_id=int(data['grade_id']),
                 designation_id=int(data['designation_id']),
                 position=data['position'],
-                flag=1 if data.get('flag', False) else 0
+                flag=1 if data.get('flag', False) else 0,
+                # NEW, optional: left empty when the form doesn't send them.
+                date_of_joining=parse_date(data.get('date_of_joining') or ''),
+                date_of_birth=parse_date(data.get('date_of_birth') or ''),
             )
             return JsonResponse({"success": True, "message": "Employee created successfully", "employee_id": employee.pk}, status=201)
         except KeyError as e:
@@ -996,8 +992,7 @@ class EmployeesView:
         except Exception:
             return JsonResponse({"success": False, "error": "Invalid JSON format"}, status=400)
 
-        # hris_id is deliberately excluded: it is assigned once at creation and
-        # must never change on edit. Every other field is editable.
+        
         required_fields = [
             'erp_id', 'name', 'cnic', 'gender',
             'section_id', 'location_id', 'grade_id', 'designation_id', 'position'
@@ -1022,7 +1017,14 @@ class EmployeesView:
             employee.designation_id = int(data['designation_id'])
             employee.position = data['position']
             employee.flag = 1 if data.get('flag', False) else 0
-            # NOTE: employee.hris_id is intentionally left untouched.
+
+
+            
+            if 'date_of_joining' in data:
+                employee.date_of_joining = parse_date(data.get('date_of_joining') or '')
+            if 'date_of_birth' in data:
+                employee.date_of_birth = parse_date(data.get('date_of_birth') or '')
+            
             employee.save()
             return JsonResponse({"success": True, "message": "Employee updated successfully"}, status=200)
         except ValueError as e:

@@ -2,12 +2,13 @@ import PageBreadcrumb from "../../components/common/PageBreadCrumb";
 import ComponentCard from "../../components/common/ComponentCard";
 import PageMeta from "../../components/common/PageMeta";
 import EnhancedDataTable from "../../components/tables/DataTables/DataTableOne";
-import axios from "../../api/axios"; // Adjust the import path as necessary
+import axios from "../../api/axios"; 
 import { useState, useEffect, useMemo, useRef } from "react";
 import moment from "moment";
 import _ from "lodash";
 import { ToastContainer, toast } from "react-toastify";
 import { ColumnDef } from "@tanstack/react-table";
+import Swal from "sweetalert2"; 
 import DatePicker from "../../components/form/date-picker";
 import SearchableDropdown from "../../components/form/input/SearchableDropDown";
 import Button from "../../components/ui/button/Button";
@@ -17,17 +18,34 @@ import TextArea from "../../components/form/input/TextArea";
 import Badge from "../../components/ui/badge/Badge";
 import { LeaveIcon, InfoIcon } from "../../icons";
 import { findSectionHead, sortedApprovers } from "../../utils/sectionHead";
+import LeaveHistoryModal from "../../pages/Leaves/LeaveHistoryModal";
 
-// Leave types that may carry a supporting medical document. Kept in step with
-// MEDICAL_LEAVE_TYPES in leaves/views.py, which enforces the same rule.
-const MEDICAL_LEAVE_TYPES = ["medical leave", "sick leave"];
 
-// Mirrors LEAVE_ATTACHMENT_* in hris/settings.py. Checked here for immediate
-// feedback; the backend re-checks because this can be bypassed.
+const swalTheme = () => {
+  const isDark = document.documentElement.classList.contains("dark");
+  return {
+    background: isDark ? "#1d2939" : "#ffffff",
+    color: isDark ? "#f2f4f7" : "#1d2939",
+    confirmButtonColor: "#465fff",
+    cancelButtonColor: isDark ? "#475467" : "#98a2b3",
+   
+    customClass: { container: "swal-on-top" },
+  };
+};
+
+
 const ATTACHMENT_EXTENSIONS = [
   ".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".doc", ".docx",
 ];
 const ATTACHMENT_MAX_MB = 5;
+
+
+const CATEGORY_OPTIONS = [
+  { label: "All Employees", value: "all" },
+  { label: "Jamshoro Employees", value: "jamshoro" },
+  { label: "Planning & Lahore Employees", value: "planning_lahore" },
+  { label: "CPPA / MO Employees", value: "cppa_mo" },
+];
 
 type AttendanceRow = {
   id?: number;
@@ -44,25 +62,121 @@ type AttendanceRow = {
   head_erpid?: any;
   reason: string;
   status?: string;
-  approved_by?: string;
   created_at?: string;
+  
+  current_stage_label?: string | null;
+  current_stage_role?: string | null;
+  current_stage_erp_id?: number | null;
+ 
+  designation?: string | null;
+  location?: string | null;
+  category?: string | null;
+  joining_date?: string | null;
+  date_of_birth?: string | null;
+  official_training_days?: number | null;
 };
 
-export default function IndividualAttendance() {
+type LeaveBarInfo = {
+  total_allowed: number | null;
+  used_days: number;
+  remaining_leaves: number | null;
+};
+
+const BAR_STYLES = {
+  good: {
+    fill: "bg-success-500",
+    track: "bg-success-50 dark:bg-success-500/15",
+    text: "text-success-600 dark:text-success-500",
+  },
+  warning: {
+    fill: "bg-warning-500",
+    track: "bg-warning-50 dark:bg-warning-500/15",
+    text: "text-warning-600 dark:text-orange-400",
+  },
+  critical: {
+    fill: "bg-error-500",
+    track: "bg-error-50 dark:bg-error-500/15",
+    text: "text-error-600 dark:text-error-500",
+  },
+};
+
+
+function LeaveBar({
+  title,
+  info,
+}: {
+  title: string;
+  info: LeaveBarInfo | null | undefined;
+}) {
+  const total = info?.total_allowed ?? null;
+  const remaining = info?.remaining_leaves ?? null;
+  const used = info?.used_days ?? 0;
+  const pct =
+    total && total > 0 ? Math.min(100, Math.max(0, (used / total) * 100)) : 0;
+
+  let severity: "good" | "warning" | "critical" = "good";
+  if (total !== null) {
+    if (remaining === null || remaining <= 0) severity = "critical";
+    else if (remaining <= total * 0.2) severity = "warning";
+  }
+  const styles = BAR_STYLES[severity];
+
+  return (
+    <div className="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-semibold text-gray-800 dark:text-white/90">
+          {title}
+        </span>
+        {info && total !== null && (
+          <span className={`text-sm font-semibold ${styles.text}`}>
+            {remaining !== null && remaining < 0
+              ? `Over by ${Math.abs(remaining)}`
+              : `${remaining} left`}
+          </span>
+        )}
+      </div>
+
+      {!info ? (
+        <div className="flex items-center gap-2 text-sm text-gray-400 dark:text-gray-500">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-gray-300 dark:bg-gray-600" />
+          Loading...
+        </div>
+      ) : total === null ? (
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          No limit configured.
+        </p>
+      ) : (
+        <>
+          <div
+            className={`h-2 w-full overflow-hidden rounded-full ${styles.track}`}
+          >
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${styles.fill}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            Used {used} of {total}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function ApplyLeave() {
   const [leaves, setLeaves] = useState<AttendanceRow[]>([]);
   const user = JSON.parse(localStorage.getItem("user") || "{}");
+  
+  const [historyLeaveId, setHistoryLeaveId] = useState<number | null>(null);
 
   const [options, setOptions] = useState<{ label: string; value: string }[]>(
     []
   );
-  // "Official Work" is deliberately absent: it has its own module and its own
-  // table, and is no longer applied for through this form. The backend rejects
-  // it too, so no new 'Official Work' rows can reach the `leaves` table.
-  // Historical rows already there are untouched and still appear in reports.
+  
   const leavetype = [
     "Medical Leave",
     "Casual Leave",
-    "Annual Leave",
     "Maternity Leave First",
     "Maternity Leave Second",
     "Maternity Leave Third",
@@ -75,21 +189,14 @@ export default function IndividualAttendance() {
     "Compensatory Leave",
     "Short Leave",
     "Study Leave",
-    "Marriage Leave",
     "Paternity Leave",
     "Earned Leave",
     "Beareavement Leave",
+    "Disability Leave",
+    "Leave Ex-Pakistan",
   ];
 
-  const approvedby = [
-    "CEO ISMO",
-    "ED (HR) ISMO",
-    "ED (MO) ISMO",
-    "ED (SO) ISMO",
-    "SECTION HEAD",
-  ];
-
-  // Leave types restricted to a specific employee gender ("M"/"F")
+  
   const genderRestrictedLeaveTypes: Record<string, "M" | "F"> = {
     "Maternity Leave First": "F",
     "Maternity Leave Second": "F",
@@ -105,26 +212,29 @@ export default function IndividualAttendance() {
     remaining_leaves: number | null;
     financial_year: string;
   } | null>(null);
+
+
+  const [leaveBars, setLeaveBars] = useState<{
+    earned: LeaveBarInfo | null;
+    casual: LeaveBarInfo | null;
+  } | null>(null);
+  
+  const [barsRefresh, setBarsRefresh] = useState(0);
+
+  const [categoryFilter, setCategoryFilter] = useState("all");
+
   const initializedSelf = useRef(false);
-  // The logged-in user's own employee and section-head values. Remembered so
-  // a reset can restore them immediately — the effect below that derives them
-  // runs once and must not be relied on to re-populate the form.
+  
   const selfDefaults = useRef<Partial<AttendanceRow>>({});
 
-  // A blank form, built fresh on every call so a reset picks up today's date
-  // rather than the date the page happened to be opened on.
   const buildBlankForm = (): AttendanceRow => ({
     erp_id: 0,
     employee_id: 0,
     entry_made_by: user.erpid,
     leave_type: "",
     reason: "",
-    // Same approval rule for every grade: an application is created as
-    // pending and goes to the section head. Grade 9 and above used to be
-    // auto-approved with themselves as the approver. The backend now fixes
-    // the status regardless of what is posted.
+  
     status: "pending",
-    approved_by: "",
     head: "",
     start_date: moment().format("YYYY-MM-DD").toString(),
     end_date: moment().format("YYYY-MM-DD").toString(),
@@ -137,7 +247,6 @@ export default function IndividualAttendance() {
     reason: "",
     head: "",
     status: "",
-    approved_by: "",
     start_date: "",
     end_date: "",
   });
@@ -146,24 +255,18 @@ export default function IndividualAttendance() {
   const [fielderror, setFieldError] =
     useState<AttendanceRow>(buildBlankFieldErrors);
 
-  // The table lists the current financial year only; the server decides which
-  // year that is and reports it back so the heading can say so.
+  
   const [financialYear, setFinancialYear] = useState<{
     start: string;
     end: string;
     label: string;
   } | null>(null);
 
-  // Supporting medical record, only offered for medical / sick leave.
+ 
   const [attachment, setAttachment] = useState<File | null>(null);
   const [attachmentError, setAttachmentError] = useState("");
-  // Bumped on reset to clear the native file input, which cannot be
-  // controlled from state.
+ 
   const [attachmentKey, setAttachmentKey] = useState(0);
-
-  const attachmentAllowed = MEDICAL_LEAVE_TYPES.includes(
-    (data.leave_type || "").trim().toLowerCase()
-  );
 
   const pickAttachment = (file: File | null) => {
     if (!file) {
@@ -191,13 +294,6 @@ export default function IndividualAttendance() {
   };
 
   // Return the form to exactly the state a fresh page load produces.
-  //
-  // The previous reset rebuilt `data` from a partial literal that omitted
-  // entry_made_by, approved_by and head, and set status to "". Those fields
-  // are required by the validation above, and two of them are never edited
-  // directly — so the next Apply always failed on fields the user could not
-  // see or fix, which is why the page had to be reloaded between entries.
-  // (It also let a leave through with an empty status.)
   const resetForm = () => {
     setData({ ...buildBlankForm(), ...selfDefaults.current });
     setFieldError(buildBlankFieldErrors());
@@ -207,16 +303,6 @@ export default function IndividualAttendance() {
     // Remounts the file input; its value cannot be cleared from state.
     setAttachmentKey((key) => key + 1);
   };
-
-  // Drop a chosen file if the leave type changes to one that cannot carry an
-  // attachment, so a medical record is never posted against another type.
-  useEffect(() => {
-    if (!attachmentAllowed && (attachment || attachmentError)) {
-      setAttachment(null);
-      setAttachmentError("");
-      setAttachmentKey((key) => key + 1);
-    }
-  }, [attachmentAllowed]);
 
   useEffect(() => {
     fetchEmployeesOptions();
@@ -249,9 +335,6 @@ export default function IndividualAttendance() {
     setData((prev) => ({ ...prev, ...selfDefaults.current }));
   }, [employeesData]);
 
-  // Section Head choices: the applicant's own section first, most senior
-  // first, so the head the form defaults to is the top entry rather than
-  // something to hunt for among four hundred names.
   // Section Head choices: the applicant's own section first, most senior
   // first, so the head the form defaults to is the top entry rather than
   // something to hunt for among four hundred names.
@@ -308,6 +391,50 @@ export default function IndividualAttendance() {
     fetchBalance();
   }, [data.leave_type, data.erp_id]);
 
+  // Earned + Casual bars for the selected employee. Uses the existing
+  // /leaves/balance/ endpoint (one call per type), so no new route is needed.
+  useEffect(() => {
+    if (!data.erp_id) {
+      setLeaveBars(null);
+      return;
+    }
+
+    let cancelled = false;
+    setLeaveBars({ earned: null, casual: null });
+
+    const pick = (res: any): LeaveBarInfo => ({
+      total_allowed: res.data.total_allowed,
+      used_days: res.data.used_days,
+      remaining_leaves: res.data.remaining_leaves,
+    });
+
+    const fetchBars = async () => {
+      try {
+        const [earned, casual] = await Promise.all([
+          axios.post("/leaves/balance/", {
+            erp_id: data.erp_id,
+            leave_type: "Earned Leave",
+          }),
+          axios.post("/leaves/balance/", {
+            erp_id: data.erp_id,
+            leave_type: "Casual Leave",
+          }),
+        ]);
+        if (!cancelled) {
+          setLeaveBars({ earned: pick(earned), casual: pick(casual) });
+        }
+      } catch (error) {
+        console.error("Error fetching leave bars:", error);
+        if (!cancelled) setLeaveBars(null);
+      }
+    };
+
+    fetchBars();
+    return () => {
+      cancelled = true;
+    };
+  }, [data.erp_id, barsRefresh]);
+
   // Severity of the remaining balance: plenty left / running low / exhausted
   const balanceTotal = balance?.total_allowed ?? null;
   const balanceRemaining = balance?.remaining_leaves ?? null;
@@ -346,6 +473,9 @@ export default function IndividualAttendance() {
     },
   }[balanceSeverity];
 
+  // Anex-B: whoever the CURRENT stage is assigned to can act — not always
+  // the section head. Also collects an optional remark ("forward with
+  // remarks") that's stored on the stage and shown in the History modal.
   const handleApproveLeave = async (id: any) => {
     const action = id.toString().split("-")[1];
     const empid = parseInt(id.toString().split("-")[0]);
@@ -356,20 +486,59 @@ export default function IndividualAttendance() {
         return;
       }
 
-      if (window.confirm(`Are you sure you want to ${action} this leave?`)) {
-        const response = await axios.post("/leaves/approve/", {
+      // SweetAlert2 replacement for window.prompt
+      const commentResult = await Swal.fire({
+        ...swalTheme(),
+        title: action === "reject" ? "Reject Leave" : "Approve Leave",
+        text:
+          action === "reject"
+            ? "Reason for rejecting this leave (shown to the applicant):"
+            : "Remarks to forward with this approval (optional):",
+        input: "textarea",
+        inputPlaceholder: "Type here...",
+        showCancelButton: true,
+        confirmButtonText: "Continue",
+        cancelButtonText: "Cancel",
+      });
+      if (!commentResult.isConfirmed) return; // user cancelled the prompt
+      const comment: string = commentResult.value || "";
+
+      // SweetAlert2 replacement for window.confirm
+      const confirmResult = await Swal.fire({
+        ...swalTheme(),
+        icon: action === "reject" ? "warning" : "question",
+        title: "Are you sure?",
+        text: `Are you sure you want to ${action} this leave?`,
+        showCancelButton: true,
+        confirmButtonText: `Yes, ${action}`,
+        cancelButtonText: "Cancel",
+        reverseButtons: true,
+      });
+
+      if (confirmResult.isConfirmed) {
+        // /leaves/advance/ checks the actor against the CURRENT stage's
+        // assigned approver, not a flat head_erpid comparison, so this
+        // call works correctly at every stage of the Anex-B chain.
+        const response = await axios.post("/leaves/advance/", {
           recordid: Number(empid),
           action: action,
-          // Recorded on the notification sent to the applicant.
           actor_erp_id: user.erpid,
+          comment: comment || undefined,
         });
-        console.log("Leave approval response:", response.data);
+        console.log("Leave advance response:", response.data);
         getEmployeesLeaves();
-        toast.success("Leave approved successfully");
+        // An approval/rejection changes used balances.
+        setBarsRefresh((n) => n + 1);
+        const finalStatus = response.data?.leave_status;
+        toast.success(
+          finalStatus === "pending"
+            ? "Stage approved — moved to the next approver"
+            : `Leave ${finalStatus} successfully`
+        );
       }
-    } catch (error) {
-      console.error("Error approving leave:", error);
-      toast.error("Failed to approve leave");
+    } catch (error: any) {
+      console.error("Error advancing leave:", error);
+      toast.error(error.response?.data?.error || "Failed to update leave");
     }
   };
 
@@ -395,6 +564,17 @@ export default function IndividualAttendance() {
             "has_attachment",
             "attachment_name",
             "attachment_url",
+            // Anex-B current approval stage — see Current Approver column.
+            "current_stage_label",
+            "current_stage_role",
+            "current_stage_erp_id",
+            // Employee details / category filter / official training.
+            "designation",
+            "location",
+            "category",
+            "joining_date",
+            "date_of_birth",
+            "official_training_days",
           ]);
           return picked;
         }
@@ -406,6 +586,18 @@ export default function IndividualAttendance() {
       toast.error("Failed to load employee leaves");
     }
   };
+
+  // Rows after the category filter ("all" shows everything).
+  const visibleLeaves = useMemo(
+    () =>
+      categoryFilter === "all"
+        ? leaves
+        : leaves.filter((l) => l.category === categoryFilter),
+    [leaves, categoryFilter]
+  );
+
+  const dash = <span className="text-gray-400 dark:text-gray-500">—</span>;
+
   const columns: ColumnDef<AttendanceRow>[] = [
     {
       header: "ERP ID",
@@ -419,7 +611,26 @@ export default function IndividualAttendance() {
       header: "Name",
       accessorKey: "employee_name",
     },
-
+    {
+      header: "Designation",
+      accessorKey: "designation",
+      cell: ({ getValue }) => getValue<string>() || dash,
+    },
+    {
+      header: "Location",
+      accessorKey: "location",
+      cell: ({ getValue }) => getValue<string>() || dash,
+    },
+    {
+      header: "Joining Date",
+      accessorKey: "joining_date",
+      cell: ({ getValue }) => getValue<string>() || dash,
+    },
+    {
+      header: "Date of Birth",
+      accessorKey: "date_of_birth",
+      cell: ({ getValue }) => getValue<string>() || dash,
+    },
     {
       header: "Leave Type",
       accessorKey: "leave_type",
@@ -439,6 +650,14 @@ export default function IndividualAttendance() {
         const start = moment(row.original.start_date);
         const end = moment(row.original.end_date);
         return end.diff(start, "days") + 1; // +1 to include the start date
+      },
+    },
+    {
+      header: "Official Training",
+      accessorKey: "official_training_days",
+      cell: ({ getValue }) => {
+        const days = getValue<number>();
+        return days ? `${days} day${days === 1 ? "" : "s"}` : dash;
       },
     },
     {
@@ -464,6 +683,33 @@ export default function IndividualAttendance() {
         ),
     },
     {
+      header: "Current Approver",
+      id: "current-approver",
+      cell: ({ row }) => {
+        const stage = row.original;
+        if (!stage.current_stage_label) {
+          return <span className="text-gray-400 dark:text-gray-500">—</span>;
+        }
+        const approver = employeesData.find(
+          (e: any) => Number(e.erp_id) === Number(stage.current_stage_erp_id)
+        );
+        return (
+          <div className="flex flex-col">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {stage.current_stage_label}
+            </span>
+            <span className="text-xs text-gray-400 dark:text-gray-500">
+              {approver
+                ? `${approver.name} (${stage.current_stage_erp_id})`
+                : stage.current_stage_erp_id
+                ? `ERP ${stage.current_stage_erp_id}`
+                : "Unassigned"}
+            </span>
+          </div>
+        );
+      },
+    },
+    {
       header: "Status",
       accessorKey: "status",
       cell: ({ getValue }) => {
@@ -478,34 +724,47 @@ export default function IndividualAttendance() {
         return <span className={color}>{value}</span>;
       },
     },
-    // Only show action columns if status is pending
+    // Approve/Reject show only when the CURRENT stage is assigned to the
+    // logged-in user (Anex-B: this rotates through Reporting Officer,
+    // Functional Head, HR & Admin, CEO, etc. as the leave advances — it's
+    // no longer always the section head). History is always available.
     {
       header: "Actions",
       id: "actions-approve",
-      cell: ({ row }) =>
-        row.original.status?.toLowerCase() === "pending" &&
-          row.original.head_erpid === user.erpid ? (
-          <div className="flex gap-2">
-            <Button
-              size="xs"
-              variant="primary"
-              onClick={() =>
-                handleApproveLeave(`${row.original.id?.toString()}-approve`)
-              }
-            >
-              Approve
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() =>
-                handleApproveLeave(`${row.original.id?.toString()}-reject`)
-              }
-            >
-              Reject
-            </Button>
-          </div>
-        ) : null,
+      cell: ({ row }) => (
+        <div className="flex gap-2">
+          {row.original.status?.toLowerCase() === "pending" &&
+          Number(row.original.current_stage_erp_id) === Number(user.erpid) ? (
+            <>
+              <Button
+                size="xs"
+                variant="primary"
+                onClick={() =>
+                  handleApproveLeave(`${row.original.id?.toString()}-approve`)
+                }
+              >
+                Approve
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() =>
+                  handleApproveLeave(`${row.original.id?.toString()}-reject`)
+                }
+              >
+                Reject
+              </Button>
+            </>
+          ) : null}
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => setHistoryLeaveId(row.original.id ?? null)}
+          >
+            History
+          </Button>
+        </div>
+      ),
     },
   ];
   const fetchEmployeesOptions = async () => {
@@ -529,7 +788,6 @@ export default function IndividualAttendance() {
         !data.employee_id ||
         !data.leave_type ||
         !data.start_date ||
-        !data.approved_by ||
         !data.end_date ||
         !data.reason ||
         !data.head
@@ -539,7 +797,6 @@ export default function IndividualAttendance() {
           employee_id: !data.employee_id ? "Employee ID is required" : "",
           leave_type: !data.leave_type ? "Leave Type is required" : "",
           reason: !data.reason ? "Reason is required" : "",
-          approved_by: !data.approved_by ? "Approved By is required" : "",
           head: !data.head ? "Section Head is required" : "",
           start_date: !data.start_date ? "Start Date is required" : "",
           end_date: !data.end_date ? "End Date is required" : "",
@@ -552,11 +809,23 @@ export default function IndividualAttendance() {
         return;
       }
 
-      if (window.confirm("Are you sure you want to apply for this leave?")) {
+      // SweetAlert2 replacement for window.confirm
+      const confirmation = await Swal.fire({
+        ...swalTheme(),
+        icon: "question",
+        title: "Apply for this leave?",
+        text: "Are you sure you want to apply for this leave?",
+        showCancelButton: true,
+        confirmButtonText: "Yes, apply",
+        cancelButtonText: "Cancel",
+        reverseButtons: true,
+      });
+
+      if (confirmation.isConfirmed) {
         try {
           let response;
-          if (attachment && attachmentAllowed) {
-            // Multipart when a medical record is attached. Content-Type is
+          if (attachment) {
+            // Multipart when a document is attached. Content-Type is
             // left unset so the browser adds the multipart boundary — the
             // shared axios instance otherwise forces application/json.
             const form = new FormData();
@@ -585,6 +854,7 @@ export default function IndividualAttendance() {
 
       resetForm();
       getEmployeesLeaves();
+      setBarsRefresh((n) => n + 1);
       toast.success("Leave application submitted successfully");
     } catch (error) {
       console.error("Error applying for leave:", error);
@@ -603,6 +873,31 @@ export default function IndividualAttendance() {
         <ComponentCard title={`Leave Application Form`}>
           <ToastContainer position="bottom-right" />
 
+          {/* Separate Earned / Casual leave bars, with the employee's
+              designation shown alongside the leave details. */}
+          {data.erp_id ? (
+            <div className="mb-5 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+              <div className="border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+                <h4 className="font-semibold text-gray-800 dark:text-white/90">
+                  {selectedEmployee?.name || "Selected employee"}
+                  {selectedEmployee?.erp_id
+                    ? ` (${selectedEmployee.erp_id})`
+                    : ""}
+                </h4>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  {selectedEmployee?.designation || "Designation not available"}
+                  {selectedEmployee?.location
+                    ? ` · ${selectedEmployee.location}`
+                    : ""}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-4 px-5 py-4 sm:grid-cols-2">
+                <LeaveBar title="Earned Leave" info={leaveBars?.earned} />
+                <LeaveBar title="Casual Leave" info={leaveBars?.casual} />
+              </div>
+            </div>
+          ) : null}
+
           {data.leave_type && (
             <div className="mb-5 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-gray-800">
@@ -618,6 +913,9 @@ export default function IndividualAttendance() {
                       {selectedEmployee?.name || "Selected employee"}
                       {selectedEmployee?.erp_id
                         ? ` (${selectedEmployee.erp_id})`
+                        : ""}
+                      {selectedEmployee?.designation
+                        ? ` · ${selectedEmployee.designation}`
                         : ""}
                     </p>
                   </div>
@@ -781,61 +1079,45 @@ export default function IndividualAttendance() {
                 hint={fielderror.head}
               />
             </div>
+            {/* Supporting document — offered for every leave type. */}
             <div className="w-full my-3">
-              <Label>Approved By</Label>
-              <Select
-                options={approvedby.map((type) => ({
-                  label: type,
-                  value: type,
-                }))}
-                placeholder="Select an option"
-                value={data.approved_by}
-                onChange={(value) => {
-                  setData({ ...data, approved_by: value?.toString() || "" });
-                }}
-                className="dark:bg-dark-900"
-                error={!!fielderror.approved_by}
-                hint={fielderror.approved_by}
+              <Label>
+                Attachment <span className="text-gray-400">(optional)</span>
+              </Label>
+              <input
+                key={attachmentKey}
+                type="file"
+                accept={ATTACHMENT_EXTENSIONS.join(",")}
+                onChange={(e) => pickAttachment(e.target.files?.[0] ?? null)}
+                className={`h-11 w-full rounded-lg border px-4 py-2.5 text-sm text-gray-800 file:mr-3 file:rounded file:border-0 file:bg-brand-50 file:px-3 file:py-1 file:text-sm file:text-brand-600 dark:bg-gray-900 dark:text-white/90 dark:file:bg-brand-500/15 dark:file:text-brand-400 ${
+                  attachmentError
+                    ? "border-error-500"
+                    : "border-gray-300 dark:border-gray-700"
+                }`}
               />
+              {attachmentError ? (
+                <p className="mt-1 text-xs text-error-600 dark:text-error-500">
+                  {attachmentError}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {attachment
+                    ? `Selected: ${attachment.name}`
+                    : `Attach a supporting document. ${ATTACHMENT_EXTENSIONS.join(
+                        ", "
+                      )} up to ${ATTACHMENT_MAX_MB} MB.`}
+                </p>
+              )}
             </div>
-            {/* Medical record upload — only for medical / sick leave. */}
-            {attachmentAllowed && (
-              <div className="w-full my-3">
-                <Label>
-                  Medical Record{" "}
-                  <span className="text-gray-400">(optional)</span>
-                </Label>
-                <input
-                  key={attachmentKey}
-                  type="file"
-                  accept={ATTACHMENT_EXTENSIONS.join(",")}
-                  onChange={(e) => pickAttachment(e.target.files?.[0] ?? null)}
-                  className={`h-11 w-full rounded-lg border px-4 py-2.5 text-sm text-gray-800 file:mr-3 file:rounded file:border-0 file:bg-brand-50 file:px-3 file:py-1 file:text-sm file:text-brand-600 dark:bg-gray-900 dark:text-white/90 dark:file:bg-brand-500/15 dark:file:text-brand-400 ${
-                    attachmentError
-                      ? "border-error-500"
-                      : "border-gray-300 dark:border-gray-700"
-                  }`}
-                />
-                {attachmentError ? (
-                  <p className="mt-1 text-xs text-error-600 dark:text-error-500">
-                    {attachmentError}
-                  </p>
-                ) : (
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {attachment
-                      ? `Selected: ${attachment.name}`
-                      : `Attach a prescription or medical certificate. ${ATTACHMENT_EXTENSIONS.join(
-                          ", "
-                        )} up to ${ATTACHMENT_MAX_MB} MB.`}
-                  </p>
-                )}
-              </div>
-            )}
 
             <div className="my-5">
               <TextArea
                 value={data.reason}
-                placeholder="Enter reason for leave"
+                placeholder={
+                  data.leave_type === "Leave Ex-Pakistan"
+                    ? "Mention the country / destination and purpose of travel"
+                    : "Enter reason for leave"
+                }
                 onChange={(value) => {
                   setData({ ...data, reason: value });
                 }}
@@ -857,18 +1139,39 @@ export default function IndividualAttendance() {
               Apply
             </Button>
           </div>
-          <div className="mt-8 mb-3 flex flex-wrap items-baseline justify-between gap-2">
-            <h4 className="text-lg font-semibold text-gray-800 dark:text-white/90">
-              Leave Records
-            </h4>
-            {financialYear && (
-              <span className="text-sm text-gray-500 dark:text-gray-400">
-                Financial year {financialYear.label} ({financialYear.start} to{" "}
-                {financialYear.end})
-              </span>
-            )}
+          <div className="mt-8 mb-3 flex flex-wrap items-end justify-between gap-3">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <h4 className="text-lg font-semibold text-gray-800 dark:text-white/90">
+                Leave Records
+              </h4>
+              {financialYear && (
+                <span className="text-sm text-gray-500 dark:text-gray-400">
+                  Financial year {financialYear.label} ({financialYear.start} to{" "}
+                  {financialYear.end})
+                </span>
+              )}
+            </div>
+            <div className="w-full sm:w-64">
+              <Select
+                options={CATEGORY_OPTIONS}
+                placeholder="Filter by category"
+                value={categoryFilter}
+                onChange={(value) => setCategoryFilter(value?.toString() || "all")}
+                className="dark:bg-dark-900"
+              />
+            </div>
           </div>
-          <EnhancedDataTable<AttendanceRow> data={leaves} columns={columns} />
+          <EnhancedDataTable<AttendanceRow>
+            data={visibleLeaves}
+            columns={columns}
+          />
+          {historyLeaveId !== null && (
+            <LeaveHistoryModal
+              leaveId={historyLeaveId}
+              employeesData={employeesData}
+              onClose={() => setHistoryLeaveId(null)}
+            />
+          )}
         </ComponentCard>
       </div>
     </>

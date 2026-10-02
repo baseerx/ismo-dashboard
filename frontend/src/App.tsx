@@ -176,7 +176,6 @@ export default function App() {
                 path="/leaves/public-holidays"
                 element={<PublicHoliday />}
               />
-
               {/* Plugins */}
               {/* Ui Elements */}
               <Route path="/alerts" element={<Alerts />} />

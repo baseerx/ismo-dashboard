@@ -2,7 +2,7 @@ from django.shortcuts import render
 from django.http import JsonResponse, FileResponse
 from django.conf import settings
 from django.core.files.base import ContentFile
-from .models import LeaveModel, LeaveTypeCountModel
+from .models import LeaveModel, LeaveTypeCountModel, LeaveApprovalStage
 from django.views.decorators.http import require_GET,require_POST
 from django.views.decorators.csrf import csrf_exempt
 from django.db.models import Q
@@ -22,9 +22,28 @@ from users.models import Employees
 from addtouser.models import CustomUser
 from django.contrib.auth.models import User
 
+# Phase 1 rule engine (leave_rules.py) and the multi-stage approval
+# workflow (approval_workflow.py) — both standalone modules, imported
+# here so create_leave_request / get_leave_requests can use them.
+from .leave_rules import (
+    REMOVED_LEAVE_TYPES,
+    check_removed_leave_type,
+    enforce_max_days_per_request,
+    check_hajj_occurrence,
+    paternity_alert,
+    resolve_maternity_leave_type,
+    MATERNITY_SEQUENCE,
+    check_rr_prerequisite,
+    split_medical_leave_lwp,
+    resolve_ex_pakistan_shortfall,
+    validate_attachment_universal,
+)
+from .approval_workflow import initialize_approval_chain, serialize_current_stage
+# NEW: employee category (Jamshoro / Planning & Lahore / CPPA-MO) by location.
+from .location_groups import category_for_location
+
 # Create your views here.
 
-# Leave types restricted to a specific employee gender ("M"/"F")
 GENDER_RESTRICTED_LEAVE_TYPES = {
     "maternity leave first": "F",
     "maternity leave second": "F",
@@ -33,18 +52,13 @@ GENDER_RESTRICTED_LEAVE_TYPES = {
     "paternity leave": "M",
 }
 
-# Leave types that require a minimum number of years of service
 MIN_SERVICE_YEARS_LEAVE_TYPES = {
     "hajj leave": 3,
 }
 
 
 def current_financial_year(today=None):
-    """The Pakistan financial year containing `today`: 1 July -> 30 June.
-
-    The same rule get_leaves_count and get_leave_balance apply inline; kept
-    here so anything new shares one definition instead of another copy.
-    """
+    
     today = today or date.today()
 
     if today.month >= 7:
@@ -53,8 +67,7 @@ def current_financial_year(today=None):
 
 
 def get_employee_years_of_service(erp_id):
-    """Returns years of service for an employee (based on their account's
-    date_joined), or None if it cannot be determined."""
+    
     authid = CustomUser.objects.filter(erpid=erp_id).values_list(
         "authid", flat=True
     ).first()
@@ -75,12 +88,9 @@ def get_leave_requests(request,erpid):
     data=[]
     sessions= SessionLocal()
 
-    # The table shows the current financial year only. Overlap rather than
-    # start_date alone, so a leave that straddles 30 June still appears in
-    # both years it touches — the same rule the reports use.
     fy_start, fy_end = current_financial_year()
 
-    query = text("""
+    base_query = """
         SELECT
             l.id,
             e.name AS employee_name,
@@ -93,37 +103,93 @@ def get_leave_requests(request,erpid):
             l.end_date,
             l.reason,
             l.status,
-            l.created_at
+            l.created_at,
+            d.title AS designation,
+            loc.name AS location_name,
+            e.date_of_joining,
+            e.date_of_birth
         FROM leaves l
-        LEFT JOIN employees e 
+        LEFT JOIN employees e
             ON l.erp_id = e.erp_id
         LEFT JOIN employees h
             ON l.head_erpid = h.erp_id
+        LEFT JOIN designations d ON e.designation_id = d.id
+        LEFT JOIN locations loc ON e.location_id = loc.id
         WHERE e.flag = 1
-          AND e.section_id = (SELECT section_id FROM employees WHERE erp_id = :epid)
           AND l.start_date IS NOT NULL
           AND l.end_date IS NOT NULL
           AND l.start_date <= :fy_end
           AND l.end_date >= :fy_start
+          {extra_clause}
         ORDER BY l.created_at DESC
-    """)
-    result = sessions.execute(
-        query,
+    """
+
+    own_section_query = text(base_query.format(
+        extra_clause="AND e.section_id = (SELECT section_id FROM employees WHERE erp_id = :epid)"
+    ))
+    own_section_rows = sessions.execute(
+        own_section_query,
         {"epid": erpid, "fy_start": fy_start, "fy_end": fy_end},
     ).fetchall()
 
-    # Attachment details come from the ORM so the download URL is built the
-    # same way everywhere. One query for the whole page, not one per row.
+    seen_ids = {row[0] for row in own_section_rows}
+    result = list(own_section_rows)
+
+    pending_leave_ids = list(
+        LeaveApprovalStage.objects.filter(
+            assigned_erp_id=erpid, status="pending"
+        ).values_list("leave_id", flat=True)
+    )
+    extra_ids = [pk for pk in pending_leave_ids if pk not in seen_ids]
+
+    if extra_ids:
+        cross_dept_query = text(base_query.format(
+            extra_clause="AND l.id IN :leave_ids"
+        )).bindparams(bindparam("leave_ids", expanding=True))
+        cross_dept_rows = sessions.execute(
+            cross_dept_query,
+            {"leave_ids": extra_ids, "fy_start": fy_start, "fy_end": fy_end},
+        ).fetchall()
+        result.extend(cross_dept_rows)
+        seen_ids.update(row[0] for row in cross_dept_rows)
+
+    result.sort(key=lambda row: row[11], reverse=True)  # created_at desc
+
+    
     leave_ids = [row[0] for row in result]
+    leave_objs = list(LeaveModel.objects.filter(pk__in=leave_ids)) if leave_ids else []
     attachments = {
-        leave.pk: attachment_payload(leave, request)
-        for leave in LeaveModel.objects.filter(pk__in=leave_ids)
-    } if leave_ids else {}
+        leave.pk: attachment_payload(leave, request) for leave in leave_objs
+    }
+    stage_info = {
+        leave.pk: serialize_current_stage(leave) for leave in leave_objs
+    }
     no_attachment = {
         "has_attachment": False,
         "attachment_name": None,
         "attachment_url": None,
     }
+    no_stage = {
+        "current_stage_label": None,
+        "current_stage_role": None,
+        "current_stage_erp_id": None,
+    }
+    training_days = {}
+    erp_set = {row[3] for row in result}
+    if erp_set:
+        for ow in OfficialWorkModel.objects.filter(
+            erp_id__in=erp_set,
+            leave_type__iexact="Training",
+            start_date__lte=fy_end,
+            end_date__gte=fy_start,
+        ).exclude(Q(status__iexact="rejected") | Q(status__iexact="cancelled")):
+            if ow.start_date and ow.end_date:
+                first = max(ow.start_date, fy_start)
+                last = min(ow.end_date, fy_end)
+                if first <= last:
+                    training_days[ow.erp_id] = (
+                        training_days.get(ow.erp_id, 0) + (last - first).days + 1
+                    )
 
     for row in result:
         data.append({
@@ -139,14 +205,20 @@ def get_leave_requests(request,erpid):
             "created_at": row[11].strftime('%Y-%m-%d %H:%M:%S'),
             "head_erpid": '-' if row[5]==0 else row[5],
             "head_name": row[6],
+            "designation": row[12],
+            "location": row[13],
+            "category": category_for_location(row[13]),
+            "joining_date": row[14].strftime('%d-%m-%Y') if row[14] else None,
+            "date_of_birth": row[15].strftime('%d-%m-%Y') if row[15] else None,
+            "official_training_days": training_days.get(row[3], 0),
             **attachments.get(row[0], no_attachment),
+            **(stage_info.get(row[0]) or no_stage),
         })
     sessions.close()
     return JsonResponse(
         {
             "leaves": data,
-            # Returned so the table can state which year it is showing,
-            # rather than looking as though older records were lost.
+            
             "financial_year": {
                 "start": fy_start.strftime("%d-%m-%Y"),
                 "end": fy_end.strftime("%d-%m-%Y"),
@@ -169,10 +241,6 @@ def get_leaves_count(request):
     sessions = SessionLocal()
 
     try:
-        # -------------------------------------------------------
-        # Pakistan Financial Year
-        # 1 July  -> 30 June
-        # -------------------------------------------------------
         today = date.today()
 
         if today.month >= 7:
@@ -182,9 +250,6 @@ def get_leaves_count(request):
             fy_start = date(today.year - 1, 7, 1)
             fy_end = date(today.year, 6, 30)
 
-        # -------------------------------------------------------
-        # Employees
-        # -------------------------------------------------------
         if erpid == 0 and section:
 
             employee_query = text("""
@@ -239,9 +304,6 @@ def get_leaves_count(request):
 
             leave_count = 0
 
-            # -------------------------------------------------------
-            # Normal Leaves
-            # -------------------------------------------------------
             leaves = sessions.execute(
                 text("""
                     SELECT
@@ -266,9 +328,7 @@ def get_leaves_count(request):
                 if overlap_start <= overlap_end:
                     leave_count += (overlap_end - overlap_start).days + 1
 
-            # -------------------------------------------------------
-            # Official Work Leaves
-            # -------------------------------------------------------
+         
             official_leaves = sessions.execute(
                 text("""
                     SELECT
@@ -307,13 +367,6 @@ def get_leaves_count(request):
 
     finally:
         sessions.close()
-
-# "Official Work" is not a row in the `leaves` table — it is its own module
-# backed by `official_work_leaves`, where each record carries one of several
-# sub-types (Meetings, Official Tour, Work From Home, ...). Selecting
-# "Official Work" on a leave report therefore has to read from that table
-# instead, otherwise the report comes back empty (or worse, shows only the
-# handful of legacy rows that were typed into `leaves` by hand).
 OFFICIAL_WORK_LEAVE_TYPE = "Official Work"
 
 
@@ -325,32 +378,13 @@ def get_official_work_records(
     include_pending,
     erp_id=None,
 ):
-    """Return one row per official-work record overlapping the date range.
-
-    Reads BOTH sources and unions them:
-
-    * `official_work_leaves` — the official work module, where every new
-      entry is recorded. Each row carries a sub-type (Meetings, Official
-      Tour, Work From Home, ...).
-    * `leaves` where leave_type = 'Official Work' — historical entries made
-      through the leave application form before official work moved to its
-      own module. The form no longer offers the option, but these rows still
-      exist and must keep showing up or the report would under-report.
-
-    Each record is tagged with `source` so a reader can tell which table it
-    came from. `include_pending` mirrors whatever status filter the calling
-    report already applies to ordinary leaves, so the official-work detail
-    agrees with the summary shown above it on the same page.
-    """
-    # Statuses are internal constants, never user input — safe to inline.
+    
     status_clause = (
         "IN ('approved', 'pending')" if include_pending else "= 'approved'"
     )
     erp_clause = "AND r.erp_id = :erp_id" if erp_id else ""
 
-    # UNION ALL, not UNION: two genuinely separate records that happen to
-    # share every column are still two records, and the day-level dedupe in
-    # summarize_official_work handles any overlap in the totals.
+ 
     records_query = text(f"""
         SELECT
             r.erp_id,
@@ -402,8 +436,7 @@ def get_official_work_records(
 
     records = []
     for row in rows:
-        # Clip to the requested window so a tour that straddles the boundary
-        # is not counted beyond it — same rule the leave counts use.
+        
         days = clipped_days(row.start_date, row.end_date, start_date, end_date)
         if not days:
             continue
@@ -419,7 +452,7 @@ def get_official_work_records(
             "status": row.status,
             "reason": row.reason,
             "source": row.source,
-            # Consumed by summarize_official_work, stripped before responding.
+            
             "_days": days,
         })
 
@@ -427,12 +460,7 @@ def get_official_work_records(
 
 
 def official_work_day_sets(records):
-    """Distinct official-work days per ERP ID, across both source tables.
-
-    Lets the per-employee summary agree with the record list underneath it:
-    a day recorded once in the official work module and again as a legacy
-    leave row is one day off, not two.
-    """
+   
     days_by_erp = {}
     for record in records:
         days_by_erp.setdefault(record["erp_id"], set()).update(record["_days"])
@@ -442,12 +470,7 @@ def official_work_day_sets(records):
 def fetch_official_work_module_rows(
     session, erp_id, range_start, range_end, include_pending=False
 ):
-    """Official work module rows for one employee, for the detail reports.
-
-    Those reports walk the `leaves` table per leave type, which on its own
-    would show nothing but the historical 'Official Work' entries. This adds
-    the module's own records so the two sources are reported together.
-    """
+    
     status_clause = (
         "IN ('approved', 'pending')" if include_pending else "= 'approved'"
     )
@@ -474,64 +497,15 @@ def is_official_work(leave_type):
     return (leave_type or "").strip().lower() == OFFICIAL_WORK_LEAVE_TYPE.lower()
 
 
-# ==========================================================================
-# Medical / sick leave attachments
-# ==========================================================================
-
-# Leave types that may carry a supporting medical document. Matched
-# case-insensitively; "Sick Leave" is included because some sections use that
-# wording even though the configured type is "Medical Leave".
-MEDICAL_LEAVE_TYPES = {"medical leave", "sick leave"}
-
-
-def allows_attachment(leave_type):
-    return (leave_type or "").strip().lower() in MEDICAL_LEAVE_TYPES
-
 
 def build_attachment_name(original_name):
-    """A random storage name that keeps only the extension.
-
-    Medical filenames routinely contain the patient's name and the clinic, so
-    the uploaded name is never used on disk — it is kept in a separate column
-    for display and the stored file gets an unguessable name instead.
-    """
+    
     extension = os.path.splitext(original_name or "")[1].lower()
     return f"{uuid.uuid4().hex}{extension}"
 
 
-def validate_attachment(upload, leave_type):
-    """Returns an error string, or None when the upload is acceptable."""
-    if upload is None:
-        return None
-
-    if not allows_attachment(leave_type):
-        return (
-            "Attachments are only accepted for medical or sick leave."
-        )
-
-    extension = os.path.splitext(upload.name or "")[1].lower()
-    allowed = [
-        ext.lower()
-        for ext in getattr(settings, "LEAVE_ATTACHMENT_ALLOWED_EXTENSIONS", [])
-    ]
-    if allowed and extension not in allowed:
-        return (
-            "Unsupported file type. Allowed: " + ", ".join(sorted(allowed))
-        )
-
-    max_mb = getattr(settings, "LEAVE_ATTACHMENT_MAX_MB", 5)
-    if upload.size > max_mb * 1024 * 1024:
-        return f"Attachment must be {max_mb} MB or smaller."
-
-    return None
-
-
 def attachment_payload(leave, request=None):
-    """Attachment fields for a leave row, or empty values when there is none.
-
-    `has_attachment` lets the record table render a View link without having
-    to reason about whether the URL is usable.
-    """
+   
     name = getattr(leave, "attachment", None)
     if not name:
         return {
@@ -556,13 +530,7 @@ def attachment_payload(leave, request=None):
 
 @require_GET
 def download_leave_attachment(request, leave_id):
-    """Stream a leave attachment.
-
-    Routed through a view rather than exposed under MEDIA_URL so the stored
-    filename stays unguessable and access can be restricted here later — see
-    the note in the handover: these are medical records and this project's API
-    currently has no authentication layer to hook into.
-    """
+  
     leave = LeaveModel.objects.filter(pk=leave_id).first()
     if leave is None or not leave.attachment:
         return JsonResponse({"error": "Attachment not found"}, status=404)
@@ -578,14 +546,14 @@ def download_leave_attachment(request, leave_id):
         or os.path.basename(leave.attachment.name)
     )
     response = FileResponse(handle, as_attachment=False)
-    # Quotes escaped so a filename containing one cannot break the header.
+    
     safe_name = display_name.replace('"', "")
     response["Content-Disposition"] = f'inline; filename="{safe_name}"'
     return response
 
 
 def strip_internal_fields(records):
-    """Drop the day-set scratch field before the records go over the wire."""
+    
     return [
         {key: value for key, value in record.items() if not key.startswith("_")}
         for record in records
@@ -593,12 +561,7 @@ def strip_internal_fields(records):
 
 
 def summarize_official_work(records):
-    """Totals per official-work sub-type, for the summary strip.
-
-    Day totals count each calendar day once per employee. The live data holds
-    overlapping official-work records (e.g. a tour recorded twice), so summing
-    each record's span would report more days than actually elapsed.
-    """
+    
     totals = {}
     seen_days = {}
 
@@ -620,26 +583,9 @@ def summarize_official_work(records):
     return sorted(totals.values(), key=lambda item: -item["days"])
 
 
-# ==========================================================================
-# Shared reporting core
-#
-# Both leave reports previously counted days by summing each leave record's
-# span. That is wrong whenever two records for the same employee and type
-# overlap — and the live data contains 27 such pairs, including exact
-# duplicates (one employee has the same 10-day Earned Leave entered twice,
-# which reported 20 days). Counting *distinct calendar days* instead makes a
-# duplicate or partial overlap contribute the days it actually covers.
-#
-# The old loops also issued three queries per employee. These helpers fetch
-# every employee's rows in one pass, so a 182-person section costs a fixed
-# handful of queries rather than several hundred.
-# ==========================================================================
 
 def parse_report_range(start_date, end_date):
-    """Parse and sanity-check the requested window.
-
-    Returns (start, end, error_message).
-    """
+    
     try:
         start = datetime.strptime(start_date, "%Y-%m-%d").date()
         end = datetime.strptime(end_date, "%Y-%m-%d").date()
@@ -653,13 +599,7 @@ def parse_report_range(start_date, end_date):
 
 
 def clipped_days(row_start, row_end, range_start, range_end):
-    """Every calendar day of a record that falls inside the window.
-
-    Returns an empty list for records that cannot be counted — missing dates,
-    or an end before the start. The live data holds two such rows (one
-    Maternity Leave runs 2025-12-09 to 2025-04-08); the old individual report
-    had no guard and let that subtract ~245 days from the employee's total.
-    """
+   
     if row_start is None or row_end is None or row_end < row_start:
         return []
 
@@ -673,11 +613,7 @@ def clipped_days(row_start, row_end, range_start, range_end):
 
 
 def fetch_section_employees(session, section_id, erp_id=None):
-    """Active employees of a section, one row per ERP ID.
-
-    The employees table currently holds a duplicated active record (ERP 805
-    appears twice), which made that person show up twice in every report.
-    """
+    
     erp_clause = "AND e.erp_id = :erp_id" if erp_id else ""
 
     rows = session.execute(
@@ -713,11 +649,7 @@ def fetch_section_employees(session, section_id, erp_id=None):
 def fetch_leave_days(
     session, erp_ids, leave_type, include_pending, range_start, range_end
 ):
-    """Distinct leave days per ERP ID, in a single query.
-
-    Returns (days_by_erp, quality) where days_by_erp maps erp_id -> set of
-    dates and quality reports what the data forced us to drop or merge.
-    """
+   
     quality = {"records_read": 0, "records_skipped": 0, "overlapping_days_merged": 0}
     if not erp_ids:
         return {}, quality
@@ -759,15 +691,13 @@ def fetch_leave_days(
         bucket = days_by_erp.setdefault(row.erp_id, set())
         before = len(bucket)
         bucket.update(days)
-        # Anything that did not enlarge the set was already claimed by another
-        # record — i.e. a duplicate or overlapping entry.
         quality["overlapping_days_merged"] += len(days) - (len(bucket) - before)
 
     return days_by_erp, quality
 
 
 def fetch_leave_allocation(session, leave_type):
-    """Annual allocation for a leave type — one lookup, not one per employee."""
+    
     row = session.execute(
         text("""
             SELECT total_leaves
@@ -781,12 +711,7 @@ def fetch_leave_allocation(session, leave_type):
 
 
 def fetch_rr_erp_ids(session, erp_ids, include_pending, range_start, range_end):
-    """ERP IDs with Rest & Recreational leave in the window.
-
-    Casual leave is charged an extra 10 days for these employees (the rule
-    get_leave_balance already applies). Fetched set-wise rather than with a
-    per-employee ORM round trip.
-    """
+   
     if not erp_ids:
         return set()
 
@@ -821,7 +746,7 @@ def fetch_rr_erp_ids(session, erp_ids, include_pending, range_start, range_end):
 def build_report_metadata(
     leave_type, range_start, range_end, include_pending, quality, duplicates
 ):
-    """Self-describing footer so a reader can audit what the numbers mean."""
+    
     notes = []
     if quality.get("records_skipped"):
         notes.append(
@@ -853,14 +778,7 @@ def build_report_metadata(
 
 @require_GET
 def get_leave_types(request):
-    """The configured leave types, for report filters.
-
-    The report pages used to hard-code their own lists, which had drifted from
-    the master table: the section report offered "Sick Leave" and both offered
-    a plain "Maternity Leave", none of which exist in leave_type_counts — so
-    picking them could only ever return an empty report. Official Work is
-    appended because it is a real filter option backed by its own table.
-    """
+    
     session = SessionLocal()
     try:
         rows = session.execute(text("""
@@ -892,11 +810,11 @@ def individual_report(request):
     
     erpid = data.get("erp_id", 0)
     section = data.get("section")
-    leave_type = data.get("leave_type")   # REQUIRED
+    leave_type = data.get("leave_type")   
     start_date = data.get("start_date")
     end_date = data.get("end_date")
 
-    # Validate required fields
+    
     if not all([section, leave_type, start_date, end_date]):
         return JsonResponse(
             {"error": "section, leave_type, start_date, and end_date are required"},
@@ -907,11 +825,6 @@ def individual_report(request):
     if range_error:
         return JsonResponse({"error": range_error}, status=400)
 
-    # A leave only counts once it is approved. Pending applications are
-    # excluded from both `leave_count` and `remaining_leaves`, so an
-    # application awaiting a decision does not consume a balance it may never
-    # use. All the leave reports now agree on this — see section_leave_report,
-    # individual_detail_report and leavetype_detail_report.
     include_pending = False
 
     sessions = SessionLocal()
@@ -922,7 +835,6 @@ def individual_report(request):
         )
         erp_ids = [emp.erp_id for emp in employees]
 
-        # Three set-based queries replace the previous three-per-employee.
         days_by_erp, quality = fetch_leave_days(
             sessions, erp_ids, leave_type, include_pending, start_date, end_date
         )
@@ -935,10 +847,6 @@ def individual_report(request):
             else set()
         )
 
-        # Official work spans two tables, so its records are fetched first and
-        # the per-employee counts are derived from that union — otherwise the
-        # summary would report only the historical `leaves` rows while the
-        # breakdown underneath listed both sources.
         official_work = []
         if leave_type == OFFICIAL_WORK_LEAVE_TYPE:
             official_work = get_official_work_records(
@@ -955,8 +863,6 @@ def individual_report(request):
         for emp in employees:
             leave_count = len(days_by_erp.get(emp.erp_id, ()))
 
-            # Taking Rest & Recreational leave costs an extra 10 casual days
-            # (the same rule get_leave_balance applies).
             if emp.erp_id in rr_erp_ids:
                 leave_count += 10
 
@@ -1006,20 +912,17 @@ def individual_detail_report(request):
     start_date = data.get("start_date")
     end_date = data.get("end_date")
    
-    # Validate required fields
     if not all([section, start_date, end_date]):
         return JsonResponse(
             {"error": "section, start_date, and end_date are required"},
             status=400
         )
 
-    # Convert dates to Python date objects
     start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
     end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
 
     sessions = SessionLocal()
 
-    # Fetch employee
     if erpid == 0:
         query = text(""" 
             SELECT e.id, e.erp_id, e.name, s.name, e.gender
@@ -1041,14 +944,9 @@ def individual_detail_report(request):
         sessions.close()
         return JsonResponse({"error": "Employee not found"}, status=404)
 
-    # Eligibility inputs: an employee's gender and years of service decide
-    # which leave types they are even entitled to apply for.
     employee_gender = (emp[4] or "").upper()
     years_of_service = get_employee_years_of_service(emp[1])
 
-    # Casual leave is charged an extra 10 days whenever the employee has taken
-    # Rest & Recreational leave in the period. Only an *approved* R&R leave
-    # triggers the charge, matching the approved-only rule below.
     has_rr_leave = LeaveModel.objects.filter(
         erp_id=emp[1],
         leave_type="Rest & Recreational Leave",
@@ -1057,14 +955,12 @@ def individual_detail_report(request):
         status__iexact="approved",
     ).exists()
 
-    # Master list of every configured leave type with its annual allocation.
     all_types = sessions.execute(text("""
         SELECT leave_type, total_leaves
         FROM leave_type_counts
         ORDER BY leave_type
     """)).fetchall()
 
-    # Approved only: a pending application is not a taken leave.
     filtered_leaves_query = text("""
         SELECT start_date, end_date
         FROM leaves
@@ -1075,9 +971,6 @@ def individual_detail_report(request):
           AND end_date >= :start_date
     """)
 
-    # Official work also lives in its own table, so its day count is the union
-    # of the module's records and the historical 'Official Work' rows in
-    # `leaves`. Fetched once rather than inside the per-type loop.
     official_work_module_days = set()
     if any(is_official_work(row[0]) for row in all_types):
         for ow_row in fetch_official_work_module_rows(
@@ -1089,27 +982,24 @@ def individual_detail_report(request):
 
     result = []
 
-    # Walk every leave type so the report reflects the employee's *overall*
-    # standing — the types availed and the ones not availed yet — while
-    # skipping the types this particular employee is not eligible for.
     for type_row in all_types:
         leave_type = type_row[0]
         total_leaves = type_row[1]
         lt_lower = (leave_type or "").lower()
 
-        # Gender-restricted types (e.g. maternity / paternity / iddat).
+        if lt_lower in REMOVED_LEAVE_TYPES:
+            continue
+
         required_gender = GENDER_RESTRICTED_LEAVE_TYPES.get(lt_lower)
         if required_gender and employee_gender != required_gender:
             continue
 
-        # Types needing a minimum tenure (e.g. hajj leave).
         required_service_years = MIN_SERVICE_YEARS_LEAVE_TYPES.get(lt_lower)
         if required_service_years and (
             years_of_service is None or years_of_service < required_service_years
         ):
             continue
 
-        # Days availed for this type within the reporting window.
         leaves = sessions.execute(
             filtered_leaves_query,
             {
@@ -1120,13 +1010,10 @@ def individual_detail_report(request):
             },
         ).fetchall()
 
-        # Distinct days, so a duplicated or overlapping entry is not counted
-        # twice and a row with its dates reversed cannot subtract days.
         day_set = set()
         for leave in leaves:
             day_set.update(clipped_days(leave[0], leave[1], start_date, end_date))
 
-        # Fold in the official work module's own records for that type.
         if is_official_work(leave_type):
             day_set |= official_work_module_days
 
@@ -1139,10 +1026,6 @@ def individual_detail_report(request):
             total_leaves - leave_count if total_leaves is not None else None
         )
 
-        # Three-state standing for the category:
-        #   Not Availed        -> none of the allocation used
-        #   Availed            -> the whole allocation used up (nothing left)
-        #   Partially Availed  -> some used, but a balance still remains
         if leave_count <= 0:
             status = "Not Availed"
         elif total_leaves is not None and leave_count >= total_leaves:
@@ -1180,20 +1063,16 @@ def leavetype_detail_report(request):
     start_date = data.get("start_date")
     end_date = data.get("end_date")
     
-    # Validate required fields
     if not all([section, leave_type, start_date, end_date]):
         return JsonResponse(
             {"error": "section, leave_type, start_date, and end_date are required"},
             status=400
         )
-    print(data)
-    # Convert dates to Python date objects
     start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
     end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
 
     sessions = SessionLocal()
 
-    # Fetch employees
     if erp_id == 0:
         query = text(""" 
             SELECT e.id, e.erp_id, e.name, s.name, e.gender
@@ -1212,16 +1091,12 @@ def leavetype_detail_report(request):
         employees = sessions.execute(query, {"section": section, "erp_id": erp_id}).fetchall()
 
     if not employees:
-        print("No employees found")
         sessions.close()
         return JsonResponse({"error": "Employee not found"}, status=404)
 
     result = []
 
-    # Process each employee
     for emp in employees:
-        # Get all leaves of specific type for this employee in date range
-        # Approved only: a pending application is not a taken leave.
         leaves_query = text("""
             SELECT id, start_date, end_date, reason, status
             FROM leaves
@@ -1242,7 +1117,6 @@ def leavetype_detail_report(request):
                 "end_date": end_date
             }
         ).fetchall()
-        # Process each leave record
         for leave in leaves:
             days = clipped_days(leave[1], leave[2], start_date, end_date)
             if not days:
@@ -1259,9 +1133,6 @@ def leavetype_detail_report(request):
                 "source": "Leave form (historical)",
             })
 
-        # Official work is also recorded in its own module, so a search for it
-        # has to list those records too — the `leaves` table only holds the
-        # historical entries made before the module existed.
         if is_official_work(leave_type):
             for ow_row in fetch_official_work_module_rows(
                 sessions, emp[1], start_date, end_date, include_pending=False
@@ -1276,7 +1147,6 @@ def leavetype_detail_report(request):
                     "section": emp[3],
                     "start_date": ow_row[1].strftime("%Y-%m-%d"),
                     "end_date": ow_row[2].strftime("%Y-%m-%d"),
-                    # The module's own sub-type (Meetings, Official Tour, ...).
                     "leave_type": ow_row[0] or leave_type,
                     "leave_count": len(days),
                     "source": "Official work module",
@@ -1308,8 +1178,6 @@ def section_leave_report(request):
     if range_error:
         return JsonResponse({"error": range_error}, status=400)
 
-    # This report shows leave actually granted, so pending applications are
-    # excluded. The individual report counts them — see individual_report.
     include_pending = False
 
     session = SessionLocal()
@@ -1320,14 +1188,10 @@ def section_leave_report(request):
         )
         erp_ids = [emp.erp_id for emp in employees]
 
-        # One query for the whole section instead of one per employee.
         days_by_erp, quality = fetch_leave_days(
             session, erp_ids, leave_type, include_pending, start_date, end_date
         )
 
-        # Official work spans the official work module and the historical
-        # 'Official Work' rows in `leaves`, so its counts come from the union
-        # of both — see get_official_work_records.
         official_work = []
         if leave_type == OFFICIAL_WORK_LEAVE_TYPE:
             official_work = get_official_work_records(
@@ -1343,7 +1207,6 @@ def section_leave_report(request):
         for emp in employees:
             leave_count = len(days_by_erp.get(emp.erp_id, ()))
 
-            # Only return employees having selected leave
             if leave_count > 0:
                 result.append({
                     "employee_id": emp.employee_id,
@@ -1390,10 +1253,6 @@ def get_leave_balance(request):
             status=400
         )
 
-    # -------------------------------------------------------
-    # Pakistan Financial Year
-    # 1 July  -> 30 June
-    # -------------------------------------------------------
     today = date.today()
 
     if today.month >= 7:
@@ -1451,8 +1310,7 @@ def get_leave_balance(request):
 @require_POST
 def create_leave_request(request):
     try:
-        # The form posts multipart/form-data when a medical record is attached
-        # and JSON otherwise, so accept both.
+        
         upload = None
         if request.content_type and request.content_type.startswith(
             "multipart/form-data"
@@ -1468,22 +1326,18 @@ def create_leave_request(request):
         start_date = data.get("start_date")
         end_date = data.get("end_date")
 
-        # --------------------------------------------------
-        # REQUIRED FIELDS CHECK
-        # --------------------------------------------------
+        
         if not all([erp_id, employee_id, leave_type, start_date, end_date]):
             return JsonResponse(
                 {"error": "erp_id, employee_id, leave_type, start_date and end_date are required"},
                 status=400
             )
 
-        # --------------------------------------------------
-        # OFFICIAL WORK IS NO LONGER A LEAVE TYPE
-        # --------------------------------------------------
-        # It has its own module and its own table. The leave form no longer
-        # offers the option; this rejects it server side too, so no new
-        # 'Official Work' rows can land in `leaves` by any route. Existing
-        # historical rows are left untouched and still appear in the reports.
+        removed_error = check_removed_leave_type(leave_type)
+        if removed_error:
+            return JsonResponse({"error": removed_error}, status=400)
+
+       
         if is_official_work(leave_type):
             return JsonResponse(
                 {
@@ -1495,16 +1349,10 @@ def create_leave_request(request):
                 status=400
             )
 
-        # --------------------------------------------------
-        # ATTACHMENT VALIDATION (medical / sick leave only)
-        # --------------------------------------------------
-        attachment_error = validate_attachment(upload, leave_type)
+        attachment_error = validate_attachment_universal(upload)
         if attachment_error:
             return JsonResponse({"error": attachment_error}, status=400)
 
-        # --------------------------------------------------
-        # DATE PARSING
-        # --------------------------------------------------
         try:
             start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
             end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
@@ -1520,10 +1368,41 @@ def create_leave_request(request):
                 status=400
             )
 
-        # --------------------------------------------------
-        # GENDER RESTRICTION CHECK
-        # --------------------------------------------------
-        required_gender = GENDER_RESTRICTED_LEAVE_TYPES.get(leave_type.lower())
+        requested_days = (end_date - start_date).days + 1
+
+        lt_lower = leave_type.strip().lower()
+        warnings = []
+
+        
+        if lt_lower == "leave ex-pakistan" and not (data.get("reason") or "").strip():
+            return JsonResponse(
+                {"error": "Please mention the country/destination and purpose in the reason for Leave Ex-Pakistan."},
+                status=400,
+            )
+
+        cap_error = enforce_max_days_per_request(leave_type, requested_days)
+        if cap_error:
+            return JsonResponse({"error": cap_error}, status=400)
+
+        if lt_lower == "hajj leave":
+            hajj_error = check_hajj_occurrence(erp_id)
+            if hajj_error:
+                return JsonResponse({"error": hajj_error}, status=400)
+
+        if lt_lower == "paternity leave":
+            alert = paternity_alert(erp_id)
+            if alert:
+                warnings.append(alert)
+
+        if leave_type in MATERNITY_SEQUENCE:
+            resolved_type, maternity_error = resolve_maternity_leave_type(erp_id)
+            if maternity_error:
+                return JsonResponse({"error": maternity_error}, status=400)
+            if resolved_type != leave_type:
+                leave_type = resolved_type
+                lt_lower = leave_type.lower()
+
+        required_gender = GENDER_RESTRICTED_LEAVE_TYPES.get(lt_lower)
         if required_gender:
             employee = Employees.objects.filter(erp_id=erp_id).first()
             if not employee or (employee.gender or "").upper() != required_gender:
@@ -1532,10 +1411,7 @@ def create_leave_request(request):
                     status=400
                 )
 
-        # --------------------------------------------------
-        # MINIMUM SERVICE LENGTH CHECK
-        # --------------------------------------------------
-        required_service_years = MIN_SERVICE_YEARS_LEAVE_TYPES.get(leave_type.lower())
+        required_service_years = MIN_SERVICE_YEARS_LEAVE_TYPES.get(lt_lower)
         if required_service_years:
             years_of_service = get_employee_years_of_service(erp_id)
             if years_of_service is None:
@@ -1554,17 +1430,6 @@ def create_leave_request(request):
                     status=400
                 )
 
-        requested_days = (end_date - start_date).days + 1
-
-        # --------------------------------------------------
-        # WEEKEND / PUBLIC HOLIDAY CHECK
-        # Weekends and public holidays are allowed when "sandwiched" inside a
-        # leave request (i.e. at least one working day is actually being taken
-        # off). This lets a leave span an intervening public holiday — e.g.
-        # 23 Jul -> 21 Aug across the 14th Aug holiday.
-        # Only a request made up *entirely* of weekend / public holiday day(s)
-        # is rejected, since that isn't a real leave.
-        # --------------------------------------------------
         holiday_dates = set(
             Holiday.objects.filter(
                 date__gte=start_date, date__lte=end_date
@@ -1586,10 +1451,6 @@ def create_leave_request(request):
                 {"error": "Leave cannot be applied only for weekend or public holiday day(s)"},
                 status=400
             )
-
-        # --------------------------------------------------
-        # DUPLICATE / CONFLICTING LEAVE CHECK (SAME DATES)
-        # --------------------------------------------------
         overlapping_leaves = LeaveModel.objects.filter(
             erp_id=erp_id,
             start_date__lte=end_date,
@@ -1614,9 +1475,6 @@ def create_leave_request(request):
                 status=400
             )
 
-        # --------------------------------------------------
-        # OFFICIAL WORK CONFLICT CHECK (SAME DATES)
-        # --------------------------------------------------
         overlapping_official_work = OfficialWorkModel.objects.filter(
             erp_id=erp_id,
             start_date__lte=end_date,
@@ -1631,14 +1489,9 @@ def create_leave_request(request):
                 status=400
             )
 
-        # --------------------------------------------------
-        # FINANCIAL YEAR CALCULATION
-        # FY = 1 July (year) → 30 June (next year)
-        # --------------------------------------------------
         fy_start = date(start_date.year, 7, 1)
         fy_end = date(start_date.year + 1, 6, 30)
 
-        # Ensure leave does not cross financial year
         if end_date > fy_end:
             return JsonResponse(
                 {
@@ -1649,9 +1502,12 @@ def create_leave_request(request):
                 status=400
             )
 
-        # --------------------------------------------------
-        # FETCH TOTAL ALLOWED LEAVES
-        # --------------------------------------------------
+        if lt_lower == "rest & recreational leave":
+            rr_error = check_rr_prerequisite(erp_id, fy_start, fy_end)
+            if rr_error:
+                return JsonResponse({"error": rr_error}, status=400)
+
+       
         leave_limit = LeaveTypeCountModel.objects.filter(
             leave_type=leave_type
         ).first()
@@ -1664,9 +1520,6 @@ def create_leave_request(request):
 
         total_allowed = leave_limit.total_leaves
 
-        # --------------------------------------------------
-        # CALCULATE USED LEAVES (WITHIN FINANCIAL YEAR)
-        # --------------------------------------------------
         used_leaves = LeaveModel.objects.filter(
             erp_id=erp_id,
             leave_type=leave_type,
@@ -1682,10 +1535,7 @@ def create_leave_request(request):
                 actual_end = min(leave.end_date, fy_end)
                 used_days += (actual_end - actual_start).days + 1
 
-        # --------------------------------------------------
-        # CASUAL LEAVE RULE (RR = +10 DAYS)
-        # --------------------------------------------------
-        if leave_type.lower() == "casual leave":
+        if lt_lower == "casual leave":
             has_rr_leave = LeaveModel.objects.filter(
                 erp_id=erp_id,
                 leave_type="Rest & Recreational Leave",
@@ -1697,12 +1547,19 @@ def create_leave_request(request):
             if has_rr_leave:
                 used_days += 10
 
-        # --------------------------------------------------
-        # FINAL BALANCE CHECK (FY-BASED)
-        # --------------------------------------------------
+        
+        lwp_days = 0
+        if lt_lower == "medical leave":
+            _, lwp_days = split_medical_leave_lwp(erp_id, requested_days, fy_start, fy_end)
+        elif lt_lower == "leave ex-pakistan":
+            _, lwp_days = resolve_ex_pakistan_shortfall(erp_id, requested_days, fy_start, fy_end)
+
+        
         remaining_leaves = total_allowed - used_days
 
-        if remaining_leaves <= 0 and leave_type.lower() != "short leave":
+        skip_balance_check = lt_lower in ("short leave", "medical leave", "leave ex-pakistan")
+
+        if remaining_leaves <= 0 and not skip_balance_check:
             return JsonResponse(
                 {
                     "error": "No leaves available in account for current financial year",
@@ -1713,7 +1570,7 @@ def create_leave_request(request):
                 status=400
             )
 
-        if requested_days > remaining_leaves and leave_type.lower() != "short leave":
+        if requested_days > remaining_leaves and not skip_balance_check:
             return JsonResponse(
                 {
                     "error": "Insufficient leave balance for current financial year",
@@ -1723,13 +1580,6 @@ def create_leave_request(request):
                 status=400
             )
 
-        # --------------------------------------------------
-        # CREATE LEAVE REQUEST, Entry made by is erp id of logged in user
-        # --------------------------------------------------
-        # Every application starts as pending and goes to the section head for
-        # approval — the same rule for grade 9 and above as for everyone else.
-        # The status is fixed here rather than taken from the request, so it
-        # cannot be set by whatever the client posts.
         leave = LeaveModel.objects.create(
             erp_id=erp_id,
             employee_id=employee_id,
@@ -1742,10 +1592,11 @@ def create_leave_request(request):
             approved_by=data.get("approved_by", ""),
             start_date=start_date,
             end_date=end_date,
+            is_lwp_overflow=lwp_days > 0,
+            lwp_days=lwp_days,
         )
 
         if upload is not None:
-            # Stored under a generated name; the uploaded one is display only.
             leave.attachment_original_name = upload.name
             leave.attachment.save(
                 build_attachment_name(upload.name),
@@ -1753,8 +1604,8 @@ def create_leave_request(request):
                 save=True,
             )
 
-        # Let the section head know something is waiting on them.
-        notify_leave_submitted(leave)
+       
+        initialize_approval_chain(leave)
 
         return JsonResponse(
             {
@@ -1763,6 +1614,8 @@ def create_leave_request(request):
                 "status": leave.status,
                 "financial_year": f"{fy_start} to {fy_end}",
                 "remaining_leaves": remaining_leaves - requested_days,
+                "warnings": warnings,
+                "lwp_days": lwp_days,
                 **attachment_payload(leave, request),
             },
             status=201
@@ -1774,6 +1627,7 @@ def create_leave_request(request):
 @csrf_exempt
 @require_POST
 def handle_leave_request(request):
+    
     data = json.loads(request.body.decode('utf-8'))
     leave_id = data.get("recordid")
     action = data.get("action")
@@ -1783,9 +1637,6 @@ def handle_leave_request(request):
     elif action == "reject":
         LeaveModel.objects.filter(pk=leave_id).update(status="rejected")
 
-    # Tell the applicant. Read back after the update so the notification
-    # reflects what was actually stored, and so a bad id simply produces no
-    # notification instead of an error.
     if action in ("approve", "reject"):
         leave = LeaveModel.objects.filter(pk=leave_id).first()
         if leave is not None:
@@ -1794,5 +1645,3 @@ def handle_leave_request(request):
             )
 
     return JsonResponse({"message": "Leave request updated successfully"})
-
-    

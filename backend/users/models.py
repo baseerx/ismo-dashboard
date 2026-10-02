@@ -2,7 +2,7 @@ from django.db import models
 
 
 class Employees(models.Model):
-    # assuming it's an auto-increment primary key
+    
 
     erp_id = models.IntegerField()
     hris_id = models.IntegerField()
@@ -15,6 +15,8 @@ class Employees(models.Model):
     designation_id = models.IntegerField()
     position = models.CharField(max_length=100)
     flag=models.IntegerField(default=0)
+    date_of_joining = models.DateField(null=True, blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
 
     class Meta:
         db_table = 'employees'
