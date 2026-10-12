@@ -185,11 +185,15 @@ class UsersView:
         user = authenticate(username=username, password=password)
         # print(f"User authenticated: {user}")  # Debugging line to check user authentication
         if user is not None:
-            erpid = CustomUser.objects.filter(
-                authid=user.pk).values_list('erpid', flat=True).first()
-            employee = Employees.objects.filter(erp_id=erpid).values(
-                'grade_id', 'section_id', 'name', 'gender'
+            # An account can carry more than one profile row (e.g. a stale one
+            # holding the HRIS id instead of the ERP id). Prefer the profile
+            # that points at a real employee so a stray row cannot break login.
+            erpids = list(CustomUser.objects.filter(
+                authid=user.pk).order_by('id').values_list('erpid', flat=True))
+            employee = Employees.objects.filter(erp_id__in=erpids).values(
+                'erp_id', 'grade_id', 'section_id', 'name', 'gender'
             ).first()
+            erpid = employee['erp_id'] if employee else (erpids[0] if erpids else None)
             grade = employee.get('grade_id') if employee else None
             section_id = employee.get('section_id') if employee else None
             section_name = Sections.objects.filter(id=section_id).values_list(
