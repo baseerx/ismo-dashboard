@@ -1,13 +1,41 @@
 """Tables behind the ISMO internal recruitment online application form.
 
-The shape follows the printed form section by section - vacancy information,
-personal and contact information, current employment details, then the four
-repeating tables (education, employment history, certifications, trainings),
-the declaration, and the submission record. Anything the form prints in more
-than one place is stored once and rendered twice.
+The form follows the six sections of the "Internal Recruitment Applicant
+Portal" specification - target position & internal validation, personal &
+contact information, educational background, professional experience, skills
+& certifications, statement of purpose & acknowledgement - and also keeps
+every field of the official printed form (CNIC, service dates, trainings, the
+declaration and signature), so nothing HR files is lost.
+
+Where the specification names a column differently from an older field that
+already holds the same thing, the older column is kept:
+
+    specification            stored as
+    emp_full_name            full_name
+    emp_id                   emp_id
+    current_dept_code        department_function
+    current_job_title        current_designation
+    current_supervisor_id    current_supervisor_erp_id (+ current_supervisor_name)
+    contact_phone_no         mobile_no
+    corporate_email          official_email
+    edu_*                    InternalJobApplicationEducation
+    exp_*                    InternalJobApplicationExperience
+    certifications_list      InternalJobApplicationCertification rows
 """
 
+import json
+from datetime import date
+
 from django.db import models
+
+
+def _as_list(value) -> list:
+    """A JSON list column read back as a list, whatever state it is in."""
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 class JobDescription(models.Model):
@@ -86,6 +114,15 @@ class JobRequisition(models.Model):
         on_delete=models.PROTECT, related_name="requisitions",
     )
 
+    # The advertisement itself, as published - a PDF HR attaches so applicants
+    # can read the notice they are answering. Served through
+    # requisitions/<id>/advertisement/view/, never straight from MEDIA_ROOT.
+    advertisement_pdf = models.FileField(
+        upload_to="job_advertisements/%Y/", max_length=255, null=True, blank=True
+    )
+    # The name the file had on HR's computer, shown on the "View" link.
+    advertisement_pdf_name = models.CharField(max_length=255, default="", blank=True)
+
     is_open = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -95,6 +132,11 @@ class JobRequisition(models.Model):
 
     def __str__(self):
         return self.title
+
+    @property
+    def is_live(self) -> bool:
+        """Open and not past its closing date - showing on the application form."""
+        return self.is_open and (self.closing_date is None or self.closing_date >= date.today())
 
 
 class InternalJobApplication(models.Model):
@@ -161,6 +203,30 @@ class InternalJobApplication(models.Model):
     total_relevant_experience = models.CharField(max_length=60, default="")
     date_of_joining_current_position = models.DateField(null=True, blank=True)
 
+    # --- spec 1: current supervisor ---------------------------------------
+    # Looked up from the employee record when the application is filed (the
+    # most senior person in the applicant's section, as everywhere else in
+    # this app), never taken from the form. Null when the applicant is
+    # themselves the most senior person in their section.
+    current_supervisor_erp_id = models.IntegerField(null=True, blank=True)
+    current_supervisor_name = models.CharField(max_length=150, default="", blank=True)
+
+    # --- spec 2: personal & contact information ---------------------------
+    personal_email = models.EmailField(max_length=150, null=True, blank=True)
+    # Teams / Email / SMS.
+    preferred_contact_method = models.CharField(max_length=10, default="")
+
+    # --- spec 5: skills matrix --------------------------------------------
+    # JSON lists. Text rather than a JSON column so SQL Server can still search
+    # them with LIKE, which is how the report filters by skill.
+    skills_technical_tags = models.TextField(default="[]")
+    skills_soft_checkboxes = models.TextField(default="[]")
+
+    # --- spec 6: statement of purpose & acknowledgement -------------------
+    application_rationale_sop = models.TextField(default="")
+    ack_manager_notified_bool = models.BooleanField(default=False)
+    ack_data_accuracy_bool = models.BooleanField(default=False)
+
     # --- 8. declaration & undertaking -------------------------------------
     # Required to submit - see jobs/validators.py. Kept as a record of what the
     # applicant accepted at the time.
@@ -199,6 +265,14 @@ class InternalJobApplication(models.Model):
     def hr_verification_status(self) -> str:
         """What section 9 prints for the current status."""
         return self.HR_STATUS_LABELS.get(self.status, self.status)
+
+    @property
+    def technical_skills(self) -> list:
+        return _as_list(self.skills_technical_tags)
+
+    @property
+    def soft_skills(self) -> list:
+        return _as_list(self.skills_soft_checkboxes)
 
 
 class InternalJobApplicationEducation(models.Model):
@@ -251,6 +325,8 @@ class InternalJobApplicationExperience(models.Model):
     # rather than computed on read so the printed form matches what was filed.
     duration = models.CharField(max_length=60, default="")
     key_responsibilities = models.TextField()
+    # exp_key_achievements in the specification. Optional.
+    key_achievements = models.TextField(default="", blank=True)
 
     row_order = models.IntegerField(default=0)
 

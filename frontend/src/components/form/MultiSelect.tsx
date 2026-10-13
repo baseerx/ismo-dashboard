@@ -12,6 +12,9 @@ interface MultiSelectProps {
   defaultSelected?: string[];
   onChange?: (selected: string[]) => void;
   disabled?: boolean;
+  /** Shows a box at the top of the open list that narrows it as you type. */
+  searchable?: boolean;
+  placeholder?: string;
 }
 
 const MultiSelect: React.FC<MultiSelectProps> = ({
@@ -20,10 +23,13 @@ const MultiSelect: React.FC<MultiSelectProps> = ({
   defaultSelected = [],
   onChange,
   disabled = false,
+  searchable = false,
+  placeholder = "Select option",
 }) => {
   const [selectedOptions, setSelectedOptions] =
     useState<string[]>(defaultSelected);
   const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,8 +51,18 @@ const MultiSelect: React.FC<MultiSelectProps> = ({
   }, [isOpen]);
 
   const toggleDropdown = () => {
-    if (!disabled) setIsOpen((prev) => !prev);
+    if (disabled) return;
+    setIsOpen((prev) => !prev);
+    setQuery("");
   };
+
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const visibleOptions = terms.length
+    ? options.filter((option) => {
+        const text = option.text.toLowerCase();
+        return terms.every((term) => text.includes(term));
+      })
+    : options;
 
   const handleSelect = (optionValue: string) => {
     const newSelectedOptions = selectedOptions.includes(optionValue)
@@ -113,10 +129,10 @@ const MultiSelect: React.FC<MultiSelectProps> = ({
                   ))
                 ) : (
                   <input
-                    placeholder="Select option"
+                    placeholder={placeholder}
                     className="w-full h-full p-1 pr-2 text-sm bg-transparent border-0 outline-hidden appearance-none placeholder:text-gray-800 focus:border-0 focus:outline-hidden focus:ring-0 dark:placeholder:text-white/90"
                     readOnly
-                    value="Select option"
+                    value={placeholder}
                   />
                 )}
               </div>
@@ -158,8 +174,26 @@ const MultiSelect: React.FC<MultiSelectProps> = ({
               className="absolute left-0 z-40 w-full overflow-y-auto bg-white rounded-lg shadow-sm top-full max-h-select dark:bg-gray-900"
               onClick={(e) => e.stopPropagation()}
             >
+              {searchable && (
+                <div className="sticky top-0 border-b border-gray-200 bg-white p-2 dark:border-gray-800 dark:bg-gray-900">
+                  <input
+                    autoFocus
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Type to search..."
+                    aria-label="Search options"
+                    className="h-9 w-full rounded-md border border-gray-300 bg-transparent px-3 text-sm text-gray-800 outline-hidden focus:border-brand-300 dark:border-gray-700 dark:text-white/90"
+                  />
+                </div>
+              )}
               <div className="flex flex-col">
-                {options.map((option, index) => (
+                {visibleOptions.length === 0 && (
+                  <div className="p-3 text-sm text-gray-500 dark:text-gray-400">
+                    Nothing matches &ldquo;{query}&rdquo;
+                  </div>
+                )}
+                {visibleOptions.map((option, index) => (
                   <div
                     key={index}
                     className={`hover:bg-primary/5 w-full cursor-pointer rounded-t border-b border-gray-200 dark:border-gray-800`}

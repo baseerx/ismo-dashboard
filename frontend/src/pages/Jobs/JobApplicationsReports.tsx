@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router";
 import { ToastContainer, toast } from "react-toastify";
 import PageMeta from "../../components/common/PageMeta";
 import PageBreadcrumb from "../../components/common/PageBreadCrumb";
@@ -28,6 +29,8 @@ type ApplicationSummary = {
   current_grade: string;
   official_email: string;
   mobile_no: string;
+  current_supervisor_name: string;
+  technical_skills: string[];
   status: string;
   hr_verification_status: string;
   created_at: string;
@@ -55,6 +58,7 @@ type ExperienceRow = {
   is_current: boolean;
   duration: string;
   key_responsibilities: string;
+  key_achievements: string;
 };
 
 type CertificationRow = {
@@ -86,6 +90,8 @@ type ApplicationDetail = ApplicationSummary & {
   gender: string;
   current_office_location: string;
   emergency_contact_no: string;
+  personal_email: string;
+  preferred_contact_method: string;
   // 3. current employment details
   date_of_joining_ismo: string | null;
   date_of_appointment_to_current_grade: string | null;
@@ -97,6 +103,11 @@ type ApplicationDetail = ApplicationSummary & {
   experience: ExperienceRow[];
   certifications: CertificationRow[];
   trainings: TrainingRow[];
+  // skills, statement of purpose, acknowledgements
+  soft_skills: string[];
+  application_rationale_sop: string;
+  ack_manager_notified_bool: boolean;
+  ack_data_accuracy_bool: boolean;
   // 8 and 9
   declaration_accepted: boolean;
   applicant_signature: string;
@@ -105,6 +116,89 @@ type ApplicationDetail = ApplicationSummary & {
 type Requisition = { id: number; title: string };
 
 const DASH_SPACED = "—";
+
+/** What the list shows when there is nothing in it, and what to do next. */
+const EmptyState = ({
+  filtered,
+  totalApplications,
+  openVacancies,
+  onClearFilters,
+}: {
+  filtered: boolean;
+  totalApplications: number | null;
+  openVacancies: number | null;
+  onClearFilters: () => void;
+}) => {
+  const nothingFiled = !filtered || totalApplications === 0;
+
+  let title: string;
+  let message: string;
+  if (filtered && totalApplications !== 0) {
+    title = "No matching applications";
+    message =
+      `None of the ${totalApplications ?? ""} application${totalApplications === 1 ? "" : "s"} ` +
+      "on record match these filters. Try a different search, skill, vacancy, status or date range.";
+  } else if (openVacancies === 0) {
+    title = "No applications yet";
+    message =
+      "No vacancy is open for applications at the moment, so there is nothing to review. " +
+      "Applications will appear here once a vacancy is advertised and employees apply for it.";
+  } else {
+    title = "No applications yet";
+    message =
+      "Nobody has applied yet" +
+      (openVacancies ? ` for the ${openVacancies} open vacanc${openVacancies === 1 ? "y" : "ies"}` : "") +
+      ". Applications submitted through the Internal Job Application form will appear here " +
+      "for review.";
+  }
+
+  return (
+    <div className="flex flex-col items-center px-4 py-12 text-center" data-empty-state>
+      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800">
+        <svg
+          width="26"
+          height="26"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="text-gray-400"
+          aria-hidden="true"
+        >
+          {nothingFiled ? (
+            <>
+              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+              <path d="M14 3v5h5" />
+              <path d="M9 13h6M9 17h4" />
+            </>
+          ) : (
+            <>
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </>
+          )}
+        </svg>
+      </div>
+      <h4 className="text-base font-semibold text-gray-800 dark:text-white/90">{title}</h4>
+      <p className="mt-1.5 max-w-md text-sm text-gray-500 dark:text-gray-400">{message}</p>
+      <div className="mt-5 flex flex-wrap justify-center gap-3">
+        {filtered && totalApplications !== 0 ? (
+          <Button size="sm" variant="outline" onClick={onClearFilters}>
+            Clear filters
+          </Button>
+        ) : (
+          <Link to="/job-requisitions">
+            <Button size="sm" variant="outline">
+              {openVacancies === 0 ? "Advertise a vacancy" : "View job openings"}
+            </Button>
+          </Link>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const STATUS_COLORS: Record<string, "success" | "warning" | "error" | "light"> = {
   submitted: "light",
@@ -123,6 +217,7 @@ export default function JobApplicationsReport() {
   const [exporting, setExporting] = useState(false);
 
   const [search, setSearch] = useState("");
+  const [skill, setSkill] = useState("");
   const [status, setStatus] = useState("");
   const [vacancyId, setVacancyId] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -131,6 +226,12 @@ export default function JobApplicationsReport() {
   const [page, setPage] = useState(1);
   const [numPages, setNumPages] = useState(1);
   const [count, setCount] = useState(0);
+  // Bumped to reload after clearing filters: the search and skill boxes are
+  // not watched by the effect below, so clearing only them would not reload.
+  const [reloadKey, setReloadKey] = useState(0);
+  // Unfiltered totals, so an empty list can say why it is empty.
+  const [totalApplications, setTotalApplications] = useState<number | null>(null);
+  const [openVacancies, setOpenVacancies] = useState<number | null>(null);
 
   const [selected, setSelected] = useState<ApplicationDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -181,7 +282,8 @@ export default function JobApplicationsReport() {
       return server || "One of the filters was not understood by the server.";
     }
     if (status >= 500) {
-      return `The server failed while trying to ${what} (HTTP ${status}). Its log will say why.`;
+      return server || `The server ran into a problem while trying to ${what} (HTTP ${status}). ` +
+        `Please try again in a moment; if it keeps happening, contact the system administrator.`;
     }
     return server || `Could not ${what} (HTTP ${status}).`;
   };
@@ -193,7 +295,7 @@ export default function JobApplicationsReport() {
   useEffect(() => {
     loadApplications(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, vacancyId, dateFrom, dateTo]);
+  }, [status, vacancyId, dateFrom, dateTo, reloadKey]);
 
   const loadRequisitions = async () => {
     try {
@@ -217,6 +319,7 @@ export default function JobApplicationsReport() {
         params: {
           page: targetPage,
           search: search || undefined,
+          skill: skill || undefined,
           status: status || undefined,
           target_job_req_id: vacancyId || undefined,
           date_from: dateFrom || undefined,
@@ -227,6 +330,8 @@ export default function JobApplicationsReport() {
       setStatuses(response.data?.statuses || []);
       setNumPages(response.data?.num_pages || 1);
       setCount(response.data?.count || 0);
+      setTotalApplications(response.data?.total_applications ?? null);
+      setOpenVacancies(response.data?.open_vacancies ?? null);
       setPage(response.data?.page || 1);
       setLoadError(null);
       setSessionExpired(false);
@@ -252,10 +357,12 @@ export default function JobApplicationsReport() {
 
   const clearFilters = () => {
     setSearch("");
+    setSkill("");
     setStatus("");
     setVacancyId("");
     setDateFrom("");
     setDateTo("");
+    setReloadKey((key) => key + 1);
   };
 
   // ----------------------------
@@ -405,6 +512,7 @@ export default function JobApplicationsReport() {
         responseType: "blob",
         params: {
           search: search || undefined,
+          skill: skill || undefined,
           status: status || undefined,
           target_job_req_id: vacancyId || undefined,
           date_from: dateFrom || undefined,
@@ -451,14 +559,24 @@ export default function JobApplicationsReport() {
           title="Filters"
           desc="Narrow the list before exporting — the ZIP export downloads exactly what's shown here."
         >
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-6">
             <div className="lg:col-span-2">
               <Label htmlFor="search">Search</Label>
               <Input
                 id="search"
-                placeholder="Name, email, employee ID, or CNIC"
+                placeholder="Name, email, employee ID, CNIC, or skill"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && runSearch()}
+              />
+            </div>
+            <div>
+              <Label htmlFor="skill">Skill</Label>
+              <Input
+                id="skill"
+                placeholder="Exact skill, e.g. Python"
+                value={skill}
+                onChange={(e) => setSkill(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && runSearch()}
               />
             </div>
@@ -560,11 +678,12 @@ export default function JobApplicationsReport() {
               </div>
             </div>
           ) : applications.length === 0 ? (
-            <p className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-              {search || status || vacancyId || dateFrom || dateTo
-                ? "No applications match these filters."
-                : "No applications have been submitted yet."}
-            </p>
+            <EmptyState
+              filtered={Boolean(search || skill || status || vacancyId || dateFrom || dateTo)}
+              totalApplications={totalApplications}
+              openVacancies={openVacancies}
+              onClearFilters={clearFilters}
+            />
           ) : (
             <>
               <div className="max-w-full overflow-x-auto custom-scrollbar">
@@ -697,17 +816,35 @@ export default function JobApplicationsReport() {
                   {statusBadge(selected.status)}
                 </div>
 
-                <DetailSection title="1. Vacancy Information">
+                <DetailSection title="1. Target Position & Internal Validation">
                   <DetailGrid
                     rows={[
-                      ["Position Title", selected.vacancy],
+                      ["Job Requisition / Opening", selected.vacancy],
                       ["Advertisement / Reference No.", selected.vacancy_reference_no],
                       ["Grade", selected.vacancy_grade],
                       ["Department / Function", selected.vacancy_department],
                       ["Date of Advertisement", showDate(selected.vacancy_advertisement_date)],
                       ["Closing Date", showDate(selected.vacancy_closing_date)],
-                      ["Current Designation", selected.current_designation],
+                      ["Employee Full Name", selected.full_name],
+                      ["Employee ID", selected.emp_id],
+                      ["Current Department", selected.department_function],
+                      ["Current Position Title", selected.current_designation],
                       ["Current Grade", selected.current_grade],
+                      [
+                        "Current Supervisor Name",
+                        selected.current_supervisor_name || "None on record",
+                      ],
+                      ["Date of Joining ISMO", showDate(selected.date_of_joining_ismo)],
+                      [
+                        "Date of Joining Current Position",
+                        showDate(selected.date_of_joining_current_position),
+                      ],
+                      [
+                        "Date of Appointment to Current Grade",
+                        showDate(selected.date_of_appointment_to_current_grade),
+                      ],
+                      ["Total Service in ISMO", selected.total_service_ismo],
+                      ["Total Relevant Experience", selected.total_relevant_experience],
                     ]}
                   />
                 </DetailSection>
@@ -715,53 +852,32 @@ export default function JobApplicationsReport() {
                 <DetailSection title="2. Personal & Contact Information">
                   <DetailGrid
                     rows={[
-                      ["Employee ID", selected.emp_id],
-                      ["Full Name", selected.full_name],
+                      ["Contact Phone Number", selected.mobile_no],
+                      ["Corporate Email Address", selected.official_email],
+                      ["Personal Email Address", selected.personal_email],
+                      ["Internal Communication Channel", selected.preferred_contact_method],
                       ["Father's / Husband's Name", selected.father_or_husband_name],
                       ["CNIC No.", selected.cnic],
                       ["Date of Birth", showDate(selected.date_of_birth)],
                       ["Gender", selected.gender],
-                      ["Official Email Address", selected.official_email],
-                      ["Mobile / Contact No.", selected.mobile_no],
                       ["Current Office / Location", selected.current_office_location],
                       ["Emergency Contact No.", selected.emergency_contact_no],
                     ]}
                   />
                 </DetailSection>
 
-                <DetailSection title="3. Current Employment Details">
-                  <DetailGrid
-                    rows={[
-                      ["Date of Joining ISMO", showDate(selected.date_of_joining_ismo)],
-                      ["Current Designation", selected.current_designation],
-                      ["Current Grade", selected.current_grade],
-                      ["Department / Function", selected.department_function],
-                      [
-                        "Date of Appointment to Current Grade",
-                        showDate(selected.date_of_appointment_to_current_grade),
-                      ],
-                      ["Total Service in ISMO", selected.total_service_ismo],
-                      ["Total Relevant Experience", selected.total_relevant_experience],
-                      [
-                        "Date of Joining Current Position",
-                        showDate(selected.date_of_joining_current_position),
-                      ],
-                    ]}
-                  />
-                </DetailSection>
-
-                <DetailSection title="4. Educational Background">
+                <DetailSection title="3. Educational Background">
                   {selected.education.length === 0 ? (
                     <p className="text-sm text-gray-400">No qualifications listed.</p>
                   ) : (
                     <DetailTable
                       headers={[
-                        "Degree / Qualification",
+                        "Degree / Certificate",
                         "Major / Field of Study",
                         "Institution / University",
                         "Country",
-                        "Year",
-                        "CGPA / Division",
+                        "Graduation Year",
+                        "CGPA / Grade",
                       ]}
                       rows={selected.education.map((row) => [
                         row.degree_qualification,
@@ -775,7 +891,7 @@ export default function JobApplicationsReport() {
                   )}
                 </DetailSection>
 
-                <DetailSection title="5. Employment History / Professional Experience">
+                <DetailSection title="4. Professional Experience">
                   {selected.experience.length === 0 ? (
                     <p className="text-sm text-gray-400">No employment history listed.</p>
                   ) : (
@@ -792,16 +908,31 @@ export default function JobApplicationsReport() {
                           <div className="text-xs text-gray-400">
                             {row.from_date ? moment(row.from_date).format("MMM YYYY") : "?"} –{" "}
                             {row.is_current
-                              ? "Present"
+                              ? "Present Role"
                               : row.to_date
                                 ? moment(row.to_date).format("MMM YYYY")
                                 : "?"}
                             {row.duration ? ` · ${row.duration}` : ""}
                           </div>
                           {row.key_responsibilities && (
-                            <p className="mt-1 text-gray-600 dark:text-gray-300">
-                              {row.key_responsibilities}
-                            </p>
+                            <>
+                              <p className="mt-2 text-xs font-medium text-gray-500">
+                                Key Responsibilities &amp; Roles
+                              </p>
+                              <p className="whitespace-pre-wrap text-gray-600 dark:text-gray-300">
+                                {row.key_responsibilities}
+                              </p>
+                            </>
+                          )}
+                          {row.key_achievements && (
+                            <>
+                              <p className="mt-2 text-xs font-medium text-gray-500">
+                                Key Achievements &amp; Projects
+                              </p>
+                              <p className="whitespace-pre-wrap text-gray-600 dark:text-gray-300">
+                                {row.key_achievements}
+                              </p>
+                            </>
                           )}
                         </div>
                       ))}
@@ -809,73 +940,115 @@ export default function JobApplicationsReport() {
                   )}
                 </DetailSection>
 
-                <DetailSection title="6. Professional Certifications / Memberships">
-                  {selected.certifications.length === 0 ? (
-                    <p className="text-sm text-gray-400">None declared.</p>
-                  ) : (
-                    <DetailTable
-                      headers={[
-                        "Certification / Membership",
-                        "Certifying Body",
-                        "Date Obtained",
-                        "Expiry Date",
-                        "Registration No.",
+                <DetailSection title="5. Skills Matrix & Professional Certifications">
+                  <div className="space-y-3 text-sm">
+                    <div>
+                      <p className="text-xs text-gray-400">Core Technical Skills</p>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {selected.technical_skills.length === 0 ? (
+                          <span className="text-gray-400">—</span>
+                        ) : (
+                          selected.technical_skills.map((tag) => (
+                            <Badge key={tag} size="sm" color="primary">
+                              {tag}
+                            </Badge>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Soft Skills / Leadership Capabilities</p>
+                      <p className="text-gray-700 dark:text-gray-300">
+                        {selected.soft_skills.length ? selected.soft_skills.join(", ") : "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs text-gray-400">Active Professional Certifications</p>
+                      {selected.certifications.length === 0 ? (
+                        <p className="text-gray-400">None declared.</p>
+                      ) : (
+                        <DetailTable
+                          headers={[
+                            "Certification / Membership",
+                            "Certifying Body",
+                            "Date Obtained",
+                            "Expiry Date",
+                            "Registration No.",
+                          ]}
+                          rows={selected.certifications.map((row) => [
+                            row.certification_membership,
+                            row.certifying_body,
+                            showDate(row.date_obtained),
+                            showDate(row.expiry_date),
+                            row.registration_no,
+                          ])}
+                        />
+                      )}
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs text-gray-400">
+                        Trainings &amp; Professional Development
+                      </p>
+                      {selected.trainings.length === 0 ? (
+                        <p className="text-gray-400">None declared.</p>
+                      ) : (
+                        <DetailTable
+                          headers={[
+                            "Training / Course Title",
+                            "Provider / Institute",
+                            "Duration",
+                            "Date / Year",
+                            "Relevant",
+                          ]}
+                          rows={selected.trainings.map((row) => [
+                            row.training_title,
+                            row.training_provider,
+                            row.duration,
+                            row.date_or_year,
+                            row.relevant_to_position ? "Yes" : "No",
+                          ])}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </DetailSection>
+
+                <DetailSection title="6. Statement of Purpose & Workflow Acknowledgement">
+                  <div className="space-y-3 text-sm">
+                    <div>
+                      <p className="text-xs text-gray-400">Why are you applying for this position?</p>
+                      <p className="whitespace-pre-wrap text-gray-700 dark:text-gray-300">
+                        {selected.application_rationale_sop || "—"}
+                      </p>
+                    </div>
+                    <p>
+                      Current line manager notified:{" "}
+                      <strong>{selected.ack_manager_notified_bool ? "Yes" : "No"}</strong>
+                    </p>
+                    <p>
+                      Accuracy declaration agreed:{" "}
+                      <strong>{selected.ack_data_accuracy_bool ? "Yes" : "No"}</strong>
+                    </p>
+                    <p>
+                      Declaration &amp; undertaking accepted:{" "}
+                      <strong>{selected.declaration_accepted ? "Yes" : "No"}</strong>
+                    </p>
+                  </div>
+                  <div className="mt-3">
+                    <DetailGrid
+                      rows={[
+                        ["Applicant Name", selected.full_name],
+                        ["Employee ID", selected.emp_id],
+                        [
+                          "Date of Submission",
+                          moment(selected.created_at).format("DD MMM YYYY, HH:mm"),
+                        ],
+                        ["Application Reference No.", selected.reference_no],
+                        ["Electronic Signature / Confirmation", selected.applicant_signature],
+                        ["HR Verification Status", selected.hr_verification_status],
                       ]}
-                      rows={selected.certifications.map((row) => [
-                        row.certification_membership,
-                        row.certifying_body,
-                        showDate(row.date_obtained),
-                        showDate(row.expiry_date),
-                        row.registration_no,
-                      ])}
                     />
-                  )}
-                </DetailSection>
-
-                <DetailSection title="7. Trainings & Professional Development">
-                  {selected.trainings.length === 0 ? (
-                    <p className="text-sm text-gray-400">None declared.</p>
-                  ) : (
-                    <DetailTable
-                      headers={[
-                        "Training / Course Title",
-                        "Provider / Institute",
-                        "Duration",
-                        "Date / Year",
-                        "Relevant",
-                      ]}
-                      rows={selected.trainings.map((row) => [
-                        row.training_title,
-                        row.training_provider,
-                        row.duration,
-                        row.date_or_year,
-                        row.relevant_to_position ? "Yes" : "No",
-                      ])}
-                    />
-                  )}
-                </DetailSection>
-
-                <DetailSection title="8. Declaration & Undertaking">
-                  <p className="text-sm">
-                    Accepted by the applicant:{" "}
-                    <strong>{selected.declaration_accepted ? "Yes" : "No"}</strong>
-                  </p>
-                </DetailSection>
-
-                <DetailSection title="9. Submission Record">
-                  <DetailGrid
-                    rows={[
-                      ["Applicant Name", selected.full_name],
-                      ["Employee ID", selected.emp_id],
-                      [
-                        "Date of Submission",
-                        moment(selected.created_at).format("DD MMM YYYY, HH:mm"),
-                      ],
-                      ["Application Reference No.", selected.reference_no],
-                      ["Electronic Signature / Confirmation", selected.applicant_signature],
-                      ["HR Verification Status", selected.hr_verification_status],
-                    ]}
-                  />
+                  </div>
                 </DetailSection>
 
                 <div className="mt-5 flex flex-wrap justify-end gap-3">

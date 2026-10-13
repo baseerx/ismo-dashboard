@@ -4,6 +4,12 @@ Three jobs: list the vacancies that can be applied for, hand the form what the
 employee record already knows about the person filling it in, and store a
 submission - one application per vacancy chosen - with its four repeating
 sections.
+
+Who the applicant is comes from the signed-in session (the bearer token), never
+from the request: an employee can only see their own profile and applications,
+and can only apply as themselves. The fields the specification makes read-only
+(name, employee id, department, position title, grade, supervisor) are filed
+from the employee record, whatever the payload says.
 """
 
 import json
@@ -15,11 +21,19 @@ from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
-from sqlalchemy import text
 
-from db import SessionLocal
+from notifications.service import employee_label, notify
 
-from .form_text import DECLARATION_PARAGRAPHS, SUBMISSION_NOTE
+from .applicant import employee_record
+from .form_text import (
+    ACK_DATA_ACCURACY,
+    ACK_MANAGER_NOTIFIED,
+    CONTACT_METHODS,
+    DECLARATION_PARAGRAPHS,
+    HOW_TO_APPLY,
+    SOFT_SKILLS,
+    SUBMISSION_NOTE,
+)
 from .jd_views import body_for_form
 from .models import (
     InternalJobApplication,
@@ -29,11 +43,43 @@ from .models import (
     InternalJobApplicationTraining,
     JobRequisition,
 )
-from .validators import validate_application
+from .permissions import identity_from_request
+from .requisition_views import advertisement_url
+from .validators import (
+    MAX_ACHIEVEMENTS,
+    MAX_RESPONSIBILITIES,
+    MAX_SOP,
+    MAX_TECHNICAL_SKILLS,
+    MIN_SOP,
+    validate_application,
+)
 
 logger = logging.getLogger(__name__)
 
-GENDER_NAMES = {"M": "Male", "F": "Female", "male": "Male", "female": "Female"}
+# Section 1 of the specification: read-only, auto-filled from the corporate
+# record. Filed from the record whenever it holds a value; only a field the
+# record leaves empty is taken from what the applicant typed.
+LOCKED_FIELDS = (
+    "emp_id",
+    "full_name",
+    "department_function",
+    "current_designation",
+    "current_grade",
+)
+
+
+def _session_erp_id(request):
+    """(erp_id, refusal) for the signed-in user. Exactly one is set."""
+    identity, refusal = identity_from_request(request)
+    if refusal:
+        return None, refusal
+    try:
+        erp_id = int(identity.get("erpid") or 0)
+    except (TypeError, ValueError):
+        erp_id = 0
+    if erp_id <= 0:
+        return None, "Your account is not linked to an employee record. Contact HR."
+    return erp_id, None
 
 
 def _requisition_payload(requisition: JobRequisition) -> dict:
@@ -57,7 +103,30 @@ def _requisition_payload(requisition: JobRequisition) -> dict:
         # post itself.
         "notes": requisition.description or "",
         "job_description": body_for_form(requisition.job_description),
+        # The advertisement PDF, when HR attached one.
+        "advertisement_url": advertisement_url(requisition),
+        "advertisement_name": requisition.advertisement_pdf_name
+        if requisition.advertisement_pdf else "",
     }
+
+
+@require_GET
+def application_instructions(request):
+    """The "how to apply" guidance the form shows in a popup.
+
+    Open to anyone, like the vacancy list, so the guidance can be read even by
+    someone whose employee record could not be loaded.
+    """
+    return JsonResponse(
+        {
+            "sections": [
+                {"heading": heading, "points": list(points)}
+                for heading, points in HOW_TO_APPLY
+            ],
+            "submission_note": SUBMISSION_NOTE,
+        },
+        status=200,
+    )
 
 
 @require_GET
@@ -79,88 +148,60 @@ def requisitions(request):
 
 @require_GET
 def application_profile(request):
-    """What the form can fill in for one employee before they type anything.
+    """What the form can fill in for the signed-in employee before they type.
 
     Everything here comes from the employee record and the tables it points at,
     plus the email on the account mapped to that ERP id. Fields the database
     does not hold - a date of birth, a mobile number - come back empty for the
-    applicant to fill in, and every one of them stays editable on the form.
+    applicant to fill in. `locked_fields` lists the ones the form shows
+    read-only because the record supplied them.
     """
-    erp_id = request.GET.get("erp_id")
-    if not erp_id:
-        return JsonResponse({"error": "erp_id is required"}, status=400)
+    erp_id, refusal = _session_erp_id(request)
+    if refusal:
+        return JsonResponse({"error": refusal}, status=401)
 
-    session = SessionLocal()
-    try:
-        employee = session.execute(
-            text(
-                """
-                SELECT
-                    e.erp_id, e.hris_id, e.name, e.cnic, e.gender, e.position,
-                    e.section_id, e.grade_id,
-                    s.name AS section_name,
-                    d.title AS designation,
-                    g.name AS grade,
-                    l.name AS office_location,
-                    u.email AS official_email
-                FROM employees e
-                LEFT JOIN sections s ON s.id = e.section_id
-                LEFT JOIN designations d ON d.id = e.designation_id
-                LEFT JOIN grades g ON g.id = e.grade_id
-                LEFT JOIN locations l ON l.id = e.location_id
-                LEFT JOIN profiles p ON p.erpid = e.erp_id
-                LEFT JOIN auth_user u ON u.id = p.authid
-                WHERE e.erp_id = :erp_id AND e.flag = 1
-                """
-            ),
-            {"erp_id": erp_id},
-        ).first()
+    record = employee_record(erp_id)
+    if not record:
+        return JsonResponse({"error": "Employee not found"}, status=404)
 
-        if not employee:
-            return JsonResponse({"error": "Employee not found"}, status=404)
-
-        # Designation is the job title; `position` is a free-text note on the
-        # row and is only used when there is no designation.
-        designation = employee.designation or employee.position or ""
-
-        return JsonResponse(
-            {
-                # section 2
-                "emp_id": employee.erp_id,
-                "full_name": employee.name or "",
-                "cnic": employee.cnic or "",
-                "gender": GENDER_NAMES.get((employee.gender or "").strip(), ""),
-                "official_email": employee.official_email or "",
-                "current_office_location": employee.office_location or "",
-                # section 3
-                "current_designation": designation,
-                "current_grade": employee.grade or "",
-                "department_function": employee.section_name or "",
-                # Held nowhere in the HR tables; the applicant supplies them.
-                "father_or_husband_name": "",
-                "date_of_birth": "",
-                "mobile_no": "",
-                "emergency_contact_no": "",
-                "date_of_joining_ismo": "",
-                "date_of_appointment_to_current_grade": "",
-                "date_of_joining_current_position": "",
-                "hris_id": employee.hris_id,
-                # The form shows the declaration it is asking to be accepted.
-                "declaration_paragraphs": list(DECLARATION_PARAGRAPHS),
-                "submission_note": SUBMISSION_NOTE,
+    return JsonResponse(
+        {
+            **record,
+            "locked_fields": [field for field in LOCKED_FIELDS if record.get(field)],
+            # Held nowhere in the HR tables; the applicant supplies them.
+            "father_or_husband_name": "",
+            "date_of_birth": "",
+            "mobile_no": "",
+            "emergency_contact_no": "",
+            "date_of_joining_ismo": "",
+            "date_of_appointment_to_current_grade": "",
+            "date_of_joining_current_position": "",
+            # Fixed wording and lists, served so the page and the server can
+            # never disagree about them.
+            "declaration_paragraphs": list(DECLARATION_PARAGRAPHS),
+            "submission_note": SUBMISSION_NOTE,
+            "soft_skill_options": list(SOFT_SKILLS),
+            "contact_methods": list(CONTACT_METHODS),
+            "ack_manager_notified_text": ACK_MANAGER_NOTIFIED,
+            "ack_data_accuracy_text": ACK_DATA_ACCURACY,
+            "limits": {
+                "responsibilities": MAX_RESPONSIBILITIES,
+                "achievements": MAX_ACHIEVEMENTS,
+                "sop_min": MIN_SOP,
+                "sop_max": MAX_SOP,
+                "technical_skills": MAX_TECHNICAL_SKILLS,
             },
-            status=200,
-        )
-    finally:
-        session.close()
+        },
+        status=200,
+    )
 
 
 @require_GET
 def my_applications(request):
-    """Applications already submitted by one employee, newest first."""
-    erp_id = request.GET.get("erp_id")
-    if not erp_id:
-        return JsonResponse({"error": "erp_id is required"}, status=400)
+    """Applications already submitted by the signed-in employee, newest first."""
+    erp_id, refusal = _session_erp_id(request)
+    if refusal:
+        return JsonResponse({"error": refusal}, status=401)
 
     applications = (
         InternalJobApplication.objects.filter(applicant_erp_id=erp_id)
@@ -205,17 +246,28 @@ def create_application(request):
     except (ValueError, UnicodeDecodeError):
         return JsonResponse({"error": "Invalid JSON body"}, status=400)
 
-    cleaned, errors = validate_application(data)
+    if not isinstance(data, dict):
+        return JsonResponse({"errors": {"__all__": "The submission was not readable"}},
+                            status=400)
 
-    # The applicant is the session's own ERP id. The form shows it and lets it
-    # be corrected for display, but the record is filed against who is signed
-    # in, not against whatever the payload claims.
-    try:
-        applicant_erp_id = int(data.get("applicant_erp_id") or 0)
-    except (TypeError, ValueError):
-        applicant_erp_id = 0
-    if applicant_erp_id <= 0:
-        errors["applicant_erp_id"] = "Sign in again - your employee id is missing"
+    # The applicant is whoever is signed in, not whatever the payload claims.
+    applicant_erp_id, refusal = _session_erp_id(request)
+    if refusal:
+        return JsonResponse({"error": refusal}, status=401)
+
+    record = employee_record(applicant_erp_id)
+    if not record:
+        return JsonResponse(
+            {"error": "No active employee record was found for your account."}, status=404
+        )
+
+    # Read-only fields are filed from the record before anything is checked,
+    # so the signature is compared against the name on record too.
+    data = {
+        **data,
+        **{field: record[field] for field in LOCKED_FIELDS if record.get(field)},
+    }
+    cleaned, errors = validate_application(data)
 
     requisitions_to_use = []
     if cleaned.get("target_job_req_ids") and "target_job_req_ids" not in errors:
@@ -300,6 +352,8 @@ def create_application(request):
                 mobile_no=cleaned["mobile_no"],
                 current_office_location=cleaned["current_office_location"],
                 emergency_contact_no=cleaned["emergency_contact_no"],
+                personal_email=cleaned["personal_email"],
+                preferred_contact_method=cleaned["preferred_contact_method"],
                 # 3. current employment details
                 date_of_joining_ismo=cleaned["date_of_joining_ismo"],
                 current_designation=cleaned["current_designation"],
@@ -309,6 +363,14 @@ def create_application(request):
                 total_service_ismo=cleaned["total_service_ismo"],
                 total_relevant_experience=cleaned["total_relevant_experience"],
                 date_of_joining_current_position=cleaned["date_of_joining_current_position"],
+                current_supervisor_erp_id=record["current_supervisor_erp_id"],
+                current_supervisor_name=record["current_supervisor_name"],
+                # skills, statement of purpose, acknowledgements
+                skills_technical_tags=json.dumps(cleaned["skills_technical_tags"]),
+                skills_soft_checkboxes=json.dumps(cleaned["skills_soft_checkboxes"]),
+                application_rationale_sop=cleaned["application_rationale_sop"],
+                ack_manager_notified_bool=cleaned["ack_manager_notified_bool"],
+                ack_data_accuracy_bool=cleaned["ack_data_accuracy_bool"],
                 # 8 and 9
                 declaration_accepted=cleaned["declaration_accepted"],
                 applicant_signature=cleaned["applicant_signature"],
@@ -339,6 +401,8 @@ def create_application(request):
                 "vacancy": requisition.title,
                 "reference_no": application.application_reference_no,
             })
+
+    supervisor_notified = _notify_supervisor(record, applicant_erp_id, created)
 
     logger.info(
         "internal job applications %s: erp=%s vacancies=%s skipped=%d "
@@ -371,7 +435,36 @@ def create_application(request):
             "experience_count": len(cleaned["experience"]),
             "certification_count": len(cleaned["certifications"]),
             "training_count": len(cleaned["trainings"]),
+            "supervisor_notified": supervisor_notified,
             "message": message,
         },
         status=201,
     )
+
+
+def _notify_supervisor(record, applicant_erp_id, created) -> bool:
+    """Alert the applicant's current supervisor that they have applied.
+
+    The applicant has just certified that their manager knows; this makes sure
+    of it. Runs after the applications are committed and never fails the
+    request - `notify` swallows its own errors.
+    """
+    supervisor = record.get("current_supervisor_erp_id")
+    if not supervisor or supervisor == applicant_erp_id:
+        return False
+
+    positions = ", ".join(item["vacancy"] for item in created)
+    references = ", ".join(item["reference_no"] for item in created)
+    notification = notify(
+        recipient_erp_id=supervisor,
+        category="job_application",
+        event="submitted",
+        title="A team member applied for an internal vacancy",
+        message=(
+            f"{employee_label(applicant_erp_id)} has applied for {positions} "
+            f"({references}) and has confirmed that you are aware of the application."
+        ),
+        related_id=created[0]["id"],
+        actor_erp_id=applicant_erp_id,
+    )
+    return notification is not None

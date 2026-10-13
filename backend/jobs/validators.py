@@ -14,6 +14,8 @@ import re
 from datetime import date, datetime
 from typing import List
 
+from .form_text import CONTACT_METHODS, SOFT_SKILLS
+
 # Repeater ceilings. Generous enough for a long career, low enough that a
 # runaway payload cannot fill the database.
 MAX_EDUCATION_ROWS = 15
@@ -26,6 +28,14 @@ MAX_TRAINING_ROWS = 20
 MAX_VACANCIES_PER_SUBMISSION = 10
 
 MAX_RESPONSIBILITIES = 1500
+MAX_ACHIEVEMENTS = 2000
+
+# Statement of purpose: long enough to say something, capped as specified.
+MIN_SOP = 50
+MAX_SOP = 3000
+
+MAX_TECHNICAL_SKILLS = 30
+MAX_SKILL_LENGTH = 50
 
 GENDERS = ("Male", "Female", "Other")
 
@@ -195,6 +205,14 @@ def _validate_education(data, errors) -> list:
 
     if row_errors:
         errors["education_rows"] = row_errors
+        return cleaned_rows
+
+    # Stored oldest first, as the specification asks, whatever order the rows
+    # were typed in. The sort is stable, so two degrees finished in the same
+    # year keep the order they were entered.
+    cleaned_rows.sort(key=lambda row: row["year_of_completion"])
+    for position, row in enumerate(cleaned_rows):
+        row["row_order"] = position
     return cleaned_rows
 
 
@@ -246,6 +264,10 @@ def _validate_experience(data, errors) -> list:
                 f"Keep this within {MAX_RESPONSIBILITIES} characters"
             )
 
+        achievements = _text(row.get("key_achievements"))
+        if len(achievements) > MAX_ACHIEVEMENTS:
+            problems["key_achievements"] = f"Keep this within {MAX_ACHIEVEMENTS} characters"
+
         if problems:
             row_errors[index] = problems
             continue
@@ -261,6 +283,7 @@ def _validate_experience(data, errors) -> list:
             "is_current": is_current,
             "duration": duration,
             "key_responsibilities": responsibilities,
+            "key_achievements": achievements,
             "row_order": index,
         })
 
@@ -377,12 +400,74 @@ def _validate_trainings(data, errors) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Spec 5. Skills matrix
+# ---------------------------------------------------------------------------
+
+def _validate_skills(data, errors) -> tuple:
+    """(technical tags, soft skills), both cleaned and de-duplicated."""
+    raw_technical = data.get("skills_technical_tags")
+    if raw_technical is None:
+        raw_technical = []
+    if not isinstance(raw_technical, list):
+        errors["skills_technical_tags"] = "Technical skills should be a list of tags"
+        raw_technical = []
+
+    technical, seen = [], set()
+    for value in raw_technical:
+        tag = re.sub(r"\s+", " ", _text(value))
+        if not tag:
+            continue
+        if len(tag) > MAX_SKILL_LENGTH:
+            errors["skills_technical_tags"] = (
+                f"Keep each skill within {MAX_SKILL_LENGTH} characters: {tag[:20]}..."
+            )
+            continue
+        if tag.lower() in seen:
+            continue
+        seen.add(tag.lower())
+        technical.append(tag)
+
+    if "skills_technical_tags" not in errors:
+        if not technical:
+            errors["skills_technical_tags"] = "Add at least one core technical skill"
+        elif len(technical) > MAX_TECHNICAL_SKILLS:
+            errors["skills_technical_tags"] = (
+                f"List at most {MAX_TECHNICAL_SKILLS} technical skills"
+            )
+
+    raw_soft = data.get("skills_soft_checkboxes")
+    if raw_soft is None:
+        raw_soft = []
+    if not isinstance(raw_soft, list):
+        errors["skills_soft_checkboxes"] = "Soft skills should be a list"
+        raw_soft = []
+
+    soft = []
+    for value in raw_soft:
+        skill = _text(value)
+        if skill not in SOFT_SKILLS:
+            errors["skills_soft_checkboxes"] = f"Not one of the listed soft skills: {skill!r}"
+            break
+        if skill not in soft:
+            soft.append(skill)
+    # Kept in the order of the predefined list, so every record reads alike.
+    soft.sort(key=SOFT_SKILLS.index)
+
+    return technical, soft
+
+
+# ---------------------------------------------------------------------------
 # The whole submission
 # ---------------------------------------------------------------------------
 
+# Titles the employee record puts in front of names ("Mr. MUHAMMAD ADIL"). A
+# signature is the name, so they are ignored on both sides.
+NAME_TITLES = re.compile(r"^(?:(?:mr|mrs|ms|miss|dr|engr|prof)\.?\s+)+", re.IGNORECASE)
+
+
 def _signature_matches(signature: str, full_name: str) -> bool:
     """A signature is the applicant's own name, however it is punctuated."""
-    strip = lambda value: re.sub(r"[^a-z]", "", value.lower())
+    strip = lambda value: re.sub(r"[^a-z]", "", NAME_TITLES.sub("", value.strip()).lower())
     return strip(signature) == strip(full_name)
 
 
@@ -486,6 +571,26 @@ def validate_application(data):
                       or sum(character.isdigit() for character in emergency) < 7):
         errors["emergency_contact_no"] = "Enter a number like +92-300-1234567"
 
+    # Optional, and an alternative to the corporate address rather than a copy.
+    personal_email = _text(data.get("personal_email"), 150).lower()
+    cleaned["personal_email"] = personal_email or None
+    if personal_email:
+        if not EMAIL.match(personal_email):
+            errors["personal_email"] = "That does not look like an email address"
+        elif personal_email == email:
+            errors["personal_email"] = (
+                "Give a different address from your corporate email, or leave this blank"
+            )
+
+    contact_method = _text(data.get("preferred_contact_method"), 10)
+    cleaned["preferred_contact_method"] = contact_method
+    if not contact_method:
+        errors["preferred_contact_method"] = "Choose how you would like to be contacted"
+    elif contact_method not in CONTACT_METHODS:
+        errors["preferred_contact_method"] = (
+            f"Choose one of: {', '.join(CONTACT_METHODS)}"
+        )
+
     # ---- 3. current employment details -----------------------------------
     joined = _required_date(errors, "date_of_joining_ismo", data.get("date_of_joining_ismo"),
                             "Date of joining ISMO")
@@ -539,9 +644,36 @@ def validate_application(data):
     cleaned["experience"] = _validate_experience(data, errors)
     cleaned["certifications"] = _validate_certifications(data, errors)
     cleaned["trainings"] = _validate_trainings(data, errors)
+    cleaned["skills_technical_tags"], cleaned["skills_soft_checkboxes"] = (
+        _validate_skills(data, errors)
+    )
+
+    # ---- spec 6: statement of purpose & acknowledgement ------------------
+    sop = _text(data.get("application_rationale_sop"))
+    cleaned["application_rationale_sop"] = sop
+    if not sop:
+        errors["application_rationale_sop"] = "Explain why you are applying for this position"
+    elif len(sop) < MIN_SOP:
+        errors["application_rationale_sop"] = (
+            f"Give a little more detail - at least {MIN_SOP} characters"
+        )
+    elif len(sop) > MAX_SOP:
+        errors["application_rationale_sop"] = f"Keep this within {MAX_SOP} characters"
+
+    # Required booleans: only a real `true` counts, not any truthy string.
+    cleaned["ack_manager_notified_bool"] = data.get("ack_manager_notified_bool") is True
+    if not cleaned["ack_manager_notified_bool"]:
+        errors["ack_manager_notified_bool"] = (
+            "Confirm that your current manager is aware of this application"
+        )
+    cleaned["ack_data_accuracy_bool"] = data.get("ack_data_accuracy_bool") is True
+    if not cleaned["ack_data_accuracy_bool"]:
+        errors["ack_data_accuracy_bool"] = (
+            "Confirm that your details match the official corporate record"
+        )
 
     # ---- 8. declaration & undertaking ------------------------------------
-    cleaned["declaration_accepted"] = bool(data.get("declaration_accepted"))
+    cleaned["declaration_accepted"] = data.get("declaration_accepted") is True
     if not cleaned["declaration_accepted"]:
         errors["declaration_accepted"] = (
             "Read and accept the declaration and undertaking before submitting"

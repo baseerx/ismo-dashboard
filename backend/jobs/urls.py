@@ -8,6 +8,8 @@ urlpatterns = [
     path('requisitions/', views.requisitions),
     # What `employees` already knows about the person filling in the form.
     path('application-profile/', views.application_profile),
+    # The "how to apply" guidance shown in a popup on the form.
+    path('application-instructions/', views.application_instructions),
     path('applications/', views.my_applications),
     path('applications/create/', views.create_application),
 
@@ -17,6 +19,13 @@ urlpatterns = [
     path('requisitions/create/', requisition_views.create_requisition),
     path('requisitions/<int:requisition_id>/update/', requisition_views.update_requisition),
     path('requisitions/<int:requisition_id>/delete/', requisition_views.delete_requisition),
+    # The advertisement PDF: attached and removed by HR, viewed by anyone.
+    path('requisitions/<int:requisition_id>/advertisement/',
+         requisition_views.upload_advertisement),
+    path('requisitions/<int:requisition_id>/advertisement/remove/',
+         requisition_views.remove_advertisement),
+    path('requisitions/<int:requisition_id>/advertisement/view/',
+         requisition_views.view_advertisement),
 
     # --- the job description library --------------------------------------
     # Active descriptions, for the picker on the vacancy screen.

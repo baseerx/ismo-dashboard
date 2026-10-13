@@ -85,3 +85,5 @@ ollama_data/
 # Testing
 
 chroma_db
+# Files uploaded through the app (advertisement PDFs, ...)
+backend/media/

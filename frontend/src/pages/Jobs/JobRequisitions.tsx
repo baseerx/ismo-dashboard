@@ -20,6 +20,10 @@ const MAX_GRADE = 40;
 const MAX_DEPARTMENT = 200;
 const MAX_LOCATION = 200;
 const MAX_DESCRIPTION = 4000;
+const MAX_ADVERTISEMENT_MB = 10;
+
+/** The API serves the advertisement; links open it in the browser's PDF viewer. */
+const advertisementHref = (url: string) => `${axios.defaults.baseURL}${url}`;
 
 type Requisition = {
   id: number;
@@ -39,7 +43,15 @@ type Requisition = {
   is_open: boolean;
   /** Open, but its closing date has already passed. */
   has_expired: boolean;
+  /** Open and not past its closing date - on the application form right now. */
+  is_live: boolean;
   application_count: number;
+  /** False while live or once applied for; the reason says which. */
+  can_delete: boolean;
+  delete_blocked_reason: string;
+  /** Relative to the API root; empty when no PDF is attached. */
+  advertisement_url: string;
+  advertisement_name: string;
   created_at: string | null;
 };
 
@@ -85,6 +97,10 @@ export default function JobRequisitions() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // The advertisement PDF picked for upload with the next save.
+  const [advertisementFile, setAdvertisementFile] = useState<File | null>(null);
+  // Remounts the file input so it empties after a save or cancel.
+  const [fileInputKey, setFileInputKey] = useState(0);
 
   // Writes need the login token; the shared axios instance does not attach it.
   const authHeader = useMemo(() => {
@@ -177,9 +193,70 @@ export default function JobRequisitions() {
       }
     }
 
+    const fileProblem = checkAdvertisement(advertisementFile);
+    if (fileProblem) problems.advertisement_pdf = fileProblem;
+
     setErrors(problems);
     if (Object.keys(problems).length) toast.error("Please correct the highlighted fields");
     return Object.keys(problems).length === 0;
+  };
+
+  /** The same checks the server makes, so a bad file is caught before upload. */
+  const checkAdvertisement = (file: File | null): string | null => {
+    if (!file) return null;
+    if (!file.name.toLowerCase().endsWith(".pdf")) return "The advertisement must be a PDF file";
+    if (file.size === 0) return "That file is empty";
+    if (file.size > MAX_ADVERTISEMENT_MB * 1024 * 1024) {
+      return `Keep the PDF within ${MAX_ADVERTISEMENT_MB} MB`;
+    }
+    return null;
+  };
+
+  const chooseAdvertisement = (file: File | null) => {
+    setAdvertisementFile(file);
+    setErrors((previous) => {
+      const next = { ...previous };
+      const problem = checkAdvertisement(file);
+      if (problem) next.advertisement_pdf = problem;
+      else delete next.advertisement_pdf;
+      return next;
+    });
+  };
+
+  /** Sends the chosen PDF for a saved vacancy. True when it was stored. */
+  const uploadAdvertisement = async (requisitionId: number): Promise<boolean> => {
+    if (!advertisementFile) return true;
+    const body = new FormData();
+    body.append("file", advertisementFile);
+    try {
+      await axios.post(`/jobs/requisitions/${requisitionId}/advertisement/`, body, {
+        headers: { ...(authHeader?.headers ?? {}), "Content-Type": "multipart/form-data" },
+      });
+      return true;
+    } catch (error: any) {
+      const returned = error?.response?.data;
+      toast.error(
+        returned?.errors?.advertisement_pdf ??
+          returned?.error ??
+          "The vacancy was saved, but the advertisement PDF could not be uploaded"
+      );
+      return false;
+    }
+  };
+
+  const removeAdvertisement = async (requisition: Requisition) => {
+    if (!window.confirm(`Remove the advertisement PDF from "${requisition.title}"?`)) return;
+    try {
+      await axios.post(
+        `/jobs/requisitions/${requisition.id}/advertisement/remove/`,
+        {},
+        authHeader
+      );
+      toast.success("Advertisement removed");
+      load();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error ?? "Could not remove the advertisement");
+    }
   };
 
   const save = async () => {
@@ -200,12 +277,22 @@ export default function JobRequisitions() {
     };
 
     try {
+      let savedId: number;
       if (editingId) {
         await axios.post(`/jobs/requisitions/${editingId}/update/`, payload, authHeader);
-        toast.success("Vacancy updated");
+        savedId = editingId;
       } else {
-        await axios.post("/jobs/requisitions/create/", payload, authHeader);
-        toast.success("Vacancy advertised — it now appears on the application form");
+        const response = await axios.post("/jobs/requisitions/create/", payload, authHeader);
+        savedId = response.data.id;
+      }
+      // The vacancy is saved either way; a failed upload says so on its own.
+      const uploaded = await uploadAdvertisement(savedId);
+      if (uploaded) {
+        toast.success(
+          editingId
+            ? "Vacancy updated"
+            : "Vacancy advertised — it now appears on the application form"
+        );
       }
       reset();
       load();
@@ -251,6 +338,8 @@ export default function JobRequisitions() {
     setEditingId(null);
     setForm(blankForm());
     setErrors({});
+    setAdvertisementFile(null);
+    setFileInputKey((key) => key + 1);
   };
 
   /** Closing takes a post off the form; the applications already filed stay. */
@@ -280,6 +369,10 @@ export default function JobRequisitions() {
   };
 
   const remove = async (requisition: Requisition) => {
+    if (!requisition.can_delete) {
+      toast.error(requisition.delete_blocked_reason);
+      return;
+    }
     if (
       !window.confirm(
         `Delete "${requisition.title}"? This cannot be undone.`
@@ -457,6 +550,59 @@ export default function JobRequisitions() {
             </div>
 
             <div className="md:col-span-2">
+              <Label htmlFor="advertisement_pdf">Advertisement (PDF)</Label>
+              {(() => {
+                const current = editingId
+                  ? requisitions.find((item) => item.id === editingId)
+                  : undefined;
+                return current?.advertisement_url ? (
+                  <p className="mb-2 text-sm text-gray-600 dark:text-gray-400">
+                    Attached:{" "}
+                    <a
+                      href={advertisementHref(current.advertisement_url)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-medium text-brand-500 underline hover:text-brand-600"
+                    >
+                      {current.advertisement_name || "advertisement.pdf"}
+                    </a>
+                    {" · "}
+                    <button
+                      type="button"
+                      onClick={() => removeAdvertisement(current)}
+                      className="text-error-500 hover:text-error-600"
+                    >
+                      Remove
+                    </button>
+                    <span className="ml-1 text-xs text-gray-400">
+                      (choosing a new file replaces it)
+                    </span>
+                  </p>
+                ) : null;
+              })()}
+              <input
+                key={fileInputKey}
+                id="advertisement_pdf"
+                type="file"
+                accept="application/pdf,.pdf"
+                onChange={(e) => chooseAdvertisement(e.target.files?.[0] ?? null)}
+                className={`h-11 w-full overflow-hidden rounded-lg border bg-transparent text-sm text-gray-500 shadow-theme-xs file:mr-5 file:cursor-pointer file:border-0 file:border-r file:border-solid file:border-gray-200 file:bg-gray-50 file:py-3 file:pl-3.5 file:pr-3 file:text-sm file:text-gray-700 hover:file:bg-gray-100 dark:bg-gray-900 dark:text-gray-400 dark:file:border-gray-800 dark:file:bg-white/[0.03] dark:file:text-gray-400 ${
+                  errors.advertisement_pdf
+                    ? "border-error-500"
+                    : "border-gray-300 dark:border-gray-700"
+                }`}
+              />
+              {errors.advertisement_pdf ? (
+                <p className="mt-1 text-xs text-error-500">{errors.advertisement_pdf}</p>
+              ) : (
+                <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                  The published advertisement, up to {MAX_ADVERTISEMENT_MB} MB. Applicants
+                  can open it from the application form.
+                </p>
+              )}
+            </div>
+
+            <div className="md:col-span-2">
               <Label htmlFor="description">Description</Label>
               <TextArea
                 rows={4}
@@ -490,7 +636,7 @@ export default function JobRequisitions() {
 
         <ComponentCard
           title="Vacancies"
-          desc="Closing a vacancy removes it from the application form. Applications already submitted are kept."
+          desc="Closing a vacancy removes it from the application form. A live vacancy, or one with applications, cannot be deleted."
         >
           {loading ? (
             <p className="py-8 text-center text-sm text-gray-400 dark:text-gray-500">
@@ -511,6 +657,7 @@ export default function JobRequisitions() {
                     <th className="py-2 pr-4 font-medium">Grade</th>
                     <th className="py-2 pr-4 font-medium">Department / Function</th>
                     <th className="py-2 pr-4 font-medium">Job Description</th>
+                    <th className="py-2 pr-4 font-medium">Advertisement</th>
                     <th className="py-2 pr-4 font-medium">Advertised</th>
                     <th className="py-2 pr-4 font-medium">Closing</th>
                     <th className="py-2 pr-4 font-medium">Status</th>
@@ -548,6 +695,26 @@ export default function JobRequisitions() {
                             "—"
                           )}
                         </td>
+                        <td className="py-2.5 pr-4" data-advertisement-cell={requisition.id}>
+                          {requisition.advertisement_url ? (
+                            <a
+                              href={advertisementHref(requisition.advertisement_url)}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={requisition.advertisement_name}
+                              className="inline-flex items-center gap-1 font-medium text-brand-500 hover:text-brand-600"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                                <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+                                <path d="M14 3v5h5" />
+                              </svg>
+                              View PDF
+                            </a>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
                         <td className="py-2.5 pr-4">
                           {requisition.advertisement_date
                             ? moment(requisition.advertisement_date).format("DD MMM YYYY")
@@ -576,17 +743,26 @@ export default function JobRequisitions() {
                             >
                               {requisition.is_open ? "Close" : "Reopen"}
                             </Button>
-                            <Button
-                              size="xs"
-                              variant="danger"
-                              onClick={() => remove(requisition)}
-                              // Deleting one with applications is refused by the
-                              // server; disabling it here saves the round trip.
-                              disabled={requisition.application_count > 0}
-                            >
-                              Delete
-                            </Button>
+                            {/* A live or applied-for vacancy is refused by the
+                                server; disabling it here says why up front. */}
+                            <span title={requisition.delete_blocked_reason || undefined}>
+                              <Button
+                                size="xs"
+                                variant="danger"
+                                onClick={() => remove(requisition)}
+                                disabled={!requisition.can_delete}
+                              >
+                                Delete
+                              </Button>
+                            </span>
                           </div>
+                          {!requisition.can_delete && (
+                            <p className="mt-1 max-w-56 text-[11px] leading-snug text-gray-400">
+                              {requisition.is_live
+                                ? "Live on the form - close it to delete."
+                                : "Has applications - cannot be deleted."}
+                            </p>
+                          )}
                         </td>
                       </tr>
                     );

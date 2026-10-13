@@ -3,6 +3,15 @@
 The application form reads `requisitions/`, which lists only what can still be
 applied for. This module is the other side: the screen where HR advertises a
 post, edits it, closes it, or removes one that nobody has applied to.
+
+A vacancy can carry its advertisement as a PDF. It is uploaded and removed here
+by whoever manages vacancies, and viewed by anyone through
+`requisitions/<id>/advertisement/view/` - the same people who can see the
+vacancy on the application form.
+
+A vacancy is only ever deleted when it is neither live (open and not past its
+closing date) nor applied for. A live advertisement is being read by employees
+right now; an applied-for one is referenced by the applications filed against it.
 """
 
 import json
@@ -11,7 +20,7 @@ from datetime import date
 
 from django.db.models import Count
 from django.db.models.deletion import ProtectedError
-from django.http import JsonResponse
+from django.http import FileResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
@@ -27,14 +36,41 @@ MAX_DESCRIPTION = 4000
 MAX_REFERENCE = 100
 MAX_GRADE = 40
 
+# Advertisement PDFs. Generous for a scanned notice, small enough that the
+# server is not used as file storage.
+MAX_ADVERTISEMENT_BYTES = 10 * 1024 * 1024
+
 
 def _text(value) -> str:
     return str(value or "").strip()
 
 
+def delete_refusal(requisition: JobRequisition, application_count: int):
+    """Why this vacancy cannot be deleted, or None when it can."""
+    if requisition.is_live:
+        return (
+            "This vacancy is live on the application form, so it cannot be deleted. "
+            "Close it first."
+        )
+    if application_count:
+        return (
+            f"{application_count} application(s) have been submitted for this vacancy, "
+            "so it cannot be deleted. Keep it closed instead."
+        )
+    return None
+
+
+def advertisement_url(requisition: JobRequisition) -> str:
+    """Where the advertisement PDF is viewed, relative to the API root."""
+    if not requisition.advertisement_pdf:
+        return ""
+    return f"/jobs/requisitions/{requisition.id}/advertisement/view/"
+
+
 def _serialize(requisition: JobRequisition, application_count: int = 0) -> dict:
     closing = requisition.closing_date
     advertised = requisition.advertisement_date
+    refusal = delete_refusal(requisition, application_count)
     return {
         "id": requisition.id,
         "title": requisition.title,
@@ -58,7 +94,14 @@ def _serialize(requisition: JobRequisition, application_count: int = 0) -> dict:
         # Distinguishes "closed by HR" from "the closing date has passed", which
         # look the same to an applicant but not to whoever is maintaining it.
         "has_expired": bool(closing and closing < date.today() and requisition.is_open),
+        "is_live": requisition.is_live,
         "application_count": application_count,
+        # The page disables Delete and says why; the server refuses regardless.
+        "can_delete": refusal is None,
+        "delete_blocked_reason": refusal or "",
+        "advertisement_url": advertisement_url(requisition),
+        "advertisement_name": requisition.advertisement_pdf_name
+        if requisition.advertisement_pdf else "",
         "created_at": requisition.created_at.strftime("%Y-%m-%d %H:%M")
         if requisition.created_at
         else None,
@@ -237,11 +280,12 @@ def update_requisition(request, requisition_id: int):
 @csrf_exempt
 @require_POST
 def delete_requisition(request, requisition_id: int):
-    """Remove a vacancy nobody has applied to.
+    """Remove a vacancy that is not live and that nobody has applied to.
 
-    Applications reference the vacancy they were filed against, so one with
-    applications is never deleted - closing it is what the caller wants, and the
-    response says so rather than failing obscurely.
+    A live vacancy is on the application form right now, so it has to be closed
+    first. Applications reference the vacancy they were filed against, so one
+    with applications is never deleted. Either way the response says why rather
+    than failing obscurely.
     """
     identity, refusal = require_requisition_manager(request)
     if refusal:
@@ -251,18 +295,11 @@ def delete_requisition(request, requisition_id: int):
     if requisition is None:
         return JsonResponse({"error": "That vacancy no longer exists"}, status=404)
 
-    count = requisition.applications.count()
-    if count:
-        return JsonResponse(
-            {
-                "error": (
-                    f"{count} application(s) have been submitted for this vacancy, "
-                    "so it cannot be deleted. Close it instead to take it off the form."
-                )
-            },
-            status=409,
-        )
+    refusal = delete_refusal(requisition, requisition.applications.count())
+    if refusal:
+        return JsonResponse({"error": refusal}, status=409)
 
+    advertisement = requisition.advertisement_pdf
     try:
         requisition.delete()
     except ProtectedError:
@@ -271,7 +308,117 @@ def delete_requisition(request, requisition_id: int):
             status=409,
         )
 
+    if advertisement:
+        advertisement.delete(save=False)
+
     logger.info(
         "job requisition %s deleted by auth user %s", requisition_id, identity.get("user_id")
     )
     return JsonResponse({"detail": "Vacancy deleted"}, status=200)
+
+
+# ---------------------------------------------------------------------------
+# The advertisement PDF
+# ---------------------------------------------------------------------------
+
+def _pdf_problem(upload) -> str | None:
+    """Why an uploaded file is not an acceptable advertisement, or None."""
+    if upload is None:
+        return "Choose a PDF file to upload"
+    if not upload.name.lower().endswith(".pdf"):
+        return "The advertisement must be a PDF file"
+    if upload.size == 0:
+        return "That file is empty"
+    if upload.size > MAX_ADVERTISEMENT_BYTES:
+        return f"Keep the PDF within {MAX_ADVERTISEMENT_BYTES // (1024 * 1024)} MB"
+    # The extension says nothing about the content; a real PDF starts with this.
+    head = upload.read(5)
+    upload.seek(0)
+    if head != b"%PDF-":
+        return "That file is not a valid PDF"
+    return None
+
+
+@csrf_exempt
+@require_POST
+def upload_advertisement(request, requisition_id: int):
+    """Attach the advertisement PDF to a vacancy, replacing any earlier one."""
+    identity, refusal = require_requisition_manager(request)
+    if refusal:
+        return JsonResponse({"error": refusal}, status=403)
+
+    requisition = JobRequisition.objects.filter(id=requisition_id).first()
+    if requisition is None:
+        return JsonResponse({"error": "That vacancy no longer exists"}, status=404)
+
+    upload = request.FILES.get("file")
+    problem = _pdf_problem(upload)
+    if problem:
+        return JsonResponse({"errors": {"advertisement_pdf": problem}}, status=400)
+
+    previous = requisition.advertisement_pdf
+    previous_name = previous.name if previous else None
+
+    original_name = upload.name.replace("\\", "/").split("/")[-1][:255]
+    requisition.advertisement_pdf.save(f"vacancy-{requisition.id}.pdf", upload, save=False)
+    requisition.advertisement_pdf_name = original_name
+    requisition.save(update_fields=["advertisement_pdf", "advertisement_pdf_name"])
+
+    # The old file is only removed once the new one is safely recorded.
+    if previous_name and previous_name != requisition.advertisement_pdf.name:
+        requisition.advertisement_pdf.storage.delete(previous_name)
+
+    logger.info(
+        "advertisement for job requisition %s uploaded by auth user %s (%d bytes)",
+        requisition.id, identity.get("user_id"), upload.size,
+    )
+    count = requisition.applications.count()
+    return JsonResponse(_serialize(requisition, count), status=200)
+
+
+@csrf_exempt
+@require_POST
+def remove_advertisement(request, requisition_id: int):
+    identity, refusal = require_requisition_manager(request)
+    if refusal:
+        return JsonResponse({"error": refusal}, status=403)
+
+    requisition = JobRequisition.objects.filter(id=requisition_id).first()
+    if requisition is None:
+        return JsonResponse({"error": "That vacancy no longer exists"}, status=404)
+
+    if requisition.advertisement_pdf:
+        requisition.advertisement_pdf.delete(save=False)
+    requisition.advertisement_pdf = None
+    requisition.advertisement_pdf_name = ""
+    requisition.save(update_fields=["advertisement_pdf", "advertisement_pdf_name"])
+
+    logger.info(
+        "advertisement for job requisition %s removed by auth user %s",
+        requisition.id, identity.get("user_id"),
+    )
+    count = requisition.applications.count()
+    return JsonResponse(_serialize(requisition, count), status=200)
+
+
+@require_GET
+def view_advertisement(request, requisition_id: int):
+    """The advertisement PDF, opened in the browser's own viewer."""
+    requisition = JobRequisition.objects.filter(id=requisition_id).first()
+    if requisition is None or not requisition.advertisement_pdf:
+        return JsonResponse({"error": "No advertisement is attached to this vacancy"},
+                            status=404)
+    try:
+        handle = requisition.advertisement_pdf.open("rb")
+    except FileNotFoundError:
+        logger.error("advertisement file missing for job requisition %s: %s",
+                     requisition.id, requisition.advertisement_pdf.name)
+        return JsonResponse({"error": "The advertisement file could not be found"},
+                            status=404)
+
+    return FileResponse(
+        handle,
+        content_type="application/pdf",
+        as_attachment=request.GET.get("download") == "1",
+        filename=requisition.advertisement_pdf_name or f"vacancy-{requisition.id}.pdf",
+    )
