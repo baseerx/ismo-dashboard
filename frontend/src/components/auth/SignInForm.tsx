@@ -23,6 +23,21 @@ export default function SignInForm() {
     // The page the user was sent here from (?next=...), or the dashboard.
     const destination=afterLoginPath(location.search);
 
+    // A lasting warning above the form: tries left, or a locked account.
+    // Set by a failed sign-in, or carried over when a locked account's open
+    // session was ended (see ProtectedRoute).
+    const [warning,setWarning]=useState<{tone:"locked"|"attempts"|"ended";text:string}|null>(()=>{
+        try {
+            const carried=sessionStorage.getItem("ismo:signout-reason");
+            if (carried) {
+                sessionStorage.removeItem("ismo:signout-reason");
+                const parsed=JSON.parse(carried);
+                return {tone:parsed.tone==="locked"?"locked":"ended",text:String(parsed.text)};
+            }
+        } catch { /* storage unavailable or unreadable - nothing carried over */ }
+        return null;
+    });
+
     // Already signed in and following a link to a page: go straight there.
     useEffect(()=>{
         if (localStorage.getItem("token") && new URLSearchParams(location.search).has("next")) {
@@ -50,8 +65,19 @@ export default function SignInForm() {
                 navigate(destination,{replace:true});
             }
         }
-        catch (error) {
-          toast.error("Login failed. Please check your credentials.");
+        catch (error:any) {
+          const returned=error?.response?.data;
+          const status=error?.response?.status;
+          if (status===423 || returned?.locked) {
+            setWarning({tone:"locked",text:returned?.error ?? "Your account is locked."});
+          } else if (typeof returned?.attempts_left==="number") {
+            setWarning({tone:"attempts",text:returned.error});
+          } else {
+            setWarning(null);
+            toast.error(returned?.error ?? (error?.response
+              ? "Login failed. Please check your credentials."
+              : "Could not reach the server. Please try again."));
+          }
         }
       
       
@@ -86,6 +112,23 @@ export default function SignInForm() {
             </p>
           </div>
           <div>
+            {warning && (
+              <div
+                role="alert"
+                data-signin-warning={warning.tone}
+                className={`mb-5 rounded-lg border px-4 py-3 text-sm ${
+                  warning.tone==="locked"
+                    ? "border-error-200 bg-error-50 text-error-700 dark:border-error-500/30 dark:bg-error-500/10 dark:text-error-400"
+                    : "border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-400"
+                }`}
+              >
+                <p className="font-semibold">
+                  {warning.tone==="locked" ? "Account locked"
+                    : warning.tone==="ended" ? "Signed out" : "Wrong password"}
+                </p>
+                <p className="mt-0.5">{warning.text}</p>
+              </div>
+            )}
             <form onSubmit={handleSignIn} className="space-y-6">
               <div className="space-y-6">
                 <div>

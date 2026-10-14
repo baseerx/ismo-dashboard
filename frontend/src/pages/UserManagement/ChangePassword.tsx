@@ -1,7 +1,7 @@
 import { useState } from "react";
 import PageBreadcrumb from "../../components/common/PageBreadCrumb";
 import PageMeta from "../../components/common/PageMeta";
-import Input from "../../components/form/input/InputField";
+import PasswordInput from "../../components/form/input/PasswordInput";
 import Label from "../../components/form/Label";
 import Button from "../../components/ui/button/Button";
 import { toast, ToastContainer } from "react-toastify";
@@ -81,7 +81,12 @@ export default function ChangePassword() {
       }
 
       try {
-          const response = await axios.post("/users/change-password/", data);
+          // The server changes the signed-in account's password - it reads who
+          // that is from the login token, not from the form.
+          const token = localStorage.getItem("token");
+          const response = await axios.post("/users/change-password/", data, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
             if (response.status === 200) {
                 toast.success("Password changed successfully");
                 setData(buildBlankForm());
@@ -114,14 +119,12 @@ export default function ChangePassword() {
         <div className="space-y- grid grid-cols-2 gap-6">
           <div className="col-span-2 lg:col-span-1">
             <Label htmlFor="old_password">Current Password</Label>
-            <Input
+            <PasswordInput
               id="old_password"
               name="old_password"
-              type="password"
               value={data.old_password}
-              onChange={(e) =>
-                setData({ ...data, old_password: e.target.value })
-              }
+              onChange={(value) => setData({ ...data, old_password: value })}
+              autoComplete="current-password"
               error={!!err.old_password}
               hint={err.old_password}
               placeholder="Enter current password"
@@ -130,14 +133,11 @@ export default function ChangePassword() {
 
           <div className="col-span-2 lg:col-span-1">
             <Label htmlFor="new_password1">New Password</Label>
-            <Input
+            <PasswordInput
               id="new_password1"
               name="new_password1"
-                          type="password"
-                value={data.new_password1}
-              onChange={(e) =>
-                setData({ ...data, new_password1: e.target.value })
-              }
+              value={data.new_password1}
+              onChange={(value) => setData({ ...data, new_password1: value })}
                 error={!!err.new_password1}
               hint={err.new_password1}
               placeholder="Enter new password"
@@ -150,14 +150,11 @@ export default function ChangePassword() {
 
           <div className="col-span-2 lg:col-span-1">
             <Label htmlFor="new_password2">Confirm New Password</Label>
-            <Input
+            <PasswordInput
               id="new_password2"
               name="new_password2"
-              type="password"
               value={data.new_password2}
-              onChange={(e) =>
-                setData({ ...data, new_password2: e.target.value })
-              }
+              onChange={(value) => setData({ ...data, new_password2: value })}
               error={
                 !!err.new_password2 ||
                 (!!data.new_password2 &&

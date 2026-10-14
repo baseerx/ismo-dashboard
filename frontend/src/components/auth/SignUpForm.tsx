@@ -1,18 +1,17 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import moment from "moment";
-import {  EyeCloseIcon, EyeIcon } from "../../icons";
 import Label from "../form/Label";
 import Input from "../form/input/InputField";
 
 import DatePicker from "../form/date-picker";
 import PasswordStrengthMeter from "../form/PasswordStrengthMeter";
+import PasswordInput from "../form/input/PasswordInput";
 import { evaluatePassword } from "../../utils/passwordPolicy";
 import { toast, ToastContainer } from "react-toastify";
 import axios from "../../api/axios";
 
 export default function SignUpForm() {
-  const [showPassword, setShowPassword] = useState(false);
     const navigate = useNavigate();
   const [data, setData] = useState({
     first_name: "",
@@ -174,39 +173,25 @@ export default function SignUpForm() {
                 <Label>
                   Password<span className="text-error-500">*</span>
                 </Label>
-                <div className="relative">
-                  <Input
-                    placeholder="Enter your password"
-                    type={showPassword ? "text" : "password"}
-                    value={data.password}
-                    onChange={(e) => handleChange("password", e.target.value)}
-                    error={!!errors.password}
-                    hint={errors.password}
-                  />
-                  <span
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute z-30 -translate-y-1/2 cursor-pointer right-4 top-1/2"
-                  >
-                    {showPassword ? (
-                      <EyeIcon className="fill-gray-500 dark:fill-gray-400 size-5" />
-                    ) : (
-                      <EyeCloseIcon className="fill-gray-500 dark:fill-gray-400 size-5" />
-                    )}
-                  </span>
-                </div>
+                <PasswordInput
+                  id="signup-password"
+                  placeholder="Enter your password"
+                  value={data.password}
+                  onChange={(value) => handleChange("password", value)}
+                  error={!!errors.password}
+                  hint={errors.password}
+                />
                 <PasswordStrengthMeter
                   password={data.password}
                   evaluation={passwordCheck}
                 />
               </div>
 
-              <Input
-                type="password"
+              <PasswordInput
+                id="signup-verify-password"
                 placeholder="Confirm password"
                 value={data.verify_password}
-                onChange={(e) =>
-                  handleChange("verify_password", e.target.value)
-                }
+                onChange={(value) => handleChange("verify_password", value)}
                 error={
                   !!errors.verify_password ||
                   (!!data.verify_password &&

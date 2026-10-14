@@ -20,6 +20,12 @@ urlpatterns = [
     path('get_auth_users/', UsersView.auth_users),  # Include the login URL
     path('delete_user/<int:user_id>/', UsersView.delete_user),  # Include the login URL
     path('reset_password/<int:user_id>/', UsersView.reset_password),  # Include the login URL
+    # Account lockout: status for Create User, lock / unlock, and the
+    # check the app makes so a locked account's open session ends.
+    path('account_status/', UsersView.account_status),
+    path('lock_user/<int:user_id>/', UsersView.lock_user),
+    path('unlock_user/<int:user_id>/', UsersView.unlock_user),
+    path('session_check/', UsersView.session_check),
     path('ncc_employees/', EmployeesView.ncc_employees),  # Include the NCC employees URL
     path('rcc_employees/', EmployeesView.rcc_employees),  # Include the RCC employees URL
 ]

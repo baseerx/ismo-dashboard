@@ -23,6 +23,9 @@ from users.employee_account import (
 )
 # Assuming you have an AssignRights model defined
 from assignrights.models import AssignRightsModel
+from jobs.permissions import _has_menu_right, identity_from_request
+from users.password_policy import generate_password, password_problems
+from users import lockout
 from datetime import date, timedelta
 # Import CustomUser from another app named 'addtousers'
 from addtouser.models import CustomUser
@@ -35,6 +38,33 @@ from db import SessionLocal
 import random
 import requests
 # Create your views here.
+
+
+# The Create User page. Whoever is granted it in Assign Rights, or is a
+# superuser, may create, reset and delete accounts.
+USER_ADMIN_URI = "/users/create"
+
+
+def _require_user_admin(request):
+    """(identity, refusal) for an account-management request. Exactly one is set."""
+    identity, refusal = identity_from_request(request)
+    if refusal:
+        return None, refusal
+    if identity.get("is_superuser") or _has_menu_right(identity.get("user_id"), USER_ADMIN_URI):
+        return identity, None
+    return None, "You do not have rights to manage user accounts."
+
+
+def _password_refusal(problems):
+    """The response for a password that breaks the policy."""
+    return JsonResponse(
+        {
+            "success": False,
+            "error": "The password does not meet the policy: " + "; ".join(problems),
+            "password_errors": problems,
+        },
+        status=400,
+    )
 
 
 class UsersView:
@@ -50,7 +80,13 @@ class UsersView:
     @csrf_exempt
     @require_POST
     def create_user(request):
-        data = json.loads(request.body.decode('utf-8'))
+        identity, refusal = _require_user_admin(request)
+        if refusal:
+            return JsonResponse({'success': False, 'error': refusal}, status=403)
+        try:
+            data = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'success': False, 'error': 'Invalid request'}, status=400)
 
         username = data.get('username', '')
         first_name = data.get('first_name', '')
@@ -66,6 +102,14 @@ class UsersView:
         date_joined = parse_date(
             date_joined_str) if date_joined_str else datetime.date.today()
 
+        # Only a superuser can make another superuser; someone granted the
+        # Create User page manages ordinary accounts.
+        if is_superuser and not identity.get('is_superuser'):
+            return JsonResponse(
+                {'success': False, 'error': 'Only a superuser can create another superuser'},
+                status=403,
+            )
+
         if password != verify_password:
             return JsonResponse({'success': False, 'error': 'Passwords do not match'}, status=400)
 
@@ -74,6 +118,13 @@ class UsersView:
 
         if User.objects.filter(username=username).exists():
             return JsonResponse({'success': False, 'error': 'Username already exists'}, status=400)
+
+        problems = password_problems(
+            password, username=username, email=email, first_name=first_name,
+            last_name=last_name, erp_id=erpid,
+        )
+        if problems:
+            return _password_refusal(problems)
 
         user = User.objects.create(
             password=make_password(password),
@@ -108,7 +159,8 @@ class UsersView:
         email = data.get('email', '')
         password = data.get('password', '')
         verify_password = data.get('verify_password', '')
-        is_superuser = str(data.get('is_superuser', 'false')).lower() == 'true'
+        # Signing up never makes an administrator, whatever the request says.
+        is_superuser = False
         date_joined_str = data.get('date_joined', '')
         date_joined = parse_date(
             date_joined_str) if date_joined_str else datetime.date.today()
@@ -123,7 +175,14 @@ class UsersView:
             return JsonResponse({'success': False, 'error': 'Username already exists'}, status=400)
 
         if CustomUser.objects.filter(erpid=erpid).exists():
-            return JsonResponse({'success': False, 'error': 'ERP ID already exists'}, status=400)        
+            return JsonResponse({'success': False, 'error': 'ERP ID already exists'}, status=400)
+
+        problems = password_problems(
+            password, username=username, email=email, first_name=first_name,
+            last_name=last_name, erp_id=erpid,
+        )
+        if problems:
+            return _password_refusal(problems)
 
         user = User.objects.create(
             password=make_password(password),
@@ -176,14 +235,52 @@ class UsersView:
         email = data.get('email', '')
         password = data.get('password', '')
 
-        try:
-            user_obj = User.objects.get(email=email,is_active=1)
-            username = user_obj.username
-        except User.DoesNotExist:
+        matches = list(User.objects.filter(email__iexact=email.strip(), is_active=1)[:2])
+        if not matches:
             return JsonResponse({'success': False, 'error': 'Invalid credentials'}, status=401)
+        if len(matches) > 1:
+            # Two accounts on one address: signing in would be a guess at which.
+            return JsonResponse(
+                {'success': False, 'error': 'More than one account uses this email. '
+                                            'Contact the system administrator.'},
+                status=409,
+            )
+        user_obj = matches[0]
 
-        user = authenticate(username=username, password=password)
-        # print(f"User authenticated: {user}")  # Debugging line to check user authentication
+        # A locked account is refused before the password is even checked, so
+        # further guesses neither succeed nor count.
+        record = lockout.lockout_for(user_obj)
+        if lockout.applies_to(user_obj) and record.is_locked:
+            return JsonResponse(
+                {'success': False, 'locked': True, 'error': lockout.locked_message(record)},
+                status=423,
+            )
+
+        user = authenticate(username=user_obj.username, password=password)
+        if user is None:
+            record = lockout.record_failure(user_obj)
+            if record is None:
+                # A superuser: exempt from the lockout, so no count to report.
+                return JsonResponse({'success': False, 'error': 'Invalid credentials'}, status=401)
+            if record.is_locked:
+                return JsonResponse(
+                    {'success': False, 'locked': True, 'error': lockout.LOCKED_MESSAGE},
+                    status=423,
+                )
+            left = lockout.attempts_left(record)
+            return JsonResponse(
+                {
+                    'success': False,
+                    'attempts_left': left,
+                    'error': (
+                        f"Invalid credentials. {left} attempt{'s' if left != 1 else ''} left "
+                        "before your account is locked."
+                    ),
+                },
+                status=401,
+            )
+
+        lockout.record_success(user)
         if user is not None:
             # An account can carry more than one profile row (e.g. a stale one
             # holding the HRIS id instead of the ERP id). Prefer the profile
@@ -222,8 +319,100 @@ class UsersView:
                     payload, settings.SECRET_KEY, algorithm='HS256')
                 payload['token'] = token
                 return JsonResponse({'success': True, 'user': payload}, status=200)
-        else:
-            return JsonResponse({'success': False, 'error': 'Invalid credentials'}, status=401)
+            # Signed in, but no employee record to attach the session to.
+            return JsonResponse(
+                {'success': False, 'error': 'Your account is not linked to an employee '
+                                            'record. Contact the system administrator.'},
+                status=403,
+            )
+
+    @require_GET
+    def account_status(request):
+        """Lock status of every account, for the Create User screen."""
+        identity, refusal = _require_user_admin(request)
+        if refusal:
+            return JsonResponse({'success': False, 'error': refusal}, status=403)
+        from users.models import AccountLockout
+        rows = AccountLockout.objects.values(
+            'user_id', 'failed_attempts', 'is_locked', 'locked_at', 'locked_reason', 'locked_by'
+        )
+        return JsonResponse(
+            {
+                str(row['user_id']): {
+                    'failed_attempts': row['failed_attempts'],
+                    'is_locked': row['is_locked'],
+                    'locked_at': row['locked_at'].isoformat() if row['locked_at'] else None,
+                    'locked_reason': row['locked_reason'],
+                    'locked_by_admin': row['locked_by'] is not None,
+                }
+                for row in rows
+            },
+            status=200,
+        )
+
+    @csrf_exempt
+    @require_POST
+    def lock_user(request, user_id):
+        identity, refusal = _require_user_admin(request)
+        if refusal:
+            return JsonResponse({'success': False, 'error': refusal}, status=403)
+        if user_id == identity.get('user_id'):
+            return JsonResponse({'success': False, 'error': 'You cannot lock your own account'}, status=400)
+        user = User.objects.filter(pk=user_id).first()
+        if user is None:
+            return JsonResponse({'success': False, 'error': 'User not found'}, status=404)
+        if not lockout.applies_to(user):
+            return JsonResponse(
+                {'success': False, 'error': 'Superuser accounts are exempt from locking'},
+                status=400,
+            )
+        try:
+            data = json.loads(request.body.decode('utf-8') or "{}")
+        except (ValueError, UnicodeDecodeError):
+            data = {}
+        reason = str(data.get('reason') or '').strip() if isinstance(data, dict) else ''
+        lockout.lock(user, identity.get('user_id'), reason)
+        return JsonResponse({'success': True}, status=200)
+
+    @csrf_exempt
+    @require_POST
+    def unlock_user(request, user_id):
+        identity, refusal = _require_user_admin(request)
+        if refusal:
+            return JsonResponse({'success': False, 'error': refusal}, status=403)
+        user = User.objects.filter(pk=user_id).first()
+        if user is None:
+            return JsonResponse({'success': False, 'error': 'User not found'}, status=404)
+        if user.is_superuser and not identity.get('is_superuser'):
+            return JsonResponse(
+                {'success': False, 'error': "Only a superuser can unlock a superuser's account"},
+                status=403,
+            )
+        lockout.unlock(user, identity.get('user_id'))
+        return JsonResponse({'success': True}, status=200)
+
+    @require_GET
+    def session_check(request):
+        """Whether the signed-in account may still use the app.
+
+        Sign-in tokens do not expire, so a session opened before an account was
+        locked would otherwise carry on. The app asks this as it moves between
+        pages and signs the user out when the answer is no.
+        """
+        identity, refusal = identity_from_request(request)
+        if refusal:
+            return JsonResponse({'success': False, 'error': refusal}, status=401)
+        user = User.objects.filter(pk=identity.get('user_id'), is_active=True).first()
+        if user is None:
+            return JsonResponse({'success': False, 'error': 'This account is no longer active.'},
+                                status=401)
+        record = lockout.lockout_for(user)
+        if lockout.applies_to(user) and record.is_locked:
+            return JsonResponse(
+                {'success': False, 'locked': True, 'error': lockout.locked_message(record)},
+                status=423,
+            )
+        return JsonResponse({'success': True}, status=200)
 
     @require_GET
     def auth_users(request):
@@ -252,8 +441,13 @@ class UsersView:
     @csrf_exempt
     @require_POST
     def delete_user(request, user_id):
+        identity, refusal = _require_user_admin(request)
+        if refusal:
+            return JsonResponse({'success': False, 'error': refusal}, status=403)
         if not user_id:
             return JsonResponse({'success': False, 'error': 'User ID is required'}, status=400)
+        if user_id == identity.get('user_id'):
+            return JsonResponse({'success': False, 'error': 'You cannot delete your own account'}, status=400)
 
         try:
             user = User.objects.get(pk=user_id)
@@ -268,23 +462,66 @@ class UsersView:
     @csrf_exempt
     @require_POST
     def reset_password(request, user_id):
+        """An administrator sets a new password for an account.
+
+        The body may carry {"password": ...} chosen by the administrator;
+        without one a random password that meets the policy is generated. The
+        new password is returned once so the administrator can pass it on -
+        stored passwords are hashed and can never be read back.
+        """
+        identity, refusal = _require_user_admin(request)
+        if refusal:
+            return JsonResponse({'success': False, 'error': refusal}, status=403)
         if not user_id:
             return JsonResponse({'success': False, 'error': 'User ID is required'}, status=400)
 
         try:
             user = User.objects.get(pk=user_id)
-            password = user.email
-            user.set_password(password)
-            user.save()
-            return JsonResponse({'success': True}, status=200)
         except User.DoesNotExist:
             return JsonResponse({'success': False, 'error': 'User not found'}, status=404)
+
+        if user.is_superuser and not identity.get('is_superuser'):
+            return JsonResponse(
+                {'success': False, 'error': "Only a superuser can reset a superuser's password"},
+                status=403,
+            )
+
+        try:
+            data = json.loads(request.body.decode('utf-8') or "{}")
+        except (ValueError, UnicodeDecodeError):
+            data = {}
+        details = dict(
+            username=user.username, email=user.email, first_name=user.first_name,
+            last_name=user.last_name,
+            erp_id=CustomUser.objects.filter(authid=user.pk).values_list('erpid', flat=True).first() or "",
+        )
+
+        chosen = data.get('password') if isinstance(data, dict) else None
+        if chosen:
+            problems = password_problems(chosen, **details)
+            if problems:
+                return _password_refusal(problems)
+            new_password = chosen
+        else:
+            new_password = generate_password(**details)
+
+        user.set_password(new_password)
+        user.save(update_fields=['password'])
+        return JsonResponse({'success': True, 'password': new_password}, status=200)
 
     @csrf_exempt
     @require_POST
     def change_password(request):
-        data = json.loads(request.body.decode('utf-8'))
-        user_id = data.get('user_id')
+        # Only ever the signed-in account: the user id comes from the session
+        # token, not from the request body.
+        identity, refusal = identity_from_request(request)
+        if refusal:
+            return JsonResponse({'success': False, 'error': refusal}, status=401)
+        try:
+            data = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'success': False, 'error': 'Invalid request'}, status=400)
+        user_id = identity.get('user_id')
         old_password = data.get('old_password')
         new_password1 = data.get('new_password1')
         new_password2 = data.get('new_password2')
@@ -296,6 +533,14 @@ class UsersView:
                 return JsonResponse({'success': False, 'error': 'Old password is incorrect'}, status=400)
             if new_password1 != new_password2:
                 return JsonResponse({'success': False, 'error': 'New passwords do not match'}, status=400)
+            erp_id = CustomUser.objects.filter(authid=user.pk).values_list('erpid', flat=True).first()
+            problems = password_problems(
+                new_password1, username=user.username, email=user.email,
+                first_name=user.first_name, last_name=user.last_name,
+                erp_id=erp_id or "", current_password=old_password,
+            )
+            if problems:
+                return _password_refusal(problems)
             user.set_password(new_password1)
             user.save()
             return JsonResponse({'success': True, 'message': 'Password changed successfully'}, status=200)
