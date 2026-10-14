@@ -8,6 +8,7 @@ import Input from "../../components/form/input/InputField";
 import TextArea from "../../components/form/input/TextArea";
 import Checkbox from "../../components/form/input/Checkbox";
 import Select from "../../components/form/Select";
+import DateField from "../../components/form/DateField";
 import Button from "../../components/ui/button/Button";
 import Badge from "../../components/ui/badge/Badge";
 import axios from "../../api/axios";
@@ -100,6 +101,12 @@ export default function JobRequisitions() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Grade, department and location choices, from the grades, sections and
+  // locations tables.
+  const [grades, setGrades] = useState<string[]>([]);
+  const [departments, setDepartments] = useState<string[]>([]);
+  const [locations, setLocations] = useState<string[]>([]);
+  const [optionsError, setOptionsError] = useState(false);
   // The advertisement PDF picked for upload with the next save.
   const [advertisementFile, setAdvertisementFile] = useState<File | null>(null);
   // Remounts the file input so it empties after a save or cancel.
@@ -114,7 +121,32 @@ export default function JobRequisitions() {
   useEffect(() => {
     load();
     loadDescriptions();
+    loadOptions();
   }, []);
+
+  /** The grades, departments (sections) and locations a vacancy can name. */
+  const loadOptions = async () => {
+    try {
+      const response = await axios.get("/jobs/requisitions/options/");
+      setGrades(response.data?.grades ?? []);
+      setDepartments(response.data?.departments ?? []);
+      setLocations(response.data?.locations ?? []);
+      setOptionsError(false);
+    } catch {
+      setOptionsError(true);
+    }
+  };
+
+  /**
+   * Dropdown choices, plus the value an older vacancy was saved with when it
+   * is no longer in the table - so editing it shows what it holds.
+   */
+  const choices = (list: string[], current: string) => [
+    ...list.map((value) => ({ label: value, value })),
+    ...(current && !list.includes(current)
+      ? [{ label: `${current} (not in the list)`, value: current }]
+      : []),
+  ];
 
   /** The active descriptions a vacancy can be advertised against. */
   const loadDescriptions = async () => {
@@ -419,6 +451,18 @@ export default function JobRequisitions() {
     (item) => !item.requisition_id || item.requisition_id === editingId
   );
 
+  // Closing dates start from today, or from the advertisement date if later.
+  // An older vacancy already past its closing date is left showing that date
+  // (the calendar would otherwise blank it); the check on save still applies.
+  const earliestClosing = [moment().format("YYYY-MM-DD"), form.advertisement_date]
+    .filter(Boolean)
+    .sort()
+    .pop();
+  const closingMinDate =
+    form.closing_date && earliestClosing && form.closing_date < earliestClosing
+      ? undefined
+      : earliestClosing;
+
   const statusOf = (requisition: Requisition) => {
     if (!requisition.is_open) return { text: "Closed", color: "light" as const };
     if (requisition.has_expired) return { text: "Past closing date", color: "warning" as const };
@@ -468,35 +512,56 @@ export default function JobRequisitions() {
 
             <div>
               <Label htmlFor="grade">Grade</Label>
-              <Input
-                id="grade"
-                placeholder="e.g., G-09"
-                value={form.grade}
-                onChange={(e) => set("grade", e.target.value)}
-                error={!!errors.grade}
-                hint={errors.grade}
-              />
+              <div id="grade">
+                <Select
+                  key={`grade-${editingId ?? "new"}-${grades.length}`}
+                  options={[
+                    { label: "Not specified", value: "" },
+                    ...choices(grades, form.grade),
+                  ]}
+                  placeholder="e.g., MG-09"
+                  value={form.grade}
+                  onChange={(value) => set("grade", value)}
+                  error={!!errors.grade}
+                  hint={errors.grade}
+                />
+              </div>
             </div>
 
             <div>
               <Label htmlFor="department">Department / Function</Label>
-              <Input
-                id="department"
-                placeholder="e.g., System Operation"
-                value={form.department}
-                onChange={(e) => set("department", e.target.value)}
-                error={!!errors.department}
-                hint={errors.department}
-              />
+              <div id="department">
+                <Select
+                  key={`department-${editingId ?? "new"}-${departments.length}`}
+                  options={[
+                    { label: "Not specified", value: "" },
+                    ...choices(departments, form.department),
+                  ]}
+                  placeholder="Select department"
+                  value={form.department}
+                  onChange={(value) => set("department", value)}
+                  error={!!errors.department}
+                  hint={errors.department}
+                />
+              </div>
+              {optionsError && (
+                <p className="mt-1 text-xs text-warning-600">
+                  The grade, department and location lists could not be loaded.{" "}
+                  <button type="button" onClick={loadOptions} className="underline">
+                    Try again
+                  </button>
+                </p>
+              )}
             </div>
 
             <div>
               <Label htmlFor="advertisement_date">Date of Advertisement</Label>
-              <Input
+              <DateField
                 id="advertisement_date"
-                type="date"
+                placeholder="Select advertisement date"
                 value={form.advertisement_date}
-                onChange={(e) => set("advertisement_date", e.target.value)}
+                maxDate={moment().format("YYYY-MM-DD")}
+                onChange={(value) => set("advertisement_date", value)}
                 error={!!errors.advertisement_date}
                 hint={errors.advertisement_date}
               />
@@ -504,11 +569,12 @@ export default function JobRequisitions() {
 
             <div>
               <Label htmlFor="closing_date">Closing Date</Label>
-              <Input
+              <DateField
                 id="closing_date"
-                type="date"
+                placeholder="Select closing date"
                 value={form.closing_date}
-                onChange={(e) => set("closing_date", e.target.value)}
+                minDate={closingMinDate}
+                onChange={(value) => set("closing_date", value)}
                 error={!!errors.closing_date}
                 hint={errors.closing_date}
               />
@@ -520,14 +586,20 @@ export default function JobRequisitions() {
 
             <div>
               <Label htmlFor="location">Location</Label>
-              <Input
-                id="location"
-                placeholder="e.g., Islamabad"
-                value={form.location}
-                onChange={(e) => set("location", e.target.value)}
-                error={!!errors.location}
-                hint={errors.location}
-              />
+              <div id="location">
+                <Select
+                  key={`location-${editingId ?? "new"}-${locations.length}`}
+                  options={[
+                    { label: "Not specified", value: "" },
+                    ...choices(locations, form.location),
+                  ]}
+                  placeholder="Select location"
+                  value={form.location}
+                  onChange={(value) => set("location", value)}
+                  error={!!errors.location}
+                  hint={errors.location}
+                />
+              </div>
             </div>
 
             <div>

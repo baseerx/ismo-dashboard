@@ -16,6 +16,8 @@ urlpatterns = [
     # --- maintaining vacancies (Internal Recruitment Portal) --------------
     # Every vacancy, open or closed, with application counts.
     path('requisitions/manage/', requisition_views.manage_list),
+    # Departments (sections) and locations for the vacancy form's dropdowns.
+    path('requisitions/options/', requisition_views.form_options),
     path('requisitions/create/', requisition_views.create_requisition),
     path('requisitions/<int:requisition_id>/update/', requisition_views.update_requisition),
     path('requisitions/<int:requisition_id>/delete/', requisition_views.delete_requisition),

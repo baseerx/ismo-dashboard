@@ -9,6 +9,7 @@ import Select from "../../components/form/Select";
 import Checkbox from "../../components/form/input/Checkbox";
 import Radio from "../../components/form/input/Radio";
 import TextArea from "../../components/form/input/TextArea";
+import DateField from "../../components/form/DateField";
 import MultiSelect from "../../components/form/MultiSelect";
 import Button from "../../components/ui/button/Button";
 import Badge from "../../components/ui/badge/Badge";
@@ -1548,12 +1549,12 @@ export default function InternalJobApplication() {
               <Label htmlFor="date_of_joining_ismo">
                 Date of Joining ISMO <Required />
               </Label>
-              <Input
+              <DateField
                 id="date_of_joining_ismo"
-                type="date"
-                max={today()}
+                placeholder="Select joining date"
+                maxDate={today()}
                 value={form.date_of_joining_ismo}
-                onChange={(e) => set("date_of_joining_ismo", e.target.value)}
+                onChange={(value) => set("date_of_joining_ismo", value)}
                 error={!!errors.date_of_joining_ismo}
                 hint={errors.date_of_joining_ismo}
               />
@@ -1562,12 +1563,12 @@ export default function InternalJobApplication() {
               <Label htmlFor="date_of_joining_current_position">
                 Date of Joining Current Position <Required />
               </Label>
-              <Input
+              <DateField
                 id="date_of_joining_current_position"
-                type="date"
-                max={today()}
+                placeholder="Select date"
+                maxDate={today()}
                 value={form.date_of_joining_current_position}
-                onChange={(e) => set("date_of_joining_current_position", e.target.value)}
+                onChange={(value) => set("date_of_joining_current_position", value)}
                 error={!!errors.date_of_joining_current_position}
                 hint={errors.date_of_joining_current_position}
               />
@@ -1576,12 +1577,12 @@ export default function InternalJobApplication() {
               <Label htmlFor="date_of_appointment_to_current_grade">
                 Date of Appointment to Current Grade <Required />
               </Label>
-              <Input
+              <DateField
                 id="date_of_appointment_to_current_grade"
-                type="date"
-                max={today()}
+                placeholder="Select date"
+                maxDate={today()}
                 value={form.date_of_appointment_to_current_grade}
-                onChange={(e) => set("date_of_appointment_to_current_grade", e.target.value)}
+                onChange={(value) => set("date_of_appointment_to_current_grade", value)}
                 error={!!errors.date_of_appointment_to_current_grade}
                 hint={errors.date_of_appointment_to_current_grade}
               />

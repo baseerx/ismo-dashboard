@@ -24,6 +24,26 @@ from .form_text import SOFT_SKILLS
 from .models import InternalJobApplication, JobRequisition
 from .validators import validate_application
 
+# The vacancy form's departments and locations come from SQL Server tables;
+# every test sees this fixed list instead.
+OPTIONS = {
+    "grades": ["MG-07", "MG-08", "MG-09"],
+    "departments": ["Market Operation & Development", "Planning", "System Operation"],
+    "locations": ["ISMO-Head Office", "ISMO-Lahore"],
+}
+_options_patch = mock.patch(
+    "jobs.requisition_views.department_and_location_options", return_value=OPTIONS
+)
+
+
+def setUpModule():
+    _options_patch.start()
+
+
+def tearDownModule():
+    _options_patch.stop()
+
+
 APPLICANT_ERP = 575
 SUPERVISOR_ERP = 497
 
@@ -809,7 +829,7 @@ class OneDescriptionPerOpeningTests(TestCase):
         self.create("Deputy Manager Planning", self.jd_b.id)
         first = JobRequisition.objects.get(title="Manager Planning")
 
-        self.assertEqual(self.update(first, location="Lahore").status_code, 200)
+        self.assertEqual(self.update(first, location="ISMO-Lahore").status_code, 200)
         self.assertEqual(self.update(first, is_open=False).status_code, 200)
         response = self.update(first, job_description_id=self.jd_b.id)
         self.assertEqual(response.status_code, 400)
@@ -839,3 +859,63 @@ class OneDescriptionPerOpeningTests(TestCase):
         JobRequisition.objects.create(title="Legacy 2")  # two NULLs are fine
         with self.assertRaises(IntegrityError), transaction.atomic():
             JobRequisition.objects.create(title="Two", job_description=self.jd_a)
+
+
+# ---------------------------------------------------------------------------
+# Department and location come from the sections and locations tables
+# ---------------------------------------------------------------------------
+
+class DepartmentLocationTests(TestCase):
+    def setUp(self):
+        self.hr = auth(erp_id=1, superuser=True)
+        self.jd = JobDescription.objects.create(title="JD", key_responsibilities="Duties")
+
+    def create(self, **fields):
+        body = {"title": "Manager Planning", "job_description_id": self.jd.id, **fields}
+        return self.client.post("/api/jobs/requisitions/create/", data=json.dumps(body),
+                                content_type="application/json", **self.hr)
+
+    def test_options_endpoint_lists_both_tables(self):
+        body = self.client.get("/api/jobs/requisitions/options/").json()
+        self.assertEqual(body, OPTIONS)
+
+    def test_listed_department_and_location_are_accepted(self):
+        response = self.create(department="Planning", location="ISMO-Lahore", grade="MG-09")
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["grade"], "MG-09")
+        self.assertEqual(response.json()["department"], "Planning")
+        self.assertEqual(response.json()["location"], "ISMO-Lahore")
+
+    def test_both_stay_optional(self):
+        self.assertEqual(self.create().status_code, 201)
+
+    def test_values_outside_the_tables_are_refused(self):
+        errors = self.create(department="Board of Directors", location="Karachi",
+                             grade="G-99").json()["errors"]
+        self.assertEqual(errors["grade"], "Choose a grade from the list")
+        self.assertEqual(errors["department"], "Choose a department from the list")
+        self.assertEqual(errors["location"], "Choose a location from the list")
+
+    def test_older_vacancy_keeps_its_unlisted_values(self):
+        legacy = JobRequisition.objects.create(
+            title="Old Post", department="Old Department", location="Islamabad",
+            grade="G-09", job_description=self.jd,
+        )
+        body = {"title": "Old Post", "department": "Old Department", "location": "Islamabad",
+                "grade": "G-09",
+                "job_description_id": self.jd.id, "is_open": False}
+        response = self.client.post(f"/api/jobs/requisitions/{legacy.id}/update/",
+                                    data=json.dumps(body), content_type="application/json",
+                                    **self.hr)
+        self.assertEqual(response.status_code, 200, response.content)
+        body["department"] = "Another Unlisted"
+        response = self.client.post(f"/api/jobs/requisitions/{legacy.id}/update/",
+                                    data=json.dumps(body), content_type="application/json",
+                                    **self.hr)
+        self.assertIn("department", response.json()["errors"])
+
+    def test_lookup_failure_does_not_block_saving(self):
+        with mock.patch("jobs.requisition_views.department_and_location_options",
+                        side_effect=RuntimeError("SQL Server down")):
+            self.assertEqual(self.create(department="Planning").status_code, 201)
+            self.assertEqual(self.client.get("/api/jobs/requisitions/options/").status_code, 503)

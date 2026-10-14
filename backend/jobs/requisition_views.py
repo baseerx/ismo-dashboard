@@ -24,6 +24,10 @@ from django.http import FileResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
+from sqlalchemy import text
+
+from db import SessionLocal
+
 from .models import JobDescription, JobRequisition
 from .permissions import require_requisition_manager
 
@@ -43,6 +47,41 @@ MAX_ADVERTISEMENT_BYTES = 10 * 1024 * 1024
 
 def _text(value) -> str:
     return str(value or "").strip()
+
+
+def department_and_location_options() -> dict:
+    """The grades, departments (the `sections` table) and locations a vacancy
+    can name. Grades come in seniority order (by id: MG-01 up)."""
+    session = SessionLocal()
+    try:
+        sections = session.execute(
+            text("SELECT name FROM sections WHERE name IS NOT NULL ORDER BY name")
+        ).fetchall()
+        locations = session.execute(
+            text("SELECT name FROM locations WHERE name IS NOT NULL ORDER BY name")
+        ).fetchall()
+        grades = session.execute(
+            text("SELECT name FROM grades WHERE name IS NOT NULL ORDER BY id")
+        ).fetchall()
+    finally:
+        session.close()
+    return {
+        "grades": [row.name.strip() for row in grades if row.name and row.name.strip()],
+        "departments": [row.name.strip() for row in sections if row.name and row.name.strip()],
+        "locations": [row.name.strip() for row in locations if row.name and row.name.strip()],
+    }
+
+
+@require_GET
+def form_options(request):
+    """What the vacancy form's Grade, Department and Location dropdowns offer."""
+    try:
+        return JsonResponse(department_and_location_options(), status=200)
+    except Exception:
+        logger.exception("could not read sections / locations for the vacancy form")
+        return JsonResponse(
+            {"error": "The grade, department and location lists could not be loaded"}, status=503
+        )
 
 
 def delete_refusal(requisition: JobRequisition, application_count: int):
@@ -133,6 +172,25 @@ def _validate(data, existing: JobRequisition | None = None):
         if len(value) > maximum:
             errors[field] = f"Keep {label.lower()} within {maximum} characters"
         cleaned[field] = value or None
+
+    # Grade, department and location come from the grades, sections and
+    # locations tables. An older vacancy keeps whatever it was saved with until
+    # it is changed.
+    try:
+        options = department_and_location_options()
+    except Exception:
+        logger.exception("could not read sections / locations to check a vacancy")
+        options = None
+    if options is not None:
+        for field, allowed, label in (
+            ("grade", options.get("grades", []), "grade"),
+            ("department", options["departments"], "department"),
+            ("location", options["locations"], "location"),
+        ):
+            value = cleaned.get(field)
+            unchanged = existing is not None and (getattr(existing, field) or None) == value
+            if value and not unchanged and value not in allowed:
+                errors[field] = f"Choose a {label} from the list"
 
     advertised_raw = _text(data.get("advertisement_date"))
     advertised = None
