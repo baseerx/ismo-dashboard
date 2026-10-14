@@ -334,7 +334,9 @@ const AppSidebar: React.FC = () => {
   const userRights = async () => {
     const user = JSON.parse(localStorage.getItem("user") || "{}");
     try {
-      const response = await axios.get(`/assignrights/get/${user.user_id}/`);
+      // Granted rights plus the pages every employee sees (the job
+      // application form, for one).
+      const response = await axios.get(`/assignrights/sidebar/${user.user_id}/`);
       if (response.status !== 200) {
         throw new Error("Failed to fetch user rights");
       }

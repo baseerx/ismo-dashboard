@@ -571,6 +571,15 @@ def validate_application(data):
                       or sum(character.isdigit() for character in emergency) < 7):
         errors["emergency_contact_no"] = "Enter a number like +92-300-1234567"
 
+    # Prefilled from the record, correctable, and blank when nobody is above the
+    # applicant in their section.
+    supervisor = re.sub(r"\s+", " ", _text(data.get("current_supervisor_name")))
+    cleaned["current_supervisor_name"] = supervisor[:150]
+    if len(supervisor) > 150:
+        errors["current_supervisor_name"] = "Keep the supervisor's name within 150 characters"
+    elif supervisor and len(supervisor) < 3:
+        errors["current_supervisor_name"] = "That name looks too short"
+
     # Optional, and an alternative to the corporate address rather than a copy.
     personal_email = _text(data.get("personal_email"), 150).lower()
     cleaned["personal_email"] = personal_email or None

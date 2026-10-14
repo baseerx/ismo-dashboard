@@ -27,9 +27,9 @@ import moment from "moment";
  * and signature) sit in the section they belong to, so nothing HR files is
  * lost.
  *
- * Name, employee ID, department, position title, grade and supervisor are
- * read-only once the employee record supplies them - the server files them
- * from the record whatever this page sends.
+ * Everything the employee record knows is prefilled, and every prefilled field
+ * can be corrected - the record is not always right. A corrected field shows
+ * what the record says, and the server notes the change for HR.
  *
  * One submission may target several vacancies. Each becomes an application of
  * its own with its own reference number, because each is reviewed separately.
@@ -184,6 +184,7 @@ type FormState = {
   department_function: string;
   current_designation: string;
   current_grade: string;
+  current_supervisor_name: string;
   // 1. current employment details
   date_of_joining_ismo: string;
   date_of_appointment_to_current_grade: string;
@@ -271,6 +272,7 @@ const blankForm = (): FormState => ({
   department_function: "",
   current_designation: "",
   current_grade: "",
+  current_supervisor_name: "",
   date_of_joining_ismo: "",
   date_of_appointment_to_current_grade: "",
   date_of_joining_current_position: "",
@@ -601,9 +603,9 @@ export default function InternalJobApplication() {
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [profileNote, setProfileNote] = useState<string | null>(null);
-  const [prefilled, setPrefilled] = useState<Set<string>>(new Set());
-  // Fields the employee record supplied and the server will file regardless.
-  const [locked, setLocked] = useState<Set<string>>(new Set());
+  // What the employee record said for each prefilled field, so a corrected
+  // field can show it and be put back.
+  const [recordValues, setRecordValues] = useState<Record<string, string>>({});
   const [submissions, setSubmissions] = useState<Submitted[]>([]);
   // Bumped after a submission so the vacancy picker remounts with nothing chosen.
   const [vacancyPickerKey, setVacancyPickerKey] = useState(0);
@@ -672,12 +674,11 @@ export default function InternalJobApplication() {
       if (profile.ack_data_accuracy_text) setAckAccuracyText(profile.ack_data_accuracy_text);
       if (profile.limits) setLimits({ ...DEFAULT_LIMITS, ...profile.limits });
       setSupervisorName(profile.current_supervisor_name || "");
-      setLocked(new Set<string>(profile.locked_fields || []));
 
-      const filled = new Set<string>();
+      const fromRecord: Record<string, string> = {};
       const take = (field: keyof FormState, value: unknown) => {
         const text = value == null ? "" : String(value);
-        if (text) filled.add(field as string);
+        if (text) fromRecord[field as string] = text;
         return text;
       };
 
@@ -688,6 +689,10 @@ export default function InternalJobApplication() {
         department_function: take("department_function", profile.department_function),
         current_designation: take("current_designation", profile.current_designation),
         current_grade: take("current_grade", profile.current_grade),
+        current_supervisor_name: take(
+          "current_supervisor_name",
+          profile.current_supervisor_name
+        ),
         cnic: take("cnic", profile.cnic),
         gender: take("gender", profile.gender),
         official_email: take("official_email", profile.official_email),
@@ -696,7 +701,7 @@ export default function InternalJobApplication() {
           profile.current_office_location
         ),
       }));
-      setPrefilled(filled);
+      setRecordValues(fromRecord);
 
       // The applicant's current post starts the experience section off, since
       // everyone has one and it is the row reviewers look at first.
@@ -885,6 +890,12 @@ export default function InternalJobApplication() {
       problems.current_designation = "Current position title is required";
     }
     if (!form.current_grade.trim()) problems.current_grade = "Current grade is required";
+    const supervisor = form.current_supervisor_name.trim();
+    if (supervisor.length > 150) {
+      problems.current_supervisor_name = "Keep the supervisor's name within 150 characters";
+    } else if (supervisor && supervisor.length < 3) {
+      problems.current_supervisor_name = "That name looks too short";
+    }
 
     if (!form.date_of_joining_ismo) {
       problems.date_of_joining_ismo = "Date of joining ISMO is required";
@@ -1171,6 +1182,7 @@ export default function InternalJobApplication() {
           department_function: form.department_function.trim(),
           current_designation: form.current_designation.trim(),
           current_grade: form.current_grade.trim(),
+          current_supervisor_name: form.current_supervisor_name.trim(),
           date_of_joining_ismo: form.date_of_joining_ismo,
           date_of_appointment_to_current_grade: form.date_of_appointment_to_current_grade,
           date_of_joining_current_position: form.date_of_joining_current_position,
@@ -1289,18 +1301,42 @@ export default function InternalJobApplication() {
     }
   };
 
+  /** True when the field still holds what the employee record said. */
+  const sameAsRecord = (field: string) =>
+    (form[field as keyof FormState] as string).trim().replace(/\s+/g, " ").toLowerCase() ===
+    (recordValues[field] ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+
   const autoFilled = (field: string) =>
-    locked.has(field) ? (
-      <span className="ml-2 align-middle text-[10px] font-medium uppercase tracking-wide text-gray-400">
-        from your record
-      </span>
-    ) : prefilled.has(field) ? (
+    !(field in recordValues) ? null : sameAsRecord(field) ? (
       <span className="ml-2 align-middle text-[10px] font-medium uppercase tracking-wide text-brand-500">
         auto-filled
       </span>
+    ) : (
+      <span
+        className="ml-2 align-middle text-[10px] font-medium uppercase tracking-wide text-warning-600"
+        data-edited={field}
+      >
+        edited
+      </span>
+    );
+
+  /** Under a corrected field: what the record says, and a way back to it. */
+  const recordHint = (field: keyof FormState) =>
+    field in recordValues && !sameAsRecord(field) ? (
+      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400" data-record-hint={field}>
+        Employee record says: <span className="font-medium">{recordValues[field]}</span>
+        {" · "}
+        <button
+          type="button"
+          onClick={() => set(field, recordValues[field])}
+          className="font-medium text-brand-500 hover:text-brand-600"
+        >
+          Use this
+        </button>
+      </p>
     ) : null;
 
-  /** A text field that turns read-only once the employee record supplied it. */
+  /** A text field prefilled from the employee record, open to correction. */
   const recordField = (field: keyof FormState, label: string, placeholder?: string) => (
     <div>
       <Label htmlFor={field}>
@@ -1311,13 +1347,13 @@ export default function InternalJobApplication() {
         id={field}
         placeholder={placeholder}
         value={form[field] as string}
-        disabled={locked.has(field)}
         onChange={(e) =>
           set(field, field === "emp_id" ? e.target.value.replace(/\D/g, "") : e.target.value)
         }
         error={!!errors[field]}
         hint={errors[field]}
       />
+      {recordHint(field)}
     </div>
   );
 
@@ -1363,7 +1399,7 @@ export default function InternalJobApplication() {
               <circle cx="12" cy="12" r="9" />
               <path d="M12 16v-4M12 8h.01" />
             </svg>
-            How to apply / General instructions
+            General instructions
           </button>
           {loadingProfile && (
             <p className="mt-3 text-xs text-gray-400">Filling in your details...</p>
@@ -1477,6 +1513,10 @@ export default function InternalJobApplication() {
           )}
 
           <SubHeading>Internal validation</SubHeading>
+          <p className="-mt-1 mb-3 text-xs text-gray-500 dark:text-gray-400">
+            Filled in from your employee record. Check each one and correct anything
+            that is wrong - HR is shown what you changed.
+          </p>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {recordField("full_name", "Employee Full Name")}
             {recordField("emp_id", "Employee ID")}
@@ -1484,20 +1524,21 @@ export default function InternalJobApplication() {
             {recordField("current_designation", "Current Position Title")}
             {recordField("current_grade", "Current Grade", "e.g., G-07")}
             <div>
-              <Label htmlFor="current_supervisor">
+              <Label htmlFor="current_supervisor_name">
                 Current Supervisor Name
-                <span className="ml-2 align-middle text-[10px] font-medium uppercase tracking-wide text-gray-400">
-                  from your record
-                </span>
+                {autoFilled("current_supervisor_name")}
               </Label>
               <Input
-                id="current_supervisor"
-                value={
-                  supervisorName ||
-                  (loadingProfile ? "" : "None on record - you head your section")
+                id="current_supervisor_name"
+                placeholder={
+                  loadingProfile ? "" : "None on record - type your supervisor's name"
                 }
-                disabled
+                value={form.current_supervisor_name}
+                onChange={(e) => set("current_supervisor_name", e.target.value)}
+                error={!!errors.current_supervisor_name}
+                hint={errors.current_supervisor_name}
               />
+              {recordHint("current_supervisor_name")}
             </div>
           </div>
 
@@ -1612,6 +1653,7 @@ export default function InternalJobApplication() {
                 error={!!errors.official_email}
                 hint={errors.official_email}
               />
+              {recordHint("official_email")}
             </div>
             <div>
               <Label htmlFor="personal_email">Personal Email Address (optional)</Label>
@@ -1669,6 +1711,7 @@ export default function InternalJobApplication() {
                 error={!!errors.cnic}
                 hint={errors.cnic}
               />
+              {recordHint("cnic")}
             </div>
             <div>
               <Label htmlFor="date_of_birth">
@@ -1697,6 +1740,7 @@ export default function InternalJobApplication() {
                 error={!!errors.gender}
                 hint={errors.gender}
               />
+              {recordHint("gender")}
             </div>
             <div>
               <Label htmlFor="current_office_location">
@@ -1710,6 +1754,7 @@ export default function InternalJobApplication() {
                 error={!!errors.current_office_location}
                 hint={errors.current_office_location}
               />
+              {recordHint("current_office_location")}
             </div>
             <div>
               <Label htmlFor="emergency_contact_no">Emergency Contact No. (optional)</Label>
@@ -2333,9 +2378,14 @@ export default function InternalJobApplication() {
                 checked={form.ack_manager_notified_bool}
                 onChange={(checked) => set("ack_manager_notified_bool", checked)}
               />
-              {supervisorName && (
+              {supervisorName && sameAsRecord("current_supervisor_name") ? (
                 <FieldNote>{supervisorName} will be notified when you submit.</FieldNote>
-              )}
+              ) : form.current_supervisor_name.trim() ? (
+                <FieldNote>
+                  You changed your supervisor&apos;s name, so they are not notified
+                  automatically - please let them know yourself.
+                </FieldNote>
+              ) : null}
               <ErrorText message={errors.ack_manager_notified_bool} />
             </div>
             <div>

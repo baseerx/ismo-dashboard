@@ -73,6 +73,7 @@ def valid_payload(requisition_ids):
         "current_designation": "Assistant Manager",
         "current_grade": "G-07",
         "department_function": "System Operation",
+        "current_supervisor_name": "Section Head",
         "date_of_appointment_to_current_grade": "2019-07-01",
         "total_service_ismo": "10 years",
         "total_relevant_experience": "12 years",
@@ -336,10 +337,12 @@ class ApplicationEndpointTests(TestCase):
         body = response.json()
         self.assertEqual(body["emp_id"], APPLICANT_ERP)
         self.assertEqual(body["current_supervisor_name"], "Section Head")
+        self.assertNotIn("locked_fields", body)
         self.assertEqual(
-            set(body["locked_fields"]),
+            set(body["record_fields"]),
             {"emp_id", "full_name", "department_function", "current_designation",
-             "current_grade"},
+             "current_grade", "current_supervisor_name", "cnic", "gender",
+             "official_email", "current_office_location"},
         )
         self.assertEqual(body["contact_methods"], ["Teams", "Email", "SMS"])
         self.assertEqual(body["soft_skill_options"], list(SOFT_SKILLS))
@@ -381,28 +384,93 @@ class ApplicationEndpointTests(TestCase):
         self.assertTrue(experience.is_current)
         self.assertIsNone(experience.to_date)
 
-    def test_read_only_fields_come_from_the_record(self, _record):
+    def test_unchanged_prefill_records_no_changes(self, _record):
+        response = self.post(valid_payload([self.open_vacancy.id]))
+        self.assertEqual(response.json()["changed_from_record"], [])
+        self.assertEqual(InternalJobApplication.objects.get().record_changes, {})
+
+    def test_case_and_spacing_are_not_changes(self, _record):
+        data = valid_payload([self.open_vacancy.id])
+        data.update(current_grade="g-07 ", department_function="  system   operation")
+        self.post(data)
+        self.assertEqual(InternalJobApplication.objects.get().record_changes, {})
+
+    def test_prefilled_fields_can_be_corrected(self, _record):
         data = valid_payload([self.open_vacancy.id])
         data.update(
-            applicant_erp_id=1, emp_id=1, full_name="Muhammad Adil",
-            department_function="Board of Directors", current_designation="CEO",
-            current_grade="G-11",
+            full_name="Muhammad Adil Khan", applicant_signature="Muhammad Adil Khan",
+            department_function="Market Operations", current_designation="Deputy Manager",
+            current_grade="G-08", cnic="35202-7654321-1",
         )
-        self.assertEqual(self.post(data).status_code, 201)
+        response = self.post(data)
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(
+            response.json()["changed_from_record"],
+            ["cnic", "current_designation", "current_grade", "department_function",
+             "full_name"],
+        )
 
         application = InternalJobApplication.objects.get()
-        self.assertEqual(application.applicant_erp_id, APPLICANT_ERP)
-        self.assertEqual(application.emp_id, APPLICANT_ERP)
-        self.assertEqual(application.department_function, "System Operation")
-        self.assertEqual(application.current_designation, "Assistant Manager")
-        self.assertEqual(application.current_grade, "G-07")
+        # What the applicant submitted is filed...
+        self.assertEqual(application.full_name, "Muhammad Adil Khan")
+        self.assertEqual(application.department_function, "Market Operations")
+        self.assertEqual(application.current_designation, "Deputy Manager")
+        self.assertEqual(application.current_grade, "G-08")
+        # ...with what the record said kept alongside.
+        self.assertEqual(application.record_changes["current_grade"],
+                         {"record": "G-07", "submitted": "G-08"})
+        self.assertEqual(application.record_changes["full_name"]["record"], "Muhammad Adil")
 
-    def test_name_cannot_be_changed_by_the_payload(self, _record):
+    def test_identity_still_comes_from_the_session(self, _record):
         data = valid_payload([self.open_vacancy.id])
-        data.update(full_name="Someone Else", applicant_signature="Someone Else")
+        data.update(applicant_erp_id=1, emp_id=999)
+        self.assertEqual(self.post(data).status_code, 201)
+        application = InternalJobApplication.objects.get()
+        # Filed under the signed-in employee; the typed ID is only recorded.
+        self.assertEqual(application.applicant_erp_id, APPLICANT_ERP)
+        self.assertEqual(application.emp_id, 999)
+        self.assertEqual(application.record_changes["emp_id"],
+                         {"record": str(APPLICANT_ERP), "submitted": "999"})
+        self.assertEqual(len(self.client.get("/api/jobs/applications/", **auth()).json()), 1)
+
+    def test_signature_follows_the_corrected_name(self, _record):
+        data = valid_payload([self.open_vacancy.id])
+        data.update(full_name="Muhammad Adil Khan", applicant_signature="Muhammad Adil")
         response = self.post(data)
         self.assertEqual(response.status_code, 400)
         self.assertIn("applicant_signature", response.json()["errors"])
+
+    def test_corrected_supervisor_is_filed_but_not_alerted(self, _record):
+        data = valid_payload([self.open_vacancy.id])
+        data.update(current_supervisor_name="Real Manager")
+        response = self.post(data)
+        self.assertEqual(response.status_code, 201)
+        self.assertFalse(response.json()["supervisor_notified"])
+        application = InternalJobApplication.objects.get()
+        self.assertEqual(application.current_supervisor_name, "Real Manager")
+        self.assertIsNone(application.current_supervisor_erp_id)
+        self.assertEqual(Notification.objects.count(), 0)
+
+    def test_supervisor_name_is_validated(self, _record):
+        data = valid_payload([self.open_vacancy.id])
+        data.update(current_supervisor_name="X" * 151)
+        self.assertIn("current_supervisor_name", self.post(data).json()["errors"])
+
+    def test_hr_sees_what_was_changed(self, _record):
+        data = valid_payload([self.open_vacancy.id])
+        data.update(current_grade="G-08")
+        self.post(data)
+        application = InternalJobApplication.objects.get()
+        hr = auth(erp_id=1, superuser=True)
+        detail = self.client.get(f"/api/jobs/applications/{application.id}/detail/", **hr).json()
+        self.assertEqual(detail["record_changes"], [{
+            "field": "current_grade", "label": "Current Grade",
+            "record": "G-07", "submitted": "G-08",
+        }])
+        listed = self.client.get("/api/jobs/applications/manage/", **hr).json()["results"][0]
+        self.assertEqual(listed["record_change_count"], 1)
+        pdf = self.client.get(f"/api/jobs/applications/{application.id}/pdf/", **hr)
+        self.assertTrue(pdf.content.startswith(b"%PDF"))
 
     def test_supervisor_is_notified(self, _record):
         self.post(valid_payload([self.open_vacancy.id]))
@@ -686,3 +754,88 @@ class InstructionsTests(TestCase):
         self.assertEqual([s["heading"] for s in sections],
                          ["Before you start", "Filling in the form", "Submitting"])
         self.assertTrue(all(s["points"] for s in sections))
+
+
+# ---------------------------------------------------------------------------
+# Each job opening has its own job description
+# ---------------------------------------------------------------------------
+
+from django.db import IntegrityError, transaction
+
+from .models import JobDescription
+
+
+class OneDescriptionPerOpeningTests(TestCase):
+    def setUp(self):
+        self.hr = auth(erp_id=1, superuser=True)
+        self.jd_a = JobDescription.objects.create(title="JD A", key_responsibilities="A duties")
+        self.jd_b = JobDescription.objects.create(title="JD B", key_responsibilities="B duties")
+
+    def create(self, title, jd):
+        return self.client.post(
+            "/api/jobs/requisitions/create/",
+            data=json.dumps({"title": title, "job_description_id": jd}),
+            content_type="application/json", **self.hr,
+        )
+
+    def update(self, vacancy, **changes):
+        body = {"title": vacancy.title, "job_description_id": vacancy.job_description_id,
+                "is_open": vacancy.is_open}
+        body.update(changes)
+        return self.client.post(
+            f"/api/jobs/requisitions/{vacancy.id}/update/",
+            data=json.dumps(body), content_type="application/json", **self.hr,
+        )
+
+    def test_new_opening_needs_a_job_description(self):
+        response = self.create("Manager Planning", None)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("job_description_id", response.json()["errors"])
+
+    def test_each_new_opening_gets_its_own_description(self):
+        self.assertEqual(self.create("Manager Planning", self.jd_a.id).status_code, 201)
+        response = self.create("Deputy Manager Planning", self.jd_a.id)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Manager Planning", response.json()["errors"]["job_description_id"])
+        self.assertEqual(self.create("Deputy Manager Planning", self.jd_b.id).status_code, 201)
+
+    def test_description_of_a_closed_opening_is_still_taken(self):
+        self.create("Manager Planning", self.jd_a.id)
+        JobRequisition.objects.filter(title="Manager Planning").update(is_open=False)
+        self.assertEqual(self.create("Readvertised Post", self.jd_a.id).status_code, 400)
+
+    def test_editing_keeps_or_swaps_but_never_shares(self):
+        self.create("Manager Planning", self.jd_a.id)
+        self.create("Deputy Manager Planning", self.jd_b.id)
+        first = JobRequisition.objects.get(title="Manager Planning")
+
+        self.assertEqual(self.update(first, location="Lahore").status_code, 200)
+        self.assertEqual(self.update(first, is_open=False).status_code, 200)
+        response = self.update(first, job_description_id=self.jd_b.id)
+        self.assertEqual(response.status_code, 400)
+        response = self.update(first, job_description_id=None)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("cannot be removed", response.json()["errors"]["job_description_id"])
+
+        jd_c = JobDescription.objects.create(title="JD C", key_responsibilities="C duties")
+        self.assertEqual(self.update(first, job_description_id=jd_c.id).status_code, 200)
+        # JD A is free again once its opening moves to JD C.
+        self.assertEqual(self.create("Another Post", self.jd_a.id).status_code, 201)
+
+    def test_older_opening_without_a_description_can_still_be_edited(self):
+        legacy = JobRequisition.objects.create(title="Test JOB")
+        self.assertEqual(self.update(legacy, is_open=False).status_code, 200)
+        self.assertEqual(self.update(legacy, job_description_id=self.jd_a.id).status_code, 200)
+
+    def test_description_list_says_which_opening_holds_it(self):
+        self.create("Manager Planning", self.jd_a.id)
+        rows = {row["title"]: row for row in self.client.get("/api/jobs/descriptions/").json()}
+        self.assertEqual(rows["JD A"]["requisition_title"], "Manager Planning")
+        self.assertIsNone(rows["JD B"]["requisition_id"])
+
+    def test_database_refuses_sharing_too(self):
+        JobRequisition.objects.create(title="One", job_description=self.jd_a)
+        JobRequisition.objects.create(title="Legacy 1")
+        JobRequisition.objects.create(title="Legacy 2")  # two NULLs are fine
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            JobRequisition.objects.create(title="Two", job_description=self.jd_a)

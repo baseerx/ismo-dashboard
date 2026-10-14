@@ -87,6 +87,9 @@ type DescriptionOption = {
   code: string;
   department: string;
   grade: string;
+  /** The opening this description already belongs to, if any. */
+  requisition_id: number | null;
+  requisition_title: string;
 };
 
 export default function JobRequisitions() {
@@ -193,6 +196,19 @@ export default function JobRequisitions() {
       }
     }
 
+    // Each opening has its own job description. Only an older opening that was
+    // advertised without one may still be saved without.
+    if (!form.job_description_id) {
+      const editing = editingId
+        ? requisitions.find((item) => item.id === editingId)
+        : undefined;
+      if (!editing) {
+        problems.job_description_id = "Choose the job description for this position";
+      } else if (editing.job_description_id) {
+        problems.job_description_id = "A job description cannot be removed from an opening";
+      }
+    }
+
     const fileProblem = checkAdvertisement(advertisementFile);
     if (fileProblem) problems.advertisement_pdf = fileProblem;
 
@@ -296,6 +312,7 @@ export default function JobRequisitions() {
       }
       reset();
       load();
+      loadDescriptions();
     } catch (error: any) {
       const returned = error?.response?.data;
       if (returned?.errors) {
@@ -386,12 +403,21 @@ export default function JobRequisitions() {
       toast.success("Vacancy deleted");
       if (editingId === requisition.id) reset();
       load();
+      loadDescriptions();
     } catch (error: any) {
       // A vacancy with applications is refused with an explanation worth
       // showing in full rather than replacing with "failed".
       toast.error(error?.response?.data?.error ?? "Could not delete the vacancy");
     }
   };
+
+  /**
+   * Descriptions this opening may use: those no other opening holds, plus the
+   * one it already has. Each opening has its own.
+   */
+  const availableDescriptions = jobDescriptions.filter(
+    (item) => !item.requisition_id || item.requisition_id === editingId
+  );
 
   const statusOf = (requisition: Requisition) => {
     if (!requisition.is_open) return { text: "Closed", color: "light" as const };
@@ -505,37 +531,48 @@ export default function JobRequisitions() {
             </div>
 
             <div>
-              <Label htmlFor="job_description_id">Job Description</Label>
-              <Select
-                key={`jd-${editingId ?? "new"}-${jobDescriptions.length}`}
-                options={[
-                  { label: "No job description attached", value: "" },
-                  ...jobDescriptions.map((item) => ({
+              <Label htmlFor="job_description_id">
+                Job Description <span className="text-error-500">*</span>
+              </Label>
+              <div id="job_description_id">
+                <Select
+                  key={`jd-${editingId ?? "new"}-${availableDescriptions.length}`}
+                  options={availableDescriptions.map((item) => ({
                     label: [item.code, item.title].filter(Boolean).join(" - "),
                     value: String(item.id),
-                  })),
-                ]}
-                placeholder="No job description attached"
-                value={form.job_description_id}
-                onChange={(value) => set("job_description_id", value)}
-                error={!!errors.job_description_id}
-                hint={errors.job_description_id}
-              />
-              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                {jobDescriptions.length === 0 ? (
+                  }))}
+                  placeholder="Select this position's job description"
+                  value={form.job_description_id}
+                  onChange={(value) => set("job_description_id", value)}
+                  error={!!errors.job_description_id}
+                  hint={errors.job_description_id}
+                />
+              </div>
+              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500" data-jd-help>
+                {availableDescriptions.length === 0 ? (
                   <>
-                    This list is filled from{" "}
+                    Every job description is already attached to an opening. Each
+                    position needs its own - write one in{" "}
                     <a
                       href="/job-descriptions"
                       className="font-medium text-brand-500 underline hover:text-brand-600"
                     >
                       Job Descriptions
-                    </a>
-                    , and nothing has been written there yet. Add one and it appears
-                    here.
+                    </a>{" "}
+                    and it appears here.
                   </>
                 ) : (
-                  "Applicants see this under the position on the application form."
+                  <>
+                    Each opening has its own job description; ones already attached to
+                    another opening are not listed.{" "}
+                    <a
+                      href="/job-descriptions"
+                      className="font-medium text-brand-500 underline hover:text-brand-600"
+                    >
+                      Write a new one
+                    </a>
+                    .
+                  </>
                 )}
               </p>
             </div>

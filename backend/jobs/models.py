@@ -109,6 +109,10 @@ class JobRequisition(models.Model):
     # PROTECT rather than SET_NULL: losing the description an applicant read
     # when they applied would leave the record incomplete, so a description in
     # use has to be retired instead of deleted.
+    #
+    # Each opening has its own description: one description is never attached
+    # to two openings (see the constraint below and requisition_views._validate).
+    # Nullable only for vacancies advertised before descriptions were required.
     job_description = models.ForeignKey(
         JobDescription, null=True, blank=True,
         on_delete=models.PROTECT, related_name="requisitions",
@@ -129,6 +133,15 @@ class JobRequisition(models.Model):
     class Meta:
         db_table = 'job_requisitions'
         ordering = ['-created_at']
+        constraints = [
+            # Filtered, so the older vacancies without a description (NULL)
+            # do not count as sharing one.
+            models.UniqueConstraint(
+                fields=["job_description"],
+                condition=models.Q(job_description__isnull=False),
+                name="one_opening_per_job_description",
+            )
+        ]
 
     def __str__(self):
         return self.title
@@ -204,12 +217,16 @@ class InternalJobApplication(models.Model):
     date_of_joining_current_position = models.DateField(null=True, blank=True)
 
     # --- spec 1: current supervisor ---------------------------------------
-    # Looked up from the employee record when the application is filed (the
-    # most senior person in the applicant's section, as everywhere else in
-    # this app), never taken from the form. Null when the applicant is
-    # themselves the most senior person in their section.
+    # Prefilled from the employee record (the most senior person in the
+    # applicant's section, as everywhere else in this app) and correctable by
+    # the applicant. The ERP id is kept only while the name is the one on
+    # record - a corrected name is not someone this app can identify.
     current_supervisor_erp_id = models.IntegerField(null=True, blank=True)
     current_supervisor_name = models.CharField(max_length=150, default="", blank=True)
+
+    # Prefilled fields the applicant changed, as {field: {"record": ..,
+    # "submitted": ..}}, so HR can see what the employee record said.
+    record_mismatches = models.TextField(default="{}", blank=True)
 
     # --- spec 2: personal & contact information ---------------------------
     personal_email = models.EmailField(max_length=150, null=True, blank=True)
@@ -265,6 +282,14 @@ class InternalJobApplication(models.Model):
     def hr_verification_status(self) -> str:
         """What section 9 prints for the current status."""
         return self.HR_STATUS_LABELS.get(self.status, self.status)
+
+    @property
+    def record_changes(self) -> dict:
+        try:
+            parsed = json.loads(self.record_mismatches or "{}")
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
 
     @property
     def technical_skills(self) -> list:

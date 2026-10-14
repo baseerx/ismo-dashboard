@@ -49,6 +49,35 @@ MAX_ZIP_APPLICATIONS = 300
 
 DEFAULT_PAGE_SIZE = 50
 
+# How the prefilled fields are named on the form, for the "changed from the
+# employee record" list.
+RECORD_FIELD_LABELS = {
+    "emp_id": "Employee ID",
+    "full_name": "Employee Full Name",
+    "department_function": "Current Department",
+    "current_designation": "Current Position Title",
+    "current_grade": "Current Grade",
+    "current_supervisor_name": "Current Supervisor Name",
+    "cnic": "CNIC No.",
+    "gender": "Gender",
+    "official_email": "Corporate Email Address",
+    "current_office_location": "Current Office / Location",
+}
+
+
+def record_changes(application: InternalJobApplication) -> list:
+    """What the applicant corrected from the employee record, labelled."""
+    return [
+        {
+            "field": field,
+            "label": RECORD_FIELD_LABELS.get(field, field),
+            "record": change.get("record", ""),
+            "submitted": change.get("submitted", ""),
+        }
+        for field, change in application.record_changes.items()
+        if isinstance(change, dict)
+    ]
+
 logger = logging.getLogger(__name__)
 
 # What the page shows when the tables cannot be read - most often a backend
@@ -160,6 +189,8 @@ def _summary(application: InternalJobApplication) -> dict:
         "official_email": application.official_email,
         "mobile_no": application.mobile_no,
         "current_supervisor_name": application.current_supervisor_name,
+        # How many prefilled fields the applicant changed - flagged in the list.
+        "record_change_count": len(application.record_changes),
         "technical_skills": application.technical_skills,
         "status": application.status,
         "hr_verification_status": application.hr_verification_status,
@@ -249,6 +280,7 @@ def _detail(application: InternalJobApplication) -> dict:
         "experience": experience,
         "certifications": certifications,
         "trainings": trainings,
+        "record_changes": record_changes(application),
         # skills, statement of purpose, acknowledgements
         "soft_skills": application.soft_skills,
         "application_rationale_sop": application.application_rationale_sop,
@@ -494,6 +526,19 @@ def render_application_pdf(application: InternalJobApplication) -> bytes:
         ("Total Service in ISMO", application.total_service_ismo),
         ("Total Relevant Experience", application.total_relevant_experience),
     ])))
+
+    changes = record_changes(application)
+    if changes:
+        story.append(Paragraph(
+            "<b>Changed by the applicant from the employee record</b>", _STYLE_BODY
+        ))
+        story.append(Spacer(1, 4))
+        story.append(_grid(
+            ["Field", "Employee record", "Submitted"],
+            [[change["label"], change["record"], change["submitted"]] for change in changes],
+            [5 * cm, 6.5 * cm, 6.5 * cm],
+        ))
+        story.append(Spacer(1, 8))
 
     # ---- 2. personal & contact information -------------------------------
     story.append(_block(2, "Personal &amp; Contact Information", _two_col([

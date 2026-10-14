@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { EyeCloseIcon, EyeIcon } from "../../icons";
 import Label from "../form/Label";
 import Input from "../form/input/InputField";
@@ -9,6 +9,7 @@ import { ToastContainer,toast } from "react-toastify";
 import axios from '../../api/axios';
 import { useAuth } from "../../context/AuthContext";
 import { Link } from "react-router-dom";
+import { afterLoginPath } from "./returnTo";
 export default function SignInForm() {
     const [isChecked, setIsChecked] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
@@ -18,6 +19,17 @@ export default function SignInForm() {
         password:""
     });
     const navigate=useNavigate();
+    const location=useLocation();
+    // The page the user was sent here from (?next=...), or the dashboard.
+    const destination=afterLoginPath(location.search);
+
+    // Already signed in and following a link to a page: go straight there.
+    useEffect(()=>{
+        if (localStorage.getItem("token") && new URLSearchParams(location.search).has("next")) {
+            navigate(destination,{replace:true});
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    },[]);
     const handleSignIn = async(e:any) => {
         e.preventDefault();
         if (!user.email || !user.password) {
@@ -34,8 +46,8 @@ export default function SignInForm() {
                 login(userData);
                 toast.success("Login successful");
                 toast.dismiss();
-                // Redirect to dashboard or perform any other action
-                navigate("/dashboard");
+                // Back to the page that was asked for, or the dashboard.
+                navigate(destination,{replace:true});
             }
         }
         catch (error) {

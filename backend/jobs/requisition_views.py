@@ -166,7 +166,17 @@ def _validate(data, existing: JobRequisition | None = None):
 
     raw_description = data.get("job_description_id")
     description_id = None
-    if raw_description not in (None, "", 0, "0"):
+    if raw_description in (None, "", 0, "0"):
+        # Every opening carries its own description. Only a vacancy advertised
+        # before that rule, and still without one, may be saved without.
+        grandfathered = existing is not None and existing.job_description_id is None
+        if not grandfathered:
+            errors["job_description_id"] = (
+                "Choose the job description for this position"
+                if existing is None
+                else "A job description cannot be removed from an opening"
+            )
+    else:
         try:
             description_id = int(raw_description)
         except (TypeError, ValueError):
@@ -181,6 +191,18 @@ def _validate(data, existing: JobRequisition | None = None):
                 # A retired description stays on the vacancies that already use
                 # it, but should not be attached to another.
                 errors["job_description_id"] = "That job description is no longer active"
+            else:
+                # One opening per description: a new position gets a new one.
+                taken = JobRequisition.objects.filter(job_description_id=description_id)
+                if existing is not None:
+                    taken = taken.exclude(id=existing.id)
+                holder = taken.first()
+                if holder is not None:
+                    errors["job_description_id"] = (
+                        f"This job description already belongs to the opening "
+                        f"\"{holder.title}\". Each opening needs its own - create a "
+                        f"new job description for this position."
+                    )
     cleaned["job_description_id"] = description_id
 
     cleaned["is_open"] = bool(data.get("is_open", True))

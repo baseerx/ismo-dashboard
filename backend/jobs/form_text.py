@@ -73,9 +73,9 @@ HOW_TO_APPLY = (
     ("Filling in the form", (
         "Choose one or more advertised vacancies in section 1. The rest of the form is "
         "submitted once for each, and each is reviewed separately.",
-        "Your name, employee ID, department, position title, grade and supervisor come "
-        "from your corporate record and cannot be changed here. If any of them is wrong, "
-        "contact HR before you apply.",
+        "Your name, employee ID, department, position title, grade, supervisor and "
+        "contact details are filled in from your corporate record. Check them, and "
+        "correct anything that is wrong - HR is shown what you changed.",
         "Complete every field marked with a red asterisk (*). Optional fields can be "
         "left blank.",
         "List your qualifications and your professional experience, including internal "

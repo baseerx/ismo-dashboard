@@ -7,9 +7,12 @@ sections.
 
 Who the applicant is comes from the signed-in session (the bearer token), never
 from the request: an employee can only see their own profile and applications,
-and can only apply as themselves. The fields the specification makes read-only
-(name, employee id, department, position title, grade, supervisor) are filed
-from the employee record, whatever the payload says.
+and can only apply as themselves.
+
+The form is prefilled from the employee record, and every prefilled field can
+be corrected by the applicant - the record is not always right. What they
+submit is filed; anything that differs from the record is kept alongside it
+(`record_mismatches`) so HR can see what was changed.
 """
 
 import json
@@ -56,16 +59,42 @@ from .validators import (
 
 logger = logging.getLogger(__name__)
 
-# Section 1 of the specification: read-only, auto-filled from the corporate
-# record. Filed from the record whenever it holds a value; only a field the
-# record leaves empty is taken from what the applicant typed.
-LOCKED_FIELDS = (
+# Fields the form prefills from the employee record. All of them can be
+# corrected; a submitted value that differs from the record is noted for HR.
+RECORD_FIELDS = (
     "emp_id",
     "full_name",
     "department_function",
     "current_designation",
     "current_grade",
+    "current_supervisor_name",
+    "cnic",
+    "gender",
+    "official_email",
+    "current_office_location",
 )
+
+
+def _same(record_value, submitted_value) -> bool:
+    """Equal once case and spacing are ignored - "G-07" and "g-07 " match."""
+    normal = lambda value: " ".join(str(value if value is not None else "").split()).casefold()
+    return normal(record_value) == normal(submitted_value)
+
+
+def _changes_from_record(record: dict, cleaned: dict) -> dict:
+    """{field: {"record": .., "submitted": ..}} for every corrected field."""
+    changes = {}
+    for field in RECORD_FIELDS:
+        on_record = record.get(field)
+        if on_record in (None, ""):
+            continue
+        submitted = cleaned.get(field)
+        if not _same(on_record, submitted):
+            changes[field] = {
+                "record": str(on_record),
+                "submitted": "" if submitted is None else str(submitted),
+            }
+    return changes
 
 
 def _session_erp_id(request):
@@ -153,8 +182,8 @@ def application_profile(request):
     Everything here comes from the employee record and the tables it points at,
     plus the email on the account mapped to that ERP id. Fields the database
     does not hold - a date of birth, a mobile number - come back empty for the
-    applicant to fill in. `locked_fields` lists the ones the form shows
-    read-only because the record supplied them.
+    applicant to fill in. Everything is editable; `record_fields` lists the
+    ones the record supplied, so the form can mark them as prefilled.
     """
     erp_id, refusal = _session_erp_id(request)
     if refusal:
@@ -167,7 +196,7 @@ def application_profile(request):
     return JsonResponse(
         {
             **record,
-            "locked_fields": [field for field in LOCKED_FIELDS if record.get(field)],
+            "record_fields": [field for field in RECORD_FIELDS if record.get(field)],
             # Held nowhere in the HR tables; the applicant supplies them.
             "father_or_husband_name": "",
             "date_of_birth": "",
@@ -261,12 +290,6 @@ def create_application(request):
             {"error": "No active employee record was found for your account."}, status=404
         )
 
-    # Read-only fields are filed from the record before anything is checked,
-    # so the signature is compared against the name on record too.
-    data = {
-        **data,
-        **{field: record[field] for field in LOCKED_FIELDS if record.get(field)},
-    }
     cleaned, errors = validate_application(data)
 
     requisitions_to_use = []
@@ -323,6 +346,14 @@ def create_application(request):
             status=409,
         )
 
+    # What the applicant corrected from the record, for HR to see. The
+    # supervisor stays identified only while the name is the one on record.
+    record_changes = _changes_from_record(record, cleaned)
+    supervisor_erp_id = (
+        None if "current_supervisor_name" in record_changes
+        else record["current_supervisor_erp_id"]
+    )
+
     # One row per vacancy, each carrying its own copy of the application. The
     # repetition is deliberate: an application is a snapshot of what was
     # submitted, each vacancy is reviewed and progresses on its own, and the
@@ -363,8 +394,9 @@ def create_application(request):
                 total_service_ismo=cleaned["total_service_ismo"],
                 total_relevant_experience=cleaned["total_relevant_experience"],
                 date_of_joining_current_position=cleaned["date_of_joining_current_position"],
-                current_supervisor_erp_id=record["current_supervisor_erp_id"],
-                current_supervisor_name=record["current_supervisor_name"],
+                current_supervisor_erp_id=supervisor_erp_id,
+                current_supervisor_name=cleaned["current_supervisor_name"],
+                record_mismatches=json.dumps(record_changes),
                 # skills, statement of purpose, acknowledgements
                 skills_technical_tags=json.dumps(cleaned["skills_technical_tags"]),
                 skills_soft_checkboxes=json.dumps(cleaned["skills_soft_checkboxes"]),
@@ -402,7 +434,7 @@ def create_application(request):
                 "reference_no": application.application_reference_no,
             })
 
-    supervisor_notified = _notify_supervisor(record, applicant_erp_id, created)
+    supervisor_notified = _notify_supervisor(supervisor_erp_id, applicant_erp_id, created)
 
     logger.info(
         "internal job applications %s: erp=%s vacancies=%s skipped=%d "
@@ -436,20 +468,22 @@ def create_application(request):
             "certification_count": len(cleaned["certifications"]),
             "training_count": len(cleaned["trainings"]),
             "supervisor_notified": supervisor_notified,
+            "changed_from_record": sorted(record_changes),
             "message": message,
         },
         status=201,
     )
 
 
-def _notify_supervisor(record, applicant_erp_id, created) -> bool:
+def _notify_supervisor(supervisor, applicant_erp_id, created) -> bool:
     """Alert the applicant's current supervisor that they have applied.
 
     The applicant has just certified that their manager knows; this makes sure
-    of it. Runs after the applications are committed and never fails the
-    request - `notify` swallows its own errors.
+    of it. Only the supervisor on record can be alerted - when the applicant
+    corrected the name, there is nobody this app can identify. Runs after the
+    applications are committed and never fails the request - `notify`
+    swallows its own errors.
     """
-    supervisor = record.get("current_supervisor_erp_id")
     if not supervisor or supervisor == applicant_erp_id:
         return False
 

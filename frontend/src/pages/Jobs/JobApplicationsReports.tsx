@@ -30,6 +30,8 @@ type ApplicationSummary = {
   official_email: string;
   mobile_no: string;
   current_supervisor_name: string;
+  /** Prefilled fields the applicant changed from the employee record. */
+  record_change_count: number;
   technical_skills: string[];
   status: string;
   hr_verification_status: string;
@@ -103,6 +105,8 @@ type ApplicationDetail = ApplicationSummary & {
   experience: ExperienceRow[];
   certifications: CertificationRow[];
   trainings: TrainingRow[];
+  /** What the applicant corrected from the employee record. */
+  record_changes: { field: string; label: string; record: string; submitted: string }[];
   // skills, statement of purpose, acknowledgements
   soft_skills: string[];
   application_rationale_sop: string;
@@ -669,7 +673,7 @@ export default function JobApplicationsReport() {
                       // signing in again against this one.
                       localStorage.removeItem("token");
                       localStorage.removeItem("user");
-                      window.location.href = "/";
+                      window.location.href = "/?next=%2Fjob-reports";
                     }}
                   >
                     Sign in again
@@ -709,6 +713,16 @@ export default function JobApplicationsReport() {
                         <td className="py-2.5 pr-4">
                           <div className="font-medium text-gray-800 dark:text-white/90">
                             {application.full_name}
+                            {application.record_change_count > 0 && (
+                              <span
+                                className="ml-2 align-middle"
+                                title="The applicant changed details prefilled from the employee record"
+                              >
+                                <Badge size="sm" color="warning">
+                                  {application.record_change_count} edited
+                                </Badge>
+                              </span>
+                            )}
                           </div>
                           <div className="text-xs text-gray-400">
                             {application.current_designation || "—"}
@@ -847,6 +861,26 @@ export default function JobApplicationsReport() {
                       ["Total Relevant Experience", selected.total_relevant_experience],
                     ]}
                   />
+                  {selected.record_changes.length > 0 && (
+                    <div
+                      className="mt-3 rounded-lg border border-warning-200 bg-warning-50 p-3 dark:border-warning-500/30 dark:bg-warning-500/10"
+                      data-record-changes
+                    >
+                      <p className="text-sm font-medium text-warning-700 dark:text-warning-400">
+                        Changed by the applicant from the employee record
+                      </p>
+                      <div className="mt-2">
+                        <DetailTable
+                          headers={["Field", "Employee record", "Submitted"]}
+                          rows={selected.record_changes.map((change) => [
+                            change.label,
+                            change.record,
+                            change.submitted || DASH_SPACED,
+                          ])}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </DetailSection>
 
                 <DetailSection title="2. Personal & Contact Information">

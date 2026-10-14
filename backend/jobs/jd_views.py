@@ -37,6 +37,9 @@ def _text(value) -> str:
 
 
 def _serialize(description: JobDescription, requisition_count: int = 0) -> dict:
+    # The opening this description belongs to, if any. Each opening has its own
+    # description, so there is at most one.
+    opening = description.requisitions.order_by("id").first()
     return {
         "id": description.id,
         "title": description.title,
@@ -51,6 +54,8 @@ def _serialize(description: JobDescription, requisition_count: int = 0) -> dict:
         "skills_competencies": description.skills_competencies or "",
         "is_active": description.is_active,
         "requisition_count": requisition_count,
+        "requisition_id": opening.id if opening else None,
+        "requisition_title": opening.title if opening else "",
         "created_at": description.created_at.strftime("%Y-%m-%d %H:%M")
         if description.created_at
         else None,
