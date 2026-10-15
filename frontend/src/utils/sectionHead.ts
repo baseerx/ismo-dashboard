@@ -107,3 +107,69 @@ export function sortedApprovers<T extends EmployeeLike>(
 
   return [...sameSection, ...others];
 }
+
+/**
+ * The section that holds the head of the whole department (the CEO), and the
+ * grade from which an applicant's approver is that department head instead of
+ * their own section head. A section head's own leave goes to the CEO.
+ */
+export const DEPARTMENT_SECTION_NAME = "ISMO";
+export const DEPARTMENT_HEAD_MIN_GRADE = 10;
+
+/**
+ * The head of the whole department: the most senior current employee in the
+ * department section (ERP 1134, the CEO, today). Worked out rather than fixed,
+ * so a new CEO is picked up without a code change. Ties go to the lower ERP id.
+ */
+export function findDepartmentHead<T extends EmployeeLike>(
+  employees: T[],
+  departmentSectionId: number | string | null | undefined
+): T | null {
+  if (departmentSectionId === null || departmentSectionId === undefined) return null;
+  const members = employees.filter(
+    (employee) =>
+      Number(employee.section_id) === Number(departmentSectionId) && isCurrent(employee)
+  );
+  if (members.length === 0) return null;
+  return members.reduce((best, employee) => {
+    const difference = gradeRank(employee) - gradeRank(best);
+    if (difference !== 0) return difference > 0 ? employee : best;
+    return Number(employee.erp_id) < Number(best.erp_id) ? employee : best;
+  });
+}
+
+/**
+ * Who an applicant's leave goes to by default: the department head for
+ * MG-10 and above, otherwise their section head (see findSectionHead).
+ */
+export function findApprovingAuthority<T extends EmployeeLike>(
+  employees: T[],
+  self: T,
+  departmentSectionId: number | string | null | undefined
+): T | null {
+  if (gradeRank(self) >= DEPARTMENT_HEAD_MIN_GRADE) {
+    const departmentHead = findDepartmentHead(employees, departmentSectionId);
+    if (departmentHead) return departmentHead;
+  }
+  return findSectionHead(employees, self);
+}
+
+/**
+ * Approver choices for an applicant: their own section first, most senior
+ * first, then everyone else - with the department head (CEO) moved to the top
+ * for MG-10 and above, so the default is also the first entry.
+ */
+export function approverChoices<T extends EmployeeLike>(
+  employees: T[],
+  self: T | undefined,
+  departmentSectionId: number | string | null | undefined
+): T[] {
+  const approvers = sortedApprovers(employees, self);
+  if (!self || gradeRank(self) < DEPARTMENT_HEAD_MIN_GRADE) return approvers;
+  const departmentHead = findDepartmentHead(employees, departmentSectionId);
+  if (!departmentHead) return approvers;
+  return [
+    departmentHead,
+    ...approvers.filter((e) => Number(e.erp_id) !== Number(departmentHead.erp_id)),
+  ];
+}

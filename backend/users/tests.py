@@ -386,3 +386,79 @@ class SuperuserExemptionTests(TestCase):
         self.assertEqual(
             self.client.get("/api/users/session_check/", **bearer(self.root)).status_code, 200
         )
+
+
+# ---------------------------------------------------------------------------
+# After an administrator reset, the user must set their own password
+# ---------------------------------------------------------------------------
+
+@mock.patch("users.views._has_menu_right", return_value=False)
+class ForcedPasswordChangeTests(TestCase):
+    def setUp(self):
+        self.root = User.objects.create_user("root.admin", "root@ismo.gov.pk", STRONG,
+                                             is_superuser=True)
+        self.user = User.objects.create_user("plain.user", "plain@ismo.gov.pk", STRONG)
+        CustomUser.objects.create(authid=self.user.pk, erpid=700)
+
+    def reset(self, password=None):
+        body = {"password": password} if password else {}
+        response = post(self.client, f"/api/users/reset_password/{self.user.pk}/", body, bearer(self.root))
+        return response.json()["password"]
+
+    def login(self, password):
+        return post(self.client, "/api/users/login/", {"email": "plain@ismo.gov.pk", "password": password})
+
+    def change(self, old, new, email=None):
+        body = {"old_password": old, "new_password1": new, "new_password2": new}
+        if email is not None:
+            body["email"] = email
+        return post(self.client, "/api/users/change-password/", body, bearer(self.user))
+
+    def test_no_change_needed_normally(self, _rights):
+        self.assertFalse(self.login(STRONG).json()["user"]["must_change_password"])
+        check = self.client.get("/api/users/session_check/", **bearer(self.user)).json()
+        self.assertFalse(check["must_change_password"])
+
+    def test_reset_requires_a_change_at_next_sign_in(self, _rights):
+        temporary = self.reset()
+        self.assertTrue(self.login(temporary).json()["user"]["must_change_password"])
+        check = self.client.get("/api/users/session_check/", **bearer(self.user)).json()
+        self.assertTrue(check["must_change_password"])
+        self.assertEqual(check["email"], "plain@ismo.gov.pk")
+
+    def test_changing_clears_it_and_can_update_the_email(self, _rights):
+        temporary = self.reset()
+        response = self.change(temporary, STRONG_2, email="plain.new@ismo.gov.pk")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["email"], "plain.new@ismo.gov.pk")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "plain.new@ismo.gov.pk")
+        self.assertFalse(AccountLockout.objects.get(user=self.user).must_change_password)
+        signed_in = post(self.client, "/api/users/login/",
+                         {"email": "plain.new@ismo.gov.pk", "password": STRONG_2}).json()
+        self.assertFalse(signed_in["user"]["must_change_password"])
+
+    def test_keeping_the_same_email_is_fine(self, _rights):
+        temporary = self.reset()
+        self.assertEqual(self.change(temporary, STRONG_2, email="plain@ismo.gov.pk").status_code, 200)
+
+    def test_the_administrators_password_cannot_be_kept(self, _rights):
+        temporary = self.reset(STRONG_2)
+        response = self.change(temporary, STRONG_2)
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(AccountLockout.objects.get(user=self.user).must_change_password)
+
+    def test_email_is_checked(self, _rights):
+        temporary = self.reset()
+        bad = self.change(temporary, STRONG_2, email="not-an-email")
+        self.assertEqual((bad.status_code, bad.json()["field"]), (400, "email"))
+        taken = self.change(temporary, STRONG_2, email="ROOT@ismo.gov.pk")
+        self.assertEqual((taken.status_code, taken.json()["field"]), (400, "email"))
+        self.assertTrue(AccountLockout.objects.get(user=self.user).must_change_password)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(temporary))  # nothing changed
+
+    def test_only_an_administrator_can_reset(self, _rights):
+        response = post(self.client, f"/api/users/reset_password/{self.root.pk}/", {}, bearer(self.user))
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(AccountLockout.objects.filter(user=self.root, must_change_password=True).exists())

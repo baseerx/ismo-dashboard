@@ -62,6 +62,11 @@ class AccountLockout(models.Model):
     unlocked_at = models.DateTimeField(null=True, blank=True)
     unlocked_by = models.IntegerField(null=True, blank=True)
 
+    # Set when an administrator resets the password: on the next sign-in the
+    # user must confirm their email and choose their own password before
+    # anything else (users/lockout.py, ProtectedRoute on the frontend).
+    must_change_password = models.BooleanField(default=False)
+
     class Meta:
         db_table = "account_lockouts"
 

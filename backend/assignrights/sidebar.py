@@ -1,10 +1,12 @@
 """The menu the sidebar shows a signed-in user.
 
-Mostly what Assign Rights has granted them - plus a few pages every employee
-can use without being granted anything, such as the internal job application
-form. Those are added here rather than as assign_rights rows, so a new
-employee sees them from their first sign-in and the Assign Rights screen only
-ever lists what an administrator actually granted.
+What Assign Rights has granted them, with one page under a stricter rule: the
+internal job application form (Internal Recruitment Portal > Job Application)
+is shown only to the accounts listed in RESTRICTED_EMAILS - not to other
+superusers, and not to anyone Assign Rights grants it to.
+
+The rule is applied here, on what the sidebar is sent, so the Assign Rights
+screen still lists exactly what an administrator granted.
 """
 
 from django.http import JsonResponse
@@ -13,12 +15,24 @@ from sqlalchemy import text
 
 from db import SessionLocal
 
-# Pages on every employee's menu, by their sub_menu.uri.
-ALWAYS_VISIBLE_URIS = (
-    "/internal-job-application",
-)
+# The page under the stricter rule, by its sub_menu.uri.
+RESTRICTED_URI = "/internal-job-application"
+
+# The only accounts that see it, by their auth_user email. Add an address here
+# to show the page to someone else.
+RESTRICTED_EMAILS = ("baxeerkhan@gmail.com",)
 
 _COLUMNS = "m.name AS mainmenu, s.sub_menu AS submenu, s.uri"
+
+
+def _may_see_restricted(session, user_id) -> bool:
+    """Only the accounts in RESTRICTED_EMAILS."""
+    email = session.execute(
+        text("SELECT email FROM auth_user WHERE id = :id AND is_active = 1"),
+        {"id": user_id},
+    ).scalar()
+    allowed = {address.strip().lower() for address in RESTRICTED_EMAILS}
+    return bool(email) and email.strip().lower() in allowed
 
 
 @require_GET
@@ -41,26 +55,26 @@ def sidebar_menu(request, id):
             for row in granted
         ]
 
-        have = {item["uri"] for item in items}
-        missing = [uri for uri in ALWAYS_VISIBLE_URIS if uri not in have]
-        if missing:
-            placeholders = ", ".join(f":uri{index}" for index in range(len(missing)))
-            for row in session.execute(
+        allowed = _may_see_restricted(session, id)
+        if not allowed:
+            items = [item for item in items if item["uri"] != RESTRICTED_URI]
+        elif not any(item["uri"] == RESTRICTED_URI for item in items):
+            # A listed account sees it even without an Assign Rights grant.
+            row = session.execute(
                 text(f"""
                     SELECT s.id, {_COLUMNS}
                     FROM sub_menu s
                     INNER JOIN main_menu m ON s.main_menu = m.id
-                    WHERE s.uri IN ({placeholders})
+                    WHERE s.uri = :uri
                 """),
-                {f"uri{index}": uri for index, uri in enumerate(missing)},
-            ).fetchall():
+                {"uri": RESTRICTED_URI},
+            ).first()
+            if row is not None:
                 items.append({
                     "id": None,
                     "mainmenu": row.mainmenu,
                     "submenu": row.submenu,
                     "uri": row.uri,
-                    # Not an assign_rights row: there is nothing to revoke.
-                    "always_visible": True,
                 })
 
         return JsonResponse(items, safe=False, status=200)

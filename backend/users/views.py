@@ -4,6 +4,7 @@ from .models import Users, Employees  # Assuming you have a Users model defined
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 import json
+import re
 import os
 import datetime
 from django.utils.dateparse import parse_date
@@ -39,6 +40,8 @@ import random
 import requests
 # Create your views here.
 
+
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
 # The Create User page. Whoever is granted it in Assign Rights, or is a
 # superuser, may create, reset and delete accounts.
@@ -313,6 +316,9 @@ class UsersView:
                     'is_staff': user.is_staff,
                     'is_active': user.is_active,
                     'is_superuser': user.is_superuser,
+                    # Set after an administrator reset: the app shows nothing but
+                    # the change-password step until it is done.
+                    'must_change_password': lockout.password_change_required(user),
                     'expires': (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=getattr(settings, "JWT_EXP_DELTA_SECONDS", 3600))).isoformat(),
                 }
                 token = jwt.encode(
@@ -412,7 +418,14 @@ class UsersView:
                 {'success': False, 'locked': True, 'error': lockout.locked_message(record)},
                 status=423,
             )
-        return JsonResponse({'success': True}, status=200)
+        return JsonResponse(
+            {
+                'success': True,
+                'must_change_password': record.must_change_password,
+                'email': user.email,
+            },
+            status=200,
+        )
 
     @require_GET
     def auth_users(request):
@@ -507,6 +520,9 @@ class UsersView:
 
         user.set_password(new_password)
         user.save(update_fields=['password'])
+        # The administrator now knows this password, so the user has to replace
+        # it with their own at their next sign-in.
+        lockout.require_password_change(user)
         return JsonResponse({'success': True, 'password': new_password}, status=200)
 
     @csrf_exempt
@@ -541,9 +557,28 @@ class UsersView:
             )
             if problems:
                 return _password_refusal(problems)
+
+            # The step after an administrator reset also confirms the email
+            # address; anyone may correct theirs here.
+            new_email = data.get('email')
+            if new_email is not None:
+                new_email = str(new_email).strip()
+                if not EMAIL_PATTERN.match(new_email):
+                    return JsonResponse({'success': False, 'error': 'Enter a valid email address',
+                                         'field': 'email'}, status=400)
+                if User.objects.filter(email__iexact=new_email).exclude(pk=user.pk).exists():
+                    return JsonResponse({'success': False,
+                                         'error': 'Another account already uses this email address',
+                                         'field': 'email'}, status=400)
+                user.email = new_email
+
             user.set_password(new_password1)
             user.save()
-            return JsonResponse({'success': True, 'message': 'Password changed successfully'}, status=200)
+            lockout.clear_password_change(user)
+            return JsonResponse(
+                {'success': True, 'message': 'Password changed successfully', 'email': user.email},
+                status=200,
+            )
         except User.DoesNotExist:
             return JsonResponse({'success': False, 'error': 'User not found'}, status=404)
 

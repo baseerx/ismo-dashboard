@@ -16,7 +16,8 @@ import Select from "../../components/form/Select";
 import TextArea from "../../components/form/input/TextArea";
 import Badge from "../../components/ui/badge/Badge";
 import { LeaveIcon, InfoIcon } from "../../icons";
-import { findSectionHead, sortedApprovers } from "../../utils/sectionHead";
+import { approverChoices, findApprovingAuthority } from "../../utils/sectionHead";
+import { useDepartmentSectionId } from "../../utils/useDepartmentSection";
 
 // Leave types that may carry a supporting medical document. Kept in step with
 // MEDICAL_LEAVE_TYPES in leaves/views.py, which enforces the same rule.
@@ -99,6 +100,8 @@ export default function IndividualAttendance() {
   };
 
   const [employeesData, setEmployeesData] = useState<any[]>([]);
+  // The ISMO section, which holds the department head (CEO).
+  const departmentSectionId = useDepartmentSectionId();
   const [balance, setBalance] = useState<{
     total_allowed: number | null;
     used_days: number;
@@ -225,9 +228,11 @@ export default function IndividualAttendance() {
 
   // Auto-select the logged in user as the employee, and default their Section
   // Head to the most senior person in their own section - which is themselves
-  // when they are that person.
+  // when they are that person. From MG-10 up (section heads and above), the
+  // default is the department head (CEO) in the ISMO section instead.
   useEffect(() => {
     if (initializedSelf.current || employeesData.length === 0) return;
+    if (departmentSectionId === undefined) return; // wait for the section list
 
     const self = employeesData.find(
       (e: any) => Number(e.erp_id) === Number(user.erpid)
@@ -236,7 +241,7 @@ export default function IndividualAttendance() {
 
     initializedSelf.current = true;
 
-    const head = findSectionHead(employeesData, self);
+    const head = findApprovingAuthority(employeesData, self, departmentSectionId);
 
     selfDefaults.current = {
       employee_id: self.id,
@@ -247,7 +252,7 @@ export default function IndividualAttendance() {
     };
 
     setData((prev) => ({ ...prev, ...selfDefaults.current }));
-  }, [employeesData]);
+  }, [employeesData, departmentSectionId]);
 
   // Section Head choices: the applicant's own section first, most senior
   // first, so the head the form defaults to is the top entry rather than
@@ -260,11 +265,12 @@ export default function IndividualAttendance() {
       (e: any) => Number(e.erp_id) === Number(user.erpid)
     );
 
-    return sortedApprovers(employeesData, self).map((e: any) => ({
+    // MG-10 and above: the department head (CEO) heads the list.
+    return approverChoices(employeesData, self, departmentSectionId).map((e: any) => ({
       label: `${e.name} (${e.erp_id})${e.grade ? ` · ${e.grade}` : ""}`,
       value: `${e.erp_id}-${e.id}`,
     }));
-  }, [employeesData, user.erpid]);
+  }, [employeesData, user.erpid, departmentSectionId]);
 
   const selectedEmployee = employeesData.find(
     (e: any) => Number(e.erp_id) === Number(data.erp_id)

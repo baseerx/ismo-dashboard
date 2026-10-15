@@ -155,6 +155,24 @@ def unlock(user, by_user_id) -> AccountLockout:
     return record
 
 
+def require_password_change(user) -> None:
+    """After an administrator reset: the user must choose their own password."""
+    record = lockout_for(user)
+    if not record.must_change_password:
+        record.must_change_password = True
+        record.save(update_fields=["must_change_password"])
+
+
+def password_change_required(user) -> bool:
+    return AccountLockout.objects.filter(user=user, must_change_password=True).exists()
+
+
+def clear_password_change(user) -> None:
+    AccountLockout.objects.filter(user=user, must_change_password=True).update(
+        must_change_password=False
+    )
+
+
 def _erp_id_of(auth_user_id):
     return CustomUser.objects.filter(authid=auth_user_id).values_list("erpid", flat=True).first()
 

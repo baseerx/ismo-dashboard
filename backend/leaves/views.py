@@ -100,7 +100,13 @@ def get_leave_requests(request,erpid):
         LEFT JOIN employees h
             ON l.head_erpid = h.erp_id
         WHERE e.flag = 1
-          AND e.section_id = (SELECT section_id FROM employees WHERE erp_id = :epid)
+          -- The requester's own section, plus anything sent to them for
+          -- approval from elsewhere: MG-10 and above apply to the department
+          -- head (CEO, ISMO section), who must see those to approve them.
+          AND (
+                e.section_id = (SELECT section_id FROM employees WHERE erp_id = :epid)
+             OR l.head_erpid = :epid
+          )
           AND l.start_date IS NOT NULL
           AND l.end_date IS NOT NULL
           AND l.start_date <= :fy_end

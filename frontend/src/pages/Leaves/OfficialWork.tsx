@@ -9,7 +9,8 @@ import _ from "lodash";
 import { ToastContainer, toast } from "react-toastify";
 import { ColumnDef } from "@tanstack/react-table";
 import DatePicker from "../../components/form/date-picker";
-import { findSectionHead, sortedApprovers } from "../../utils/sectionHead";
+import { approverChoices, findApprovingAuthority } from "../../utils/sectionHead";
+import { useDepartmentSectionId } from "../../utils/useDepartmentSection";
 import SearchableDropdown from "../../components/form/input/SearchableDropDown";
 import Button from "../../components/ui/button/Button";
 import Label from "../../components/form/Label";
@@ -47,6 +48,8 @@ export default function OfficialWork() {
     financial_year: string;
   } | null>(null);
   const initializedSelf = useRef(false);
+  // The ISMO section, which holds the department head (CEO).
+  const departmentSectionId = useDepartmentSectionId();
 
   // The table lists the current financial year only; the server decides which
   // year that is and reports it back so the heading can say so.
@@ -123,8 +126,12 @@ export default function OfficialWork() {
   // section, and everyone below grade 9 report to the most senior grade 9+
   // colleague. Seniority within the section now decides it, exactly as Apply
   // Leave does, from the same shared rule.
+  //
+  // From MG-10 up (section heads and above) the default is the department head
+  // (CEO) in the ISMO section instead - the same rule as Apply Leave.
   useEffect(() => {
     if (initializedSelf.current || employeesData.length === 0) return;
+    if (departmentSectionId === undefined) return; // wait for the section list
 
     const self = employeesData.find(
       (e: any) => Number(e.erp_id) === Number(user.erpid)
@@ -133,7 +140,7 @@ export default function OfficialWork() {
 
     initializedSelf.current = true;
 
-    const head = findSectionHead(employeesData, self);
+    const head = findApprovingAuthority(employeesData, self, departmentSectionId);
 
     selfDefaults.current = {
       employee_id: self.id,
@@ -142,7 +149,7 @@ export default function OfficialWork() {
     };
 
     setData((prev) => ({ ...prev, ...selfDefaults.current }));
-  }, [employeesData]);
+  }, [employeesData, departmentSectionId]);
 
   // Section Head choices: the applicant's own section first, most senior
   // first, matching Apply Leave.
@@ -151,11 +158,12 @@ export default function OfficialWork() {
       (e: any) => Number(e.erp_id) === Number(user.erpid)
     );
 
-    return sortedApprovers(employeesData, self).map((e: any) => ({
+    // MG-10 and above: the department head (CEO) heads the list.
+    return approverChoices(employeesData, self, departmentSectionId).map((e: any) => ({
       label: `${e.name} (${e.erp_id})${e.grade ? ` · ${e.grade}` : ""}`,
       value: `${e.erp_id}-${e.id}`,
     }));
-  }, [employeesData, user.erpid]);
+  }, [employeesData, user.erpid, departmentSectionId]);
 
   const selectedEmployee = employeesData.find(
     (e: any) => Number(e.erp_id) === Number(data.erp_id)

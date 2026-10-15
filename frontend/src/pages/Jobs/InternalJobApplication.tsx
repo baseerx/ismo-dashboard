@@ -228,6 +228,19 @@ type Submitted = {
 
 type RowErrors = Record<number, Record<string, string>>;
 
+/** How each application status reads in "My Applications". */
+const APPLICATION_STATUS: Record<
+  string,
+  { label: string; color: "success" | "warning" | "error" | "info" | "light" }
+> = {
+  submitted: { label: "Submitted", color: "success" },
+  under_review: { label: "Under review", color: "warning" },
+  verified: { label: "Verified", color: "info" },
+  shortlisted: { label: "Shortlisted", color: "success" },
+  rejected: { label: "Rejected", color: "error" },
+  hired: { label: "Selected", color: "success" },
+};
+
 const blankEducationRow = (): EducationRow => ({
   degree_qualification: "",
   degree_custom: false,
@@ -2486,9 +2499,9 @@ export default function InternalJobApplication() {
                   <tr className="border-b border-gray-200 text-xs uppercase text-gray-500 dark:border-gray-800 dark:text-gray-400">
                     <th className="py-2 pr-4 font-medium">Reference No.</th>
                     <th className="py-2 pr-4 font-medium">Position</th>
-                    <th className="py-2 pr-4 font-medium">Submitted</th>
+                    <th className="py-2 pr-4 font-medium">Submitted On</th>
                     <th className="py-2 pr-4 font-medium">Sections</th>
-                    <th className="py-2 pr-4 font-medium">HR Verification</th>
+                    <th className="py-2 pr-4 font-medium">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
@@ -2507,9 +2520,19 @@ export default function InternalJobApplication() {
                         training(s)
                       </td>
                       <td className="py-2.5 pr-4">
-                        <Badge size="sm" color="light">
-                          {row.hr_verification_status}
-                        </Badge>
+                        {(() => {
+                          const shown = APPLICATION_STATUS[row.status] ?? {
+                            label: row.hr_verification_status,
+                            color: "light" as const,
+                          };
+                          return (
+                            <span data-application-status={row.status}>
+                              <Badge size="sm" color={shown.color}>
+                                {shown.label}
+                              </Badge>
+                            </span>
+                          );
+                        })()}
                       </td>
                     </tr>
                   ))}
