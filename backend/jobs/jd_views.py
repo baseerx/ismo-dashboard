@@ -16,6 +16,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
+from . import requisition_views
 from .models import JobDescription
 from .permissions import require_description_manager
 
@@ -109,6 +110,19 @@ def _validate(data, existing: JobDescription | None = None):
         if len(value) > maximum:
             errors[field] = f"Keep {label.lower()} within {maximum} characters"
         cleaned[field] = value or None
+
+    # Department comes from the sections table, as on Job Openings. A
+    # description saved before keeps its old value until it is changed.
+    department = cleaned.get("department")
+    unchanged = existing is not None and (existing.department or None) == department
+    if department and not unchanged and "department" not in errors:
+        try:
+            departments = requisition_views.department_and_location_options()["departments"]
+        except Exception:
+            logger.exception("could not read sections to check a job description")
+            departments = None
+        if departments is not None and department not in departments:
+            errors["department"] = "Choose a department from the list"
 
     responsibilities = _text(data.get("key_responsibilities"))
     if not responsibilities:

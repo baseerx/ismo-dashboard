@@ -5,6 +5,7 @@ import PageBreadcrumb from "../../components/common/PageBreadCrumb";
 import ComponentCard from "../../components/common/ComponentCard";
 import Label from "../../components/form/Label";
 import Input from "../../components/form/input/InputField";
+import Select from "../../components/form/Select";
 import TextArea from "../../components/form/input/TextArea";
 import Checkbox from "../../components/form/input/Checkbox";
 import Button from "../../components/ui/button/Button";
@@ -97,9 +98,24 @@ export default function JobDescriptions() {
     return token ? { headers: { Authorization: `Bearer ${token}` } } : undefined;
   }, []);
 
+  // Departments come from the sections table, as on Job Openings.
+  const [departments, setDepartments] = useState<string[]>([]);
+  const [departmentsFailed, setDepartmentsFailed] = useState(false);
+
   useEffect(() => {
     load();
+    loadDepartments();
   }, []);
+
+  const loadDepartments = async () => {
+    try {
+      const response = await axios.get("/jobs/requisitions/options/");
+      setDepartments(response.data?.departments ?? []);
+      setDepartmentsFailed(false);
+    } catch {
+      setDepartmentsFailed(true);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -315,14 +331,32 @@ export default function JobDescriptions() {
 
             <div>
               <Label htmlFor="jd_department">Department / Function</Label>
-              <Input
-                id="jd_department"
-                placeholder="e.g., System Operation"
-                value={form.department}
-                onChange={(e) => set("department", e.target.value)}
-                error={!!errors.department}
-                hint={errors.department}
-              />
+              <div id="jd_department">
+                <Select
+                  key={`jd-department-${editingId ?? "new"}-${departments.length}`}
+                  options={[
+                    { label: "Not specified", value: "" },
+                    ...departments.map((name) => ({ label: name, value: name })),
+                    // A description saved before keeps its value until changed.
+                    ...(form.department && !departments.includes(form.department)
+                      ? [{ label: `${form.department} (not in the list)`, value: form.department }]
+                      : []),
+                  ]}
+                  placeholder="Select department"
+                  value={form.department}
+                  onChange={(value) => set("department", value)}
+                  error={!!errors.department}
+                  hint={errors.department}
+                />
+              </div>
+              {departmentsFailed && (
+                <p className="mt-1 text-xs text-warning-600">
+                  The department list could not be loaded.{" "}
+                  <button type="button" onClick={loadDepartments} className="underline">
+                    Try again
+                  </button>
+                </p>
+              )}
             </div>
 
             <div>

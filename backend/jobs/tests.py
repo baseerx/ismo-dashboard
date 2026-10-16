@@ -919,3 +919,41 @@ class DepartmentLocationTests(TestCase):
                         side_effect=RuntimeError("SQL Server down")):
             self.assertEqual(self.create(department="Planning").status_code, 201)
             self.assertEqual(self.client.get("/api/jobs/requisitions/options/").status_code, 503)
+
+
+class DescriptionDepartmentTests(TestCase):
+    """Job Descriptions take their department from the sections table too."""
+
+    def setUp(self):
+        self.hr = auth(erp_id=1, superuser=True)
+
+    def create(self, **fields):
+        body = {"title": "Manager Planning", "key_responsibilities": "Plans the grid for the year.",
+                **fields}
+        return self.client.post("/api/jobs/descriptions/create/", data=json.dumps(body),
+                                content_type="application/json", **self.hr)
+
+    def test_listed_department_is_accepted(self):
+        response = self.create(department="Planning")
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(JobDescription.objects.get().department, "Planning")
+
+    def test_department_stays_optional(self):
+        self.assertEqual(self.create().status_code, 201)
+
+    def test_unlisted_department_is_refused(self):
+        response = self.create(department="Board of Directors")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["errors"]["department"], "Choose a department from the list")
+
+    def test_older_description_keeps_its_department(self):
+        old = JobDescription.objects.create(title="Old JD", department="Old Department",
+                                            key_responsibilities="Duties of the old post.")
+        body = {"title": "Old JD", "department": "Old Department",
+                "key_responsibilities": "Duties of the old post, revised."}
+        url = f"/api/jobs/descriptions/{old.id}/update/"
+        ok = self.client.post(url, data=json.dumps(body), content_type="application/json", **self.hr)
+        self.assertEqual(ok.status_code, 200, ok.content)
+        body["department"] = "Another Unlisted"
+        refused = self.client.post(url, data=json.dumps(body), content_type="application/json", **self.hr)
+        self.assertIn("department", refused.json()["errors"])
