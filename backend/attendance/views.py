@@ -199,6 +199,104 @@ def section_day_records(session, params, section_filter):
     return records
 
 
+def _average_time(stamps):
+    """Average time of day ("08:24") of "YYYY-MM-DD HH:MM:SS" stamps, or "-"."""
+    seconds = []
+    for stamp in stamps:
+        try:
+            moment = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")
+        except (TypeError, ValueError):
+            continue
+        seconds.append(moment.hour * 3600 + moment.minute * 60 + moment.second)
+    if not seconds:
+        return "-"
+    mean = round(sum(seconds) / len(seconds))
+    return f"{mean // 3600:02d}:{(mean % 3600) // 60:02d}"
+
+
+def summarize_by_employee(day_records, total_days):
+    """One row per employee from section_day_records' one row per day.
+
+    - days: calendar days in the selected range (the same for everyone)
+    - checkin_count / checkout_count: days on which they checked in / out
+    - avg_checkin / avg_checkout: average time of the day's first check-in and
+      last check-out, over the days that have one
+    Employees keep the order section_day_records gives them.
+    """
+    rows = {}
+    for record in day_records:
+        row = rows.setdefault(record["erp_id"], {
+            "erp_id": record["erp_id"],
+            "name": record["name"],
+            "designation": record["designation"],
+            "grade": record["grade"],
+            "section": record["section"],
+            "days": total_days,
+            "checkins": [],
+            "checkouts": [],
+        })
+        if record["checkin_time"] != "-":
+            row["checkins"].append(record["checkin_time"])
+        if record["checkout_time"] != "-":
+            row["checkouts"].append(record["checkout_time"])
+
+    summary = []
+    for row in rows.values():
+        checkins, checkouts = row.pop("checkins"), row.pop("checkouts")
+        row.update(
+            checkin_count=len(checkins),
+            checkout_count=len(checkouts),
+            avg_checkin=_average_time(checkins),
+            avg_checkout=_average_time(checkouts),
+        )
+        summary.append(row)
+    return summary
+
+
+def _grouped_attendance(request, key, column, missing_message):
+    """The section and location reports: one row per employee in the group.
+
+    `key` is the request field holding the group id and `column` the employees
+    column it matches. The date range is checked the same way for both.
+    """
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"error": "Invalid JSON body"}, status=400)
+
+    try:
+        group_id = int(data.get(key))
+    except (TypeError, ValueError):
+        return JsonResponse({"error": missing_message}, status=400)
+
+    single = data.get("date")
+    fromdate = data.get("fromdate") or single
+    todate = data.get("todate") or single
+    try:
+        start = datetime.strptime(str(fromdate), "%Y-%m-%d").date()
+        finish = datetime.strptime(str(todate), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "Give the From and To dates like 2026-10-01"}, status=400)
+    if finish < start:
+        return JsonResponse({"error": "The To date is before the From date"}, status=400)
+    if (finish - start).days + 1 > SECTION_REPORT_MAX_DAYS:
+        return JsonResponse(
+            {"error": f"Choose a range of at most {SECTION_REPORT_MAX_DAYS} days"}, status=400
+        )
+
+    session = SessionLocal()
+    try:
+        records = section_day_records(
+            session,
+            {"fromdate": start, "todate": finish, "group_id": group_id},
+            f"AND {column} = :group_id",
+        )
+    finally:
+        session.close()
+
+    return JsonResponse(summarize_by_employee(records, (finish - start).days + 1), safe=False)
+
+
 class AttendanceView:
     @require_GET  # Ensure this view only responds to GET requests
     def get(request):
@@ -1952,51 +2050,31 @@ class AttendanceView:
     @csrf_exempt
     @require_POST
     def attendance_section(request):
-        """Section attendance over a date range: one row per employee per day.
+        """Section attendance over a date range: one row per employee.
 
         Body: {"section": <id>, "fromdate": "YYYY-MM-DD", "todate": "YYYY-MM-DD"}.
         A lone "date" is still accepted and means that single day. Each row
-        carries the day's first check-in and last check-out together.
+        sums the employee's days (see summarize_by_employee).
         """
-        try:
-            data = json.loads(request.body.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return JsonResponse({"error": "Invalid JSON body"}, status=400)
+        return _grouped_attendance(request, "section", "e.section_id", "Choose a section")
 
-        try:
-            section_id = int(data.get("section"))
-        except (TypeError, ValueError):
-            return JsonResponse({"error": "Choose a section"}, status=400)
+    @csrf_exempt
+    @require_POST
+    def attendance_location(request):
+        """Location attendance over a date range: one row per employee at the
+        chosen office (employees.location_id). Same body and rows as the
+        section report, with "location" in place of "section"."""
+        return _grouped_attendance(request, "location", "e.location_id", "Choose a location")
 
-        single = data.get("date")
-        fromdate = data.get("fromdate") or single
-        todate = data.get("todate") or single
-        try:
-            start = datetime.strptime(str(fromdate), "%Y-%m-%d").date()
-            finish = datetime.strptime(str(todate), "%Y-%m-%d").date()
-        except (TypeError, ValueError):
-            return JsonResponse(
-                {"error": "Give the From and To dates like 2026-10-01"}, status=400
-            )
-        if finish < start:
-            return JsonResponse({"error": "The To date is before the From date"}, status=400)
-        if (finish - start).days + 1 > SECTION_REPORT_MAX_DAYS:
-            return JsonResponse(
-                {"error": f"Choose a range of at most {SECTION_REPORT_MAX_DAYS} days"},
-                status=400,
-            )
-
+    @require_GET
+    def attendance_locations(request):
+        """The office locations, for the location report's dropdown."""
         session = SessionLocal()
         try:
-            records = section_day_records(
-                session,
-                {"fromdate": start, "todate": finish, "section_id": section_id},
-                "AND e.section_id = :section_id",
-            )
+            rows = session.execute(text("SELECT id, name FROM locations ORDER BY name")).fetchall()
         finally:
             session.close()
-
-        return JsonResponse(records, safe=False)
+        return JsonResponse([{"id": row.id, "name": row.name} for row in rows], safe=False)
 
     @csrf_exempt
     @require_POST

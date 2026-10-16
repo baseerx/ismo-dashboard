@@ -21,6 +21,7 @@ import AppLayout from "./layout/AppLayout";
 import { ScrollToTop } from "./components/common/ScrollToTop";
 
 import SectionAttendanceReport from "./pages/Tables/SectionAttendanceReport";
+import LocationAttendanceReport from "./pages/Tables/LocationAttendanceReport";
 import ApplyLeave from "./pages/Leaves/ApplyLeave";
 import InternalJobApplication from "./pages/Jobs/InternalJobApplication";
 import JobRequisitions from "./pages/Jobs/JobRequisitions";
@@ -47,6 +48,7 @@ import RccShift from "./pages/Attendance/RccShift";
 import AddEmployee from "./pages/UserManagement/AddEmployee";
 import RccUpdateAttendance from "./pages/Attendance/RccUpdateAttendance";
 import NccUpdateAttendance from "./pages/Attendance/NccUpdateAttendance";
+import UpdateAttendance from "./pages/Attendance/UpdateAttendance";
 import LeaveHistory from "./pages/Leaves/LeaveHistory";
 import IndividualLeaveReport from "./pages/Leaves/IndividualLeaveReport";
 import SectionLeaveReport from "./pages/Leaves/SectionLeave";
@@ -146,10 +148,18 @@ export default function App() {
                 path="/attendance/ncc-update"
                 element={<NccUpdateAttendance />}
               />
+              <Route
+                path="/attendance/manual-entry"
+                element={<UpdateAttendance />}
+              />
 
               <Route
                 path="/attendance/section"
                 element={<SectionAttendanceReport />}
+              />
+              <Route
+                path="/attendance/location"
+                element={<LocationAttendanceReport />}
               />
               <Route
                 path="/attendance/overview"

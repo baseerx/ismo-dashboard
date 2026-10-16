@@ -1,4 +1,5 @@
 from django.urls import path
+from . import manual_entry
 from .views import AttendanceView
 
 urlpatterns = [
@@ -7,6 +8,9 @@ urlpatterns = [
     path('overview/<int:erpid>/', AttendanceView.attendance_overview),
     path('history/', AttendanceView.attendance_history),
     path('sections/', AttendanceView.attendance_section),
+    # Location report: one row per employee at an office, and the office list.
+    path('location/', AttendanceView.attendance_location),
+    path('locations/', AttendanceView.attendance_locations),
     path('status/', AttendanceView.attendance_status),
     path('individual/', AttendanceView.attendance_individual),
     path('detailed/', AttendanceView.attendance_detailed),
@@ -24,4 +28,7 @@ urlpatterns = [
     path('my-today/', AttendanceView.my_attendance_today),
     path('shift_add/', AttendanceView.shift_add),
     path('shift_update/', AttendanceView.shift_update),
+    # Update Attendance: insert or correct one employee's day (administrators).
+    path('manual-entry/', manual_entry.manual_entry_day),
+    path('manual-entry/save/', manual_entry.manual_entry_save),
 ]
