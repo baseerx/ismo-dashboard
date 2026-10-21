@@ -17,8 +17,9 @@ import axios from "../../api/axios";
  *
  * Days is the number of calendar days in the range. Check-ins and check-outs
  * count the days on which the employee checked in or out, and the averages are
- * the mean time of the day's first check-in and last check-out over those days
- * (attendance/views.py, summarize_by_employee). Shared by the Section and
+ * the mean time of the day's first check-in and last check-out over those days.
+ * Total worked adds up each day's first check-in to last check-out, over the
+ * days that have both (attendance/views.py, summarize_by_employee). Shared by the Section and
  * Location reports so the two always work the same way.
  */
 
@@ -48,6 +49,7 @@ type AttendanceRow = {
   checkout_count: number;
   avg_checkin: string;
   avg_checkout: string;
+  avg_worked: string;
 };
 
 const today = () => moment().format("YYYY-MM-DD");
@@ -61,13 +63,14 @@ const columns: ColumnDef<AttendanceRow>[] = [
   { accessorKey: "days", header: "Days" },
   { accessorKey: "checkin_count", header: "Check-ins" },
   { accessorKey: "checkout_count", header: "Check-outs" },
-  { accessorKey: "avg_checkin", header: "Avg Check-in" },
-  { accessorKey: "avg_checkout", header: "Avg Check-out" },
+  { accessorKey: "avg_checkin", header: "Avg Check-in (hh:mm:ss)" },
+  { accessorKey: "avg_checkout", header: "Avg Check-out (hh:mm:ss)" },
+  { accessorKey: "avg_worked", header: "Avg Worked (hh:mm:ss)" },
 ];
 
 const EXPORT_HEADERS = [
   "ERP ID", "Name", "Designation", "Grade", "Section", "Days", "Check-ins", "Check-outs",
-  "Avg Check-in", "Avg Check-out",
+  "Avg Check-in (hh:mm:ss)", "Avg Check-out (hh:mm:ss)", "Avg Worked (hh:mm:ss)",
 ];
 
 export default function GroupAttendanceReport({ kind }: { kind: GroupKind }) {
@@ -151,6 +154,7 @@ export default function GroupAttendanceReport({ kind }: { kind: GroupKind }) {
           checkout_count: item.checkout_count,
           avg_checkin: item.avg_checkin,
           avg_checkout: item.avg_checkout,
+          avg_worked: item.avg_worked ?? "-",
         }))
       );
       setProblem(null);
@@ -179,7 +183,7 @@ export default function GroupAttendanceReport({ kind }: { kind: GroupKind }) {
       <div className="space-y-6">
         <ComponentCard
           title={`Attendance ${groupName ? `of ${groupName} ` : ""}- ${range}`}
-          desc="One row per employee. Days counts the days in the range; check-ins and check-outs count the days each was recorded; averages use the first check-in and last check-out of each day."
+          desc="One row per employee. Days counts the days in the range; check-ins and check-outs count the days each was recorded; averages use the first check-in and last check-out of each day; total worked adds up each day's check-in to check-out."
         >
           <ToastContainer position="bottom-right" />
 
@@ -243,6 +247,7 @@ export default function GroupAttendanceReport({ kind }: { kind: GroupKind }) {
                 data.map((row) => [
                   row.erp_id, row.name, row.designation, row.grade, row.section, row.days,
                   row.checkin_count, row.checkout_count, row.avg_checkin, row.avg_checkout,
+                  row.avg_worked,
                 ])
               }
             />

@@ -362,7 +362,7 @@ export default function OfficialWork() {
         });
         return;
       }
-      if (window.confirm("Are you sure you want to apply for this leave?")) {
+      if (window.confirm("Are you sure you want to apply for this official work?")) {
         const response = await axios.post("/officialwork/apply/", data);
         console.log("Response:", response.data);
       } else {
@@ -373,7 +373,7 @@ export default function OfficialWork() {
       getEmployeesLeaves();
       toast.success("Official work application submitted successfully");
     } catch (error: any) {
-      console.error("Error applying for leave:", error);
+      console.error("Error applying for official work:", error);
       toast.error(
         error?.response?.data?.error || "Failed to submit leave application"
       );

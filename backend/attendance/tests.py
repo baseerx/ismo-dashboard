@@ -148,3 +148,53 @@ class ManualEntryTests(TestCase):
         self.assertEqual((edit.changed_by, edit.changed_by_name), (self.admin.pk, "Root Admin"))
         history = self.day().json()["history"]
         self.assertEqual(history[0]["reason"], "Forgot to punch, confirmed by head")
+
+
+def day(date_text, checkin="-", checkout="-", on_leave=False):
+    stamp = lambda hms: f"{date_text} {hms}" if hms != "-" else "-"
+    return {"erp_id": 7, "name": "A", "designation": "D", "grade": "MG-5", "section": "S",
+            "checkin_time": stamp(checkin), "checkout_time": stamp(checkout), "on_leave": on_leave}
+
+
+class AverageTimeTests(TestCase):
+    """Avg check-in / check-out on the section and location reports."""
+
+    def summary(self, records):
+        from .views import summarize_by_employee
+        return summarize_by_employee(records, len(records))[0]
+
+    def test_mean_to_the_second(self):
+        row = self.summary([
+            day("2026-10-06", "08:23:39", "16:10:55"),
+            day("2026-10-07", "08:22:44", "16:03:36"),
+            day("2026-10-09", "08:18:00", "16:04:45"),
+        ])
+        self.assertEqual(row["avg_checkin"], "08:21:28")
+        self.assertEqual(row["avg_checkout"], "16:06:25")
+        self.assertEqual(row["avg_worked"], "07:44:57")
+        self.assertEqual(row["avg_days"], 3)
+
+    def test_leave_absent_and_half_punched_days_left_out(self):
+        row = self.summary([
+            day("2026-10-06", "08:00:00", "16:00:00"),
+            day("2026-10-07", "11:00:00", "16:00:00", on_leave=True),  # short leave
+            day("2026-10-08"),                                          # absent
+            day("2026-10-09", "09:00:00"),                              # no check-out
+            day("2026-10-10", checkout="13:00:00"),                     # no check-in
+            day("2026-10-11", "10:00:00", "17:00:00"),
+        ])
+        self.assertEqual(row["avg_checkin"], "09:00:00")
+        self.assertEqual(row["avg_checkout"], "16:30:00")
+        self.assertEqual(row["avg_worked"], "07:30:00")
+        self.assertEqual(row["avg_days"], 2)
+        self.assertEqual((row["checkin_count"], row["checkout_count"]), (4, 4))
+
+    def test_no_complete_day_shows_dash(self):
+        row = self.summary([day("2026-10-06", "08:00:00"), day("2026-10-07")])
+        self.assertEqual((row["avg_checkin"], row["avg_checkout"], row["avg_days"]), ("-", "-", 0))
+        self.assertEqual(row["avg_worked"], "-")
+
+    def test_half_second_rounds_up(self):
+        row = self.summary([day("2026-10-06", "08:00:00", "16:00:00"),
+                            day("2026-10-07", "08:00:01", "16:00:03")])
+        self.assertEqual((row["avg_checkin"], row["avg_checkout"]), ("08:00:01", "16:00:02"))

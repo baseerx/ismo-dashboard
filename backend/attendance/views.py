@@ -194,13 +194,15 @@ def section_day_records(session, params, section_filter):
             "early_status": early_status,
             "flag": flag,
             "flag_type": flag_type,
+            "on_leave": bool(row.leave_type),
         })
 
     return records
 
 
-def _average_time(stamps):
-    """Average time of day ("08:24") of "YYYY-MM-DD HH:MM:SS" stamps, or "-"."""
+def _average_seconds(stamps):
+    """Average time of day, in seconds since midnight, of "YYYY-MM-DD HH:MM:SS"
+    stamps (rounded to the nearest second), or None when there are none."""
     seconds = []
     for stamp in stamps:
         try:
@@ -209,9 +211,28 @@ def _average_time(stamps):
             continue
         seconds.append(moment.hour * 3600 + moment.minute * 60 + moment.second)
     if not seconds:
+        return None
+    # Half a second rounds up (08:19:20.5 -> 08:19:21), not to even as round() would.
+    return (2 * sum(seconds) + len(seconds)) // (2 * len(seconds))
+
+
+def _clock(seconds):
+    """Seconds as "HH:MM:SS", or "-" for None."""
+    if seconds is None:
         return "-"
-    mean = round(sum(seconds) / len(seconds))
-    return f"{mean // 3600:02d}:{(mean % 3600) // 60:02d}"
+    return f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
+
+
+def _counts_for_average(checkin, checkout):
+    """Whether a day's punches count towards the averages: both present and the
+    check-out at least a minute after the check-in (a few seconds apart is a
+    double punch, not a working day)."""
+    try:
+        start = datetime.strptime(checkin, "%Y-%m-%d %H:%M:%S")
+        finish = datetime.strptime(checkout, "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return False
+    return (finish - start).total_seconds() >= 60
 
 
 def summarize_by_employee(day_records, total_days):
@@ -220,7 +241,10 @@ def summarize_by_employee(day_records, total_days):
     - days: calendar days in the selected range (the same for everyone)
     - checkin_count / checkout_count: days on which they checked in / out
     - avg_checkin / avg_checkout: average time of the day's first check-in and
-      last check-out, over the days that have one
+      last check-out, over the same days: those with both a check-in and a
+      check-out at least a minute later, and no approved leave. Leave, absent,
+      holiday and weekend days, and days missing either punch, are left out.
+    - avg_worked: avg_checkout - avg_checkin, the average working day
     Employees keep the order section_day_records gives them.
     """
     rows = {}
@@ -234,20 +258,30 @@ def summarize_by_employee(day_records, total_days):
             "days": total_days,
             "checkins": [],
             "checkouts": [],
+            "avg_in": [],
+            "avg_out": [],
         })
         if record["checkin_time"] != "-":
             row["checkins"].append(record["checkin_time"])
         if record["checkout_time"] != "-":
             row["checkouts"].append(record["checkout_time"])
+        if (not record.get("on_leave")
+                and _counts_for_average(record["checkin_time"], record["checkout_time"])):
+            row["avg_in"].append(record["checkin_time"])
+            row["avg_out"].append(record["checkout_time"])
 
     summary = []
     for row in rows.values():
         checkins, checkouts = row.pop("checkins"), row.pop("checkouts")
+        avg_in, avg_out = row.pop("avg_in"), row.pop("avg_out")
+        mean_in, mean_out = _average_seconds(avg_in), _average_seconds(avg_out)
         row.update(
             checkin_count=len(checkins),
             checkout_count=len(checkouts),
-            avg_checkin=_average_time(checkins),
-            avg_checkout=_average_time(checkouts),
+            avg_days=len(avg_in),
+            avg_checkin=_clock(mean_in),
+            avg_checkout=_clock(mean_out),
+            avg_worked=_clock(mean_out - mean_in) if avg_in else "-",
         )
         summary.append(row)
     return summary
