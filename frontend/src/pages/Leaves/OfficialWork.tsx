@@ -9,7 +9,12 @@ import _ from "lodash";
 import { ToastContainer, toast } from "react-toastify";
 import { ColumnDef } from "@tanstack/react-table";
 import DatePicker from "../../components/form/date-picker";
-import { approverChoices, findApprovingAuthority } from "../../utils/sectionHead";
+import {
+  AUTO_APPROVE_MIN_GRADE,
+  approverChoices,
+  findApprovingAuthority,
+  gradeRank,
+} from "../../utils/sectionHead";
 import { useDepartmentSectionId } from "../../utils/useDepartmentSection";
 import SearchableDropdown from "../../components/form/input/SearchableDropDown";
 import Button from "../../components/ui/button/Button";
@@ -74,7 +79,10 @@ export default function OfficialWork() {
     employee_id: 0,
     leave_type: "",
     reason: "",
-    status: user.grade_id >= 9 ? "approved" : "pending",
+    // Pending until the employee list says the applicant's grade - see the
+    // effect below. The login only stores grade_id, which ranks an internee
+    // (id 12) above G-11.
+    status: "pending",
     // Filled in from the employee list once it loads - see findSectionHead.
     // Guessing from grade here showed one name before the real one arrived.
     head_erpid: "",
@@ -146,6 +154,7 @@ export default function OfficialWork() {
       employee_id: self.id,
       erp_id: self.erp_id,
       head_erpid: head ? head.erp_id : "",
+      status: gradeRank(self) >= AUTO_APPROVE_MIN_GRADE ? "approved" : "pending",
     };
 
     setData((prev) => ({ ...prev, ...selfDefaults.current }));
@@ -449,7 +458,11 @@ export default function OfficialWork() {
                 options={options}
                 placeholder="Select a employee"
                 label={
-                  user.grade_id < 9
+                  gradeRank(
+                    employeesData.find(
+                      (e: any) => Number(e.erp_id) === Number(user.erpid)
+                    )
+                  ) < AUTO_APPROVE_MIN_GRADE
                     ? `Employees`
                     : `Employee  (Status for Grade 9 and above is auto approved)`
                 }

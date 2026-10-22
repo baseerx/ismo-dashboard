@@ -20,12 +20,16 @@ export interface EmployeeLike {
  * Seniority as a number: G-11 is 11, G-01 is 1, higher is more senior.
  *
  * Prefers the grade's own label and falls back to `grade_id`, which carries the
- * same number. Anything unrecognisable ranks last rather than ranking top by
- * accident.
+ * same number for G-01 to G-11. A label without a number ("Internee") ranks 0,
+ * below G-01: its `grade_id` is 12, which would otherwise rank an internee
+ * above everyone and make them a section head. Anything unrecognisable ranks
+ * last rather than ranking top by accident.
  */
 export function gradeRank(employee: EmployeeLike | undefined | null): number {
-  const fromName = String(employee?.grade ?? "").replace(/\D/g, "");
+  const name = String(employee?.grade ?? "").trim();
+  const fromName = name.replace(/\D/g, "");
   if (fromName) return Number(fromName);
+  if (name) return 0;
 
   const fromId = Number(employee?.grade_id);
   return Number.isFinite(fromId) ? fromId : -1;
@@ -115,6 +119,13 @@ export function sortedApprovers<T extends EmployeeLike>(
  */
 export const DEPARTMENT_SECTION_NAME = "ISMO";
 export const DEPARTMENT_HEAD_MIN_GRADE = 10;
+
+/**
+ * The grade from which Official Work is created already approved. Compared
+ * against gradeRank, never the raw `grade_id`: Internee's id is 12, so
+ * `grade_id >= 9` auto-approved every internee.
+ */
+export const AUTO_APPROVE_MIN_GRADE = 9;
 
 /**
  * The head of the whole department: the most senior current employee in the
