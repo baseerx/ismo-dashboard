@@ -130,6 +130,7 @@ def section_day_records(session, params, section_filter):
             att.checkout_time
         ORDER BY
             s.name,
+            CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END,
             g.name DESC,
             se.name,
             se.erp_id,
@@ -287,6 +288,12 @@ def summarize_by_employee(day_records, total_days):
     return summary
 
 
+def _grade_rank(grade):
+    """"G-11" -> 11. Internee and missing grades rank below G-01."""
+    digits = "".join(ch for ch in str(grade or "") if ch.isdigit())
+    return int(digits) if digits else 0
+
+
 def _grouped_attendance(request, key, column, missing_message):
     """The section and location reports: one row per employee in the group.
 
@@ -328,7 +335,12 @@ def _grouped_attendance(request, key, column, missing_message):
     finally:
         session.close()
 
-    return JsonResponse(summarize_by_employee(records, (finish - start).days + 1), safe=False)
+    summary = summarize_by_employee(records, (finish - start).days + 1)
+    # Most senior first across the whole group, G-11 down to G-01, internees
+    # last. The sort is stable, so the section and name order within a grade
+    # stays as section_day_records gave it.
+    summary.sort(key=lambda row: -_grade_rank(row["grade"]))
+    return JsonResponse(summary, safe=False)
 
 
 class AttendanceView:
@@ -370,7 +382,7 @@ class AttendanceView:
                     ON e.hris_id = a.user_id
                     AND CAST(a.timestamp AS DATE) = :today
                 WHERE e.flag = 1
-                ORDER BY g.name DESC
+                ORDER BY CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END, g.name DESC
             """)
 
             result = session.execute(query, {"today": today}).fetchall()
@@ -500,7 +512,7 @@ class AttendanceView:
                     g.name,
                     s.name,
                     e.hris_id
-                ORDER BY g.name desc
+                ORDER BY CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END, g.name DESC
             """)
 
             result = session.execute(
@@ -735,7 +747,7 @@ class AttendanceView:
                     ON e.hris_id = a.user_id 
                     AND CAST(a.timestamp AS DATE) = dr.the_date
                 WHERE e.flag = 1
-                ORDER BY g.name DESC
+                ORDER BY CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END, g.name DESC
             """)
 
             result = session.execute(
@@ -859,6 +871,7 @@ class AttendanceView:
                     s.name,
                     e.hris_id
                 ORDER BY
+                    CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END,
                     g.name DESC,
                     dr.the_date,
                     e.erp_id
@@ -991,10 +1004,11 @@ class AttendanceView:
                     s.name, 
                     e.grade_id,
                     CAST(a.timestamp AS DATE)
-                -- Most senior first: G-11, then G-10, down to G-01. Ordered by
+                -- Most senior first: G-11, then G-10, down to G-01, internees
+                -- last (their grade_id, 12, is above G-11's). Ordered by
                 -- grade_id rather than the grade's name so it stays numeric if
                 -- a grade is ever labelled without its leading zero.
-                ORDER BY e.grade_id DESC, e.name, timestamp
+                ORDER BY CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END, e.grade_id DESC, e.name, timestamp
             """)
 
             result = session.execute(
@@ -1129,6 +1143,7 @@ class AttendanceView:
 
                 ORDER BY
                     dr.the_date,
+                    CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END,
                     g.name DESC,
                     e.erp_id
             """)
@@ -1505,8 +1520,9 @@ class AttendanceView:
             records = section_day_records(session, params, section_filter)
 
             # Supervising head of each section on the report — the most senior
-            # employee it holds (grade_id ranks G-01..G-11 low to high). Ties
-            # are ordered by name so the pick is stable between calls.
+            # employee it holds (grade_id ranks G-01..G-11 low to high). Internees
+            # are left out: their grade_id, 12, would otherwise outrank G-11.
+            # Ties are ordered by name so the pick is stable between calls.
             heads_query = text(f"""
                 SELECT
                     s.id    AS section_id,
@@ -1523,8 +1539,10 @@ class AttendanceView:
                     AND e.grade_id = (
                         SELECT MAX(e2.grade_id)
                         FROM employees e2
+                        INNER JOIN grades g2 ON g2.id = e2.grade_id
                         WHERE e2.flag = 1
                             AND e2.section_id = e.section_id
+                            AND g2.name LIKE 'G-%'
                     )
                     {section_filter}
                 ORDER BY s.name, e.name
@@ -1768,6 +1786,7 @@ class AttendanceView:
 
                 ORDER BY
                     ed.department,
+                    CASE WHEN ed.grade LIKE 'G-%' THEN 0 ELSE 1 END,
                     ed.grade DESC,
                     ed.name
             """)
@@ -2145,6 +2164,7 @@ class AttendanceView:
                        AND a.uid IS NOT NULL
                        AND a.status IN ('Checked In', 'Checked Out', 'Early Checked Out') AND e.flag = 1
                     ORDER BY
+                       CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END,
                        g.name DESC
                 """)
             elif status.lower() == 'absent':
@@ -2170,6 +2190,7 @@ class AttendanceView:
                       AND a.uid IS NULL
                       AND e.flag = 1
                     ORDER BY
+                        CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END,
                         g.name DESC
                 """)
             else:
@@ -2194,6 +2215,7 @@ class AttendanceView:
                     WHERE s.id = :section
                        AND a.status IN ('Checked In', 'Checked Out', 'Early Checked Out') AND e.flag = 1
                     ORDER BY
+                        CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END,
                         g.name DESC
                 """)
             result = session.execute(
@@ -2344,7 +2366,7 @@ GROUP BY Shift_Name;
                     sec.name,
                     s.Shift_Name,
                     CAST(a.timestamp AS DATE)
-                ORDER BY g.name DESC, attendance_date
+                ORDER BY CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END, g.name DESC, attendance_date
             """)
             attendance_records = session.execute(
                 query, {"shiftid": shiftid, "att_date": date_obj}).fetchall()
@@ -2534,7 +2556,7 @@ GROUP BY Shift_Name;
                     sec.name,
                     s.Shift_Name,
                     CAST(a.timestamp AS DATE)
-                ORDER BY g.name DESC, attendance_date
+                ORDER BY CASE WHEN g.name LIKE 'G-%' THEN 0 ELSE 1 END, g.name DESC, attendance_date
             """)
             attendance_records = session.execute(
                 query, {"shiftid": shiftid,
