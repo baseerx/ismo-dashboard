@@ -370,6 +370,19 @@ def create_application(request):
         None if "current_supervisor_name" in record_changes
         else record["current_supervisor_erp_id"]
     )
+    # A supervisor picked from the dropdown is one of the G-grade colleagues
+    # offered; that person is filed (under their own name) and alerted. Anything
+    # else posted as an id is ignored.
+    try:
+        chosen_erp_id = int(data.get("current_supervisor_erp_id") or 0)
+    except (TypeError, ValueError):
+        chosen_erp_id = 0
+    chosen = next(
+        (o for o in record.get("supervisor_options", []) if o["erp_id"] == chosen_erp_id), None
+    )
+    if chosen:
+        supervisor_erp_id = chosen["erp_id"]
+        cleaned["current_supervisor_name"] = chosen["name"][:150]
 
     # One row per vacancy, each carrying its own copy of the application. The
     # repetition is deliberate: an application is a snapshot of what was

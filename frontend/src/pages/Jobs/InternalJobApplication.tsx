@@ -6,6 +6,7 @@ import ComponentCard from "../../components/common/ComponentCard";
 import Label from "../../components/form/Label";
 import Input from "../../components/form/input/InputField";
 import Select from "../../components/form/Select";
+import SearchableDropdown from "../../components/form/input/SearchableDropDown";
 import Checkbox from "../../components/form/input/Checkbox";
 import Radio from "../../components/form/input/Radio";
 import TextArea from "../../components/form/input/TextArea";
@@ -607,6 +608,12 @@ export default function InternalJobApplication() {
   );
   const [limits, setLimits] = useState(DEFAULT_LIMITS);
   const [supervisorName, setSupervisorName] = useState("");
+  // G-grade colleagues in the applicant's section, most senior first, and the
+  // one picked (the most senior is preselected; internees are never offered).
+  const [supervisorOptions, setSupervisorOptions] = useState<
+    { erp_id: number; name: string; grade: string; designation: string }[]
+  >([]);
+  const [supervisorErpId, setSupervisorErpId] = useState("");
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [eduErrors, setEduErrors] = useState<RowErrors>({});
@@ -688,6 +695,10 @@ export default function InternalJobApplication() {
       if (profile.ack_data_accuracy_text) setAckAccuracyText(profile.ack_data_accuracy_text);
       if (profile.limits) setLimits({ ...DEFAULT_LIMITS, ...profile.limits });
       setSupervisorName(profile.current_supervisor_name || "");
+      setSupervisorOptions(profile.supervisor_options || []);
+      setSupervisorErpId(
+        profile.current_supervisor_erp_id ? String(profile.current_supervisor_erp_id) : ""
+      );
 
       const fromRecord: Record<string, string> = {};
       const take = (field: keyof FormState, value: unknown) => {
@@ -1197,6 +1208,9 @@ export default function InternalJobApplication() {
           current_designation: form.current_designation.trim(),
           current_grade: form.current_grade.trim(),
           current_supervisor_name: form.current_supervisor_name.trim(),
+          // Identifies the colleague picked from the dropdown, so they are the
+          // one notified.
+          current_supervisor_erp_id: supervisorErpId ? Number(supervisorErpId) : null,
           date_of_joining_ismo: form.date_of_joining_ismo,
           date_of_appointment_to_current_grade: form.date_of_appointment_to_current_grade,
           date_of_joining_current_position: form.date_of_joining_current_position,
@@ -1258,8 +1272,9 @@ export default function InternalJobApplication() {
       );
 
       toast.success(response.data?.message ?? "Your application has been submitted");
-      if (response.data?.supervisor_notified && supervisorName) {
-        toast.info(`${supervisorName} has been notified of your application.`);
+      const notifiedName = form.current_supervisor_name.trim() || supervisorName;
+      if (response.data?.supervisor_notified && notifiedName) {
+        toast.info(`${notifiedName} has been notified of your application.`);
       }
 
       // What the applicant typed for these vacancies is cleared; their own
@@ -1542,16 +1557,42 @@ export default function InternalJobApplication() {
                 Current Supervisor Name
                 {autoFilled("current_supervisor_name")}
               </Label>
-              <Input
-                id="current_supervisor_name"
-                placeholder={
-                  loadingProfile ? "" : "None on record - type your supervisor's name"
-                }
-                value={form.current_supervisor_name}
-                onChange={(e) => set("current_supervisor_name", e.target.value)}
-                error={!!errors.current_supervisor_name}
-                hint={errors.current_supervisor_name}
-              />
+              {supervisorOptions.length > 0 ? (
+                <div id="current_supervisor_name">
+                  {/* Searchable: a large section offers well over a hundred. */}
+                  <SearchableDropdown
+                    id="current_supervisor_select"
+                    options={supervisorOptions.map((option) => ({
+                      label: `${option.name} (${option.grade})${
+                        option.designation ? ` - ${option.designation}` : ""
+                      }`,
+                      value: String(option.erp_id),
+                    }))}
+                    placeholder="Select your supervisor"
+                    value={supervisorErpId}
+                    onChange={(value) => {
+                      setSupervisorErpId(String(value ?? ""));
+                      const picked = supervisorOptions.find(
+                        (option) => String(option.erp_id) === String(value)
+                      );
+                      set("current_supervisor_name", picked ? picked.name : "");
+                    }}
+                    error={!!errors.current_supervisor_name}
+                    hint={errors.current_supervisor_name}
+                  />
+                </div>
+              ) : (
+                <Input
+                  id="current_supervisor_name"
+                  placeholder={
+                    loadingProfile ? "" : "None on record - type your supervisor's name"
+                  }
+                  value={form.current_supervisor_name}
+                  onChange={(e) => set("current_supervisor_name", e.target.value)}
+                  error={!!errors.current_supervisor_name}
+                  hint={errors.current_supervisor_name}
+                />
+              )}
               {recordHint("current_supervisor_name")}
             </div>
           </div>
@@ -2392,7 +2433,11 @@ export default function InternalJobApplication() {
                 checked={form.ack_manager_notified_bool}
                 onChange={(checked) => set("ack_manager_notified_bool", checked)}
               />
-              {supervisorName && sameAsRecord("current_supervisor_name") ? (
+              {supervisorErpId && form.current_supervisor_name.trim() ? (
+                <FieldNote>
+                  {form.current_supervisor_name.trim()} will be notified when you submit.
+                </FieldNote>
+              ) : supervisorName && sameAsRecord("current_supervisor_name") ? (
                 <FieldNote>{supervisorName} will be notified when you submit.</FieldNote>
               ) : form.current_supervisor_name.trim() ? (
                 <FieldNote>
