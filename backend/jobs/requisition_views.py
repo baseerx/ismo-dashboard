@@ -28,7 +28,7 @@ from sqlalchemy import text
 
 from db import SessionLocal
 
-from .models import JobDescription, JobRequisition
+from .models import DEPARTMENT_SEPARATOR, JobDescription, JobGrade, JobRequisition, split_departments
 from .permissions import require_requisition_manager
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,9 @@ def _text(value) -> str:
 
 def department_and_location_options() -> dict:
     """The grades, departments (the `sections` table) and locations a vacancy
-    can name. Grades come in seniority order (by id: MG-01 up)."""
+    can name. Grades are Internal Hiring's own MG scale (`job_grades`), junior
+    first - never the employees' `grades` table, which Attendance and Leaves
+    rank people by."""
     session = SessionLocal()
     try:
         sections = session.execute(
@@ -60,13 +62,11 @@ def department_and_location_options() -> dict:
         locations = session.execute(
             text("SELECT name FROM locations WHERE name IS NOT NULL ORDER BY name")
         ).fetchall()
-        grades = session.execute(
-            text("SELECT name FROM grades WHERE name IS NOT NULL ORDER BY id")
-        ).fetchall()
     finally:
         session.close()
+    grades = JobGrade.objects.order_by("rank", "name").values_list("name", flat=True)
     return {
-        "grades": [row.name.strip() for row in grades if row.name and row.name.strip()],
+        "grades": [name.strip() for name in grades if name and name.strip()],
         "departments": [row.name.strip() for row in sections if row.name and row.name.strip()],
         "locations": [row.name.strip() for row in locations if row.name and row.name.strip()],
     }
@@ -116,6 +116,7 @@ def _serialize(requisition: JobRequisition, application_count: int = 0) -> dict:
         "reference_no": requisition.reference_no,
         "grade": requisition.grade,
         "department": requisition.department,
+        "departments": requisition.departments,
         "location": requisition.location,
         "description": requisition.description,
         "advertisement_date": advertised.isoformat() if advertised else None,
@@ -161,6 +162,16 @@ def _validate(data, existing: JobRequisition | None = None):
         errors["title"] = f"Keep the title within {MAX_TITLE} characters"
     cleaned["title"] = title
 
+    # One department, or several when the post is open to more than one: sent
+    # as a list (or a single name) and stored joined by DEPARTMENT_SEPARATOR.
+    raw_departments = data.get("department")
+    if isinstance(raw_departments, (list, tuple)):
+        departments = [_text(name) for name in raw_departments]
+    else:
+        departments = split_departments(raw_departments)
+    departments = list(dict.fromkeys(name for name in departments if name))
+    data = {**data, "department": DEPARTMENT_SEPARATOR.join(departments)}
+
     for field, label, maximum in (
         ("reference_no", "Advertisement / reference no.", MAX_REFERENCE),
         ("grade", "Grade", MAX_GRADE),
@@ -184,13 +195,21 @@ def _validate(data, existing: JobRequisition | None = None):
     if options is not None:
         for field, allowed, label in (
             ("grade", options.get("grades", []), "grade"),
-            ("department", options["departments"], "department"),
             ("location", options["locations"], "location"),
         ):
             value = cleaned.get(field)
             unchanged = existing is not None and (getattr(existing, field) or None) == value
             if value and not unchanged and value not in allowed:
                 errors[field] = f"Choose a {label} from the list"
+
+        # Every department named must be a section.
+        value = cleaned.get("department")
+        unchanged = existing is not None and (existing.department or None) == value
+        if value and not unchanged:
+            unknown = [name for name in split_departments(value)
+                       if name not in options["departments"]]
+            if unknown:
+                errors["department"] = f"Choose departments from the list ({', '.join(unknown)})"
 
     advertised_raw = _text(data.get("advertisement_date"))
     advertised = None
@@ -274,13 +293,8 @@ def _validate(data, existing: JobRequisition | None = None):
         if clash.exists():
             errors["title"] = "A vacancy with this title already exists"
 
-    reference = cleaned.get("reference_no")
-    if reference and not errors.get("reference_no"):
-        clash = JobRequisition.objects.filter(reference_no__iexact=reference)
-        if existing is not None:
-            clash = clash.exclude(id=existing.id)
-        if clash.exists():
-            errors["reference_no"] = "Another vacancy already uses this reference number"
+    # No uniqueness rule on the reference number: one advertisement carries
+    # many posts, and they all quote its reference.
 
     return cleaned, errors
 

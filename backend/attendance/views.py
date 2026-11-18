@@ -13,6 +13,7 @@ import requests  # Ensure you have requests installed in your environment
 from db import SessionLocal
 # Create your views here.
 from leaves.models import LeaveModel
+from leaves.views import as_time, short_leave_hours
 from holidays.models import Holiday
 
 load_dotenv()  # Load environment variables from .env file
@@ -20,6 +21,65 @@ load_dotenv()  # Load environment variables from .env file
 # Longest range the section report accepts in one request: a quarter, which is
 # already ~90 rows per employee.
 SECTION_REPORT_MAX_DAYS = 93
+
+
+def short_leave_deadlines(check_in_deadline, check_out_deadline, leave_start, leave_end):
+    """The day's check-in / check-out deadlines with an approved short leave's
+    hours exempted.
+
+    A short leave that covers the check-in deadline moves it to the time the
+    leave ends (away 08:00-10:00, so arriving by 10:00 is on time); one that
+    covers the check-out deadline moves it to the time the leave starts (away
+    14:00-16:00, so leaving at 14:00 is not early). A short leave in the middle
+    of the day touches neither. Without a short leave both stay as they are.
+    """
+    leave_start, leave_end = as_time(leave_start), as_time(leave_end)
+    if leave_start is None or leave_end is None or leave_end <= leave_start:
+        return check_in_deadline, check_out_deadline
+    if leave_start <= check_in_deadline < leave_end:
+        check_in_deadline = leave_end
+    if leave_start < check_out_deadline <= leave_end:
+        check_out_deadline = leave_start
+    return check_in_deadline, check_out_deadline
+
+
+def _hhmm(value):
+    """A TIME column as "HH:MM", or None."""
+    value = as_time(value)
+    return value.strftime("%H:%M") if value is not None else None
+
+
+def exempt_short_leave(checkin, checkout, leave_start, leave_end):
+    """A day's check-in / check-out ("YYYY-MM-DD HH:MM:SS") with an approved
+    short leave's hours exempted, for the averages.
+
+    Leave before the check-in moves the check-in earlier by exactly those
+    minutes (away 08:00-10:00, in at 10:05: counted as 08:05), and leave after
+    the check-out moves the check-out later by them (out at 14:00, away
+    14:00-16:00: counted as 16:00). Leave between the two is already inside the
+    worked span and changes nothing. Without a short leave both stay as they are.
+    """
+    leave_start, leave_end = as_time(leave_start), as_time(leave_end)
+    if leave_start is None or leave_end is None or leave_end <= leave_start:
+        return checkin, checkout
+
+    start_in = datetime.strptime(checkin, "%Y-%m-%d %H:%M:%S")
+    finish_out = datetime.strptime(checkout, "%Y-%m-%d %H:%M:%S")
+    away_from = datetime.combine(start_in.date(), leave_start)
+    away_to = datetime.combine(start_in.date(), leave_end)
+
+    before = max(timedelta(0), min(away_to, start_in) - away_from)
+    after = max(timedelta(0), away_to - max(away_from, finish_out))
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return (start_in - before).strftime(fmt), (finish_out + after).strftime(fmt)
+
+
+def short_leave_label(leave_start, leave_end):
+    """"10:00-12:00" for a day's short leave, or None."""
+    leave_start, leave_end = as_time(leave_start), as_time(leave_end)
+    if leave_start is None or leave_end is None:
+        return None
+    return f"{leave_start.strftime('%H:%M')}-{leave_end.strftime('%H:%M')}"
 
 
 def section_day_records(session, params, section_filter):
@@ -76,6 +136,20 @@ def section_day_records(session, params, section_filter):
                 AND end_date >= :fromdate
                 AND start_date <= :todate
         ),
+        short_leave_days AS (
+            -- Approved short leaves with their hours: a single date each.
+            SELECT erp_id,
+                   CAST(start_date AS DATE) AS leave_date,
+                   start_time,
+                   end_time
+            FROM leaves
+            WHERE status = 'approved'
+                AND LOWER(LTRIM(RTRIM(leave_type))) = 'short leave'
+                AND start_time IS NOT NULL
+                AND end_time IS NOT NULL
+                AND end_date >= :fromdate
+                AND start_date <= :todate
+        ),
         official_days AS (
             SELECT erp_id, leave_type,
                    CAST(start_date AS DATE) AS start_date,
@@ -99,6 +173,8 @@ def section_day_records(session, params, section_filter):
             s.name AS section,
             att.checkin_time,
             att.checkout_time,
+            MIN(sl.start_time) AS short_leave_start,
+            MAX(sl.end_time) AS short_leave_end,
             MAX(l.leave_type) AS leave_type,
             MAX(ow.leave_type) AS official_type,
             MAX(h.name) AS holiday_name
@@ -113,6 +189,9 @@ def section_day_records(session, params, section_filter):
         LEFT JOIN leave_days l
             ON l.erp_id = se.erp_id
             AND dr.the_date BETWEEN l.start_date AND l.end_date
+        LEFT JOIN short_leave_days sl
+            ON sl.erp_id = se.erp_id
+            AND sl.leave_date = dr.the_date
         LEFT JOIN official_days ow
             ON ow.erp_id = se.erp_id
             AND dr.the_date BETWEEN ow.start_date AND ow.end_date
@@ -147,12 +226,18 @@ def section_day_records(session, params, section_filter):
         checkin = row.checkin_time
         checkout = row.checkout_time
 
+        # An approved short leave's hours are exempt from the late / early marks.
+        day_check_in_deadline, day_check_out_deadline = short_leave_deadlines(
+            check_in_deadline, check_out_deadline,
+            row.short_leave_start, row.short_leave_end,
+        )
+
         late_status = "-"
         early_status = "-"
         if checkin is not None:
-            late_status = "Late" if checkin.time() > check_in_deadline else "On Time"
+            late_status = "Late" if checkin.time() > day_check_in_deadline else "On Time"
         if checkout is not None:
-            early_status = "Early" if checkout.time() < check_out_deadline else "On Time"
+            early_status = "Early" if checkout.time() < day_check_out_deadline else "On Time"
 
         # Day status precedence:
         # present > leave > official work > holiday > weekend > future (not reached) > absent
@@ -195,7 +280,14 @@ def section_day_records(session, params, section_filter):
             "early_status": early_status,
             "flag": flag,
             "flag_type": flag_type,
-            "on_leave": bool(row.leave_type),
+            # A full day of approved leave. An approved short leave with its
+            # hours is not: only those hours are exempt (see summarize_by_employee).
+            "on_leave": bool(row.leave_type) and row.short_leave_start is None,
+            "short_leave_start": _hhmm(row.short_leave_start),
+            "short_leave_end": _hhmm(row.short_leave_end),
+            # Approved short leave that day: "10:00-12:00" and its "H:MM".
+            "short_leave": short_leave_label(row.short_leave_start, row.short_leave_end),
+            "short_leave_hours": short_leave_hours(row.short_leave_start, row.short_leave_end),
         })
 
     return records
@@ -243,8 +335,10 @@ def summarize_by_employee(day_records, total_days):
     - checkin_count / checkout_count: days on which they checked in / out
     - avg_checkin / avg_checkout: average time of the day's first check-in and
       last check-out, over the same days: those with both a check-in and a
-      check-out at least a minute later, and no approved leave. Leave, absent,
-      holiday and weekend days, and days missing either punch, are left out.
+      check-out at least a minute later, and no full day of approved leave.
+      Leave, absent, holiday and weekend days, and days missing either punch,
+      are left out. An approved short leave with its hours keeps the day in and
+      exempts just those hours (see exempt_short_leave).
     - avg_worked: avg_checkout - avg_checkin, the average working day
     Employees keep the order section_day_records gives them.
     """
@@ -268,8 +362,13 @@ def summarize_by_employee(day_records, total_days):
             row["checkouts"].append(record["checkout_time"])
         if (not record.get("on_leave")
                 and _counts_for_average(record["checkin_time"], record["checkout_time"])):
-            row["avg_in"].append(record["checkin_time"])
-            row["avg_out"].append(record["checkout_time"])
+            # An approved short leave counts only its own hours as exempt.
+            checkin, checkout = exempt_short_leave(
+                record["checkin_time"], record["checkout_time"],
+                record.get("short_leave_start"), record.get("short_leave_end"),
+            )
+            row["avg_in"].append(checkin)
+            row["avg_out"].append(checkout)
 
     summary = []
     for row in rows.values():
@@ -1913,6 +2012,20 @@ class AttendanceView:
                         AND end_date >= :fromdate
                         AND start_date <= :todate
                 ),
+                short_leave_days AS (
+                    -- Approved short leaves with their hours: a single date each.
+                    SELECT CAST(start_date AS DATE) AS leave_date,
+                           start_time,
+                           end_time
+                    FROM leaves
+                    WHERE status = 'approved'
+                        AND erp_id = :erpid
+                        AND LOWER(LTRIM(RTRIM(leave_type))) = 'short leave'
+                        AND start_time IS NOT NULL
+                        AND end_time IS NOT NULL
+                        AND end_date >= :fromdate
+                        AND start_date <= :todate
+                ),
                 official_days AS (
                     SELECT erp_id, leave_type,
                            CAST(start_date AS DATE) AS start_date,
@@ -1934,6 +2047,8 @@ class AttendanceView:
                     MAX(att.checkout_time)  AS checkout_time,
                     MAX(att.lateintime)     AS lateintime,
                     MAX(att.punches)        AS punches,
+                    MIN(sl.start_time)      AS short_leave_start,
+                    MAX(sl.end_time)        AS short_leave_end,
                     MAX(l.leave_type)       AS leave_type,
                     MAX(ow.leave_type)      AS official_type,
                     MAX(h.name)             AS holiday_name
@@ -1942,6 +2057,8 @@ class AttendanceView:
                     ON att.att_date = dr.the_date
                 LEFT JOIN leave_days l
                     ON dr.the_date BETWEEN l.start_date AND l.end_date
+                LEFT JOIN short_leave_days sl
+                    ON sl.leave_date = dr.the_date
                 LEFT JOIN official_days ow
                     ON dr.the_date BETWEEN ow.start_date AND ow.end_date
                 LEFT JOIN holiday_days h
@@ -1966,15 +2083,22 @@ class AttendanceView:
                     else row.the_date
                 )
 
+                # An approved short leave's hours are exempt from the late /
+                # early marks.
+                day_check_in_deadline, day_check_out_deadline = short_leave_deadlines(
+                    check_in_deadline, check_out_deadline,
+                    row.short_leave_start, row.short_leave_end,
+                )
+
                 late_status = "-"
                 early_status = "-"
                 if checkin is not None:
                     late_status = (
-                        "Late" if checkin.time() > check_in_deadline else "On Time"
+                        "Late" if checkin.time() > day_check_in_deadline else "On Time"
                     )
                 if checkout is not None:
                     early_status = (
-                        "Early" if checkout.time() < check_out_deadline else "On Time"
+                        "Early" if checkout.time() < day_check_out_deadline else "On Time"
                     )
 
                 # A day the device recorded at all counts as present, matching
@@ -2004,6 +2128,13 @@ class AttendanceView:
                     "early_status": early_status,
                     "status": status,
                     "status_type": status_type,
+                    # Approved short leave that day: "10:00-12:00" and its "H:MM".
+                    "short_leave": short_leave_label(
+                        row.short_leave_start, row.short_leave_end
+                    ),
+                    "short_leave_hours": short_leave_hours(
+                        row.short_leave_start, row.short_leave_end
+                    ),
                 })
 
             # Days already spoken for by an actual punch — an approved leave day
@@ -2021,7 +2152,9 @@ class AttendanceView:
                     l.reason,
                     l.status,
                     l.approved_by,
-                    l.created_at
+                    l.created_at,
+                    l.start_time,
+                    l.end_time
                 FROM leaves l
                 WHERE l.erp_id = :erpid
                     AND l.end_date >= :fromdate
@@ -2070,6 +2203,11 @@ class AttendanceView:
                     "start_date": start.strftime("%Y-%m-%d") if start else "-",
                     "end_date": end.strftime("%Y-%m-%d") if end else "-",
                     "total_days": leave.total_days,
+                    # Short leave only: "10:00-12:00" and its "H:MM".
+                    "short_leave": short_leave_label(leave.start_time, leave.end_time),
+                    "short_leave_hours": short_leave_hours(
+                        leave.start_time, leave.end_time
+                    ),
                     "days_in_month": len(dates),
                     "counted_days": counted,
                     "reason": leave.reason or "-",
@@ -2735,8 +2873,21 @@ GROUP BY Shift_Name;
             checkin = att.checkin_time if att else None
             checkout = att.checkout_time if att else None
 
-            check_in_deadline = time(8, 30)
-            check_out_deadline = time(16, 0)
+            # An approved short leave today exempts its hours from the late /
+            # early marks.
+            short_leave = session.execute(text("""
+                SELECT MIN(start_time) AS start_time, MAX(end_time) AS end_time
+                FROM leaves
+                WHERE erp_id = :erp_id AND status = 'approved'
+                AND LOWER(LTRIM(RTRIM(leave_type))) = 'short leave'
+                AND CAST(start_date AS DATE) = :today
+            """), {"erp_id": employee.erp_id, "today": today}).first()
+            short_start = short_leave.start_time if short_leave else None
+            short_end = short_leave.end_time if short_leave else None
+
+            check_in_deadline, check_out_deadline = short_leave_deadlines(
+                time(8, 30), time(16, 0), short_start, short_end,
+            )
 
             late_status = "-"
             early_status = "-"
@@ -2790,6 +2941,8 @@ GROUP BY Shift_Name;
                 "early_status": early_status,
                 "flag": flag,
                 "flag_type": flag_type,
+                "short_leave": short_leave_label(short_start, short_end),
+                "short_leave_hours": short_leave_hours(short_start, short_end),
             }, status=200)
 
         finally:

@@ -96,6 +96,9 @@ export default function SectionMonthlyReport() {
 
   const monthInputRef = useRef<HTMLInputElement>(null);
 
+  // Narrows the grid (and what is printed / exported) to matching employees.
+  const [search, setSearch] = useState<string>("");
+
   const monthStart = moment(month, "YYYY-MM");
   const daysInMonth = monthStart.daysInMonth();
 
@@ -194,7 +197,7 @@ export default function SectionMonthlyReport() {
   // Pivot the flat (employee, day) rows into one record per employee keyed by
   // date, then bucket the employees under their section. The backend already
   // orders by section → grade → name, so insertion order is the report order.
-  const sectionGroups: SectionGroup[] = useMemo(() => {
+  const allSectionGroups: SectionGroup[] = useMemo(() => {
     const empMap = new Map<string, EmployeeMonthly>();
     const empOrder: string[] = [];
 
@@ -237,13 +240,35 @@ export default function SectionMonthlyReport() {
     }));
   }, [rows]);
 
+  // The search matches name, ERP ID, designation, grade or section. Sections
+  // left with no match drop out; the order within each stays as it was.
+  const searchTerm = search.trim().toLowerCase();
+  const sectionGroups: SectionGroup[] = useMemo(() => {
+    if (!searchTerm) return allSectionGroups;
+    return allSectionGroups
+      .map((group) => ({
+        section: group.section,
+        employees: group.employees.filter((emp) =>
+          [emp.name, emp.erp_id, emp.designation, emp.grade, emp.section]
+            .some((field) => String(field ?? "").toLowerCase().includes(searchTerm))
+        ),
+      }))
+      .filter((group) => group.employees.length > 0);
+  }, [allSectionGroups, searchTerm]);
+
   const employees = useMemo(
     () => sectionGroups.flatMap((g) => g.employees),
     [sectionGroups]
   );
 
+  const totalEmployees = useMemo(
+    () => allSectionGroups.reduce((sum, g) => sum + g.employees.length, 0),
+    [allSectionGroups]
+  );
+
   // Only label rows with their section once more than one is on the report.
-  const showSectionBands = sectionGroups.length > 1;
+  // Decided on the whole report, so a search does not hide the bands.
+  const showSectionBands = allSectionGroups.length > 1;
 
   const headBySection = useMemo(() => {
     const map = new Map<string, SectionHead>();
@@ -251,10 +276,11 @@ export default function SectionMonthlyReport() {
     return map;
   }, [heads]);
 
-  // With a single section on the report its head heads the whole page.
+  // With a single section on the report its head heads the whole page. Taken
+  // from the whole report, so the head does not change while searching.
   const primaryHead =
-    sectionGroups.length === 1
-      ? headBySection.get(sectionGroups[0].section)
+    allSectionGroups.length === 1
+      ? headBySection.get(allSectionGroups[0].section)
       : undefined;
 
   const headRank = (h: SectionHead) =>
@@ -279,7 +305,7 @@ export default function SectionMonthlyReport() {
     sectionId === ALL_SECTIONS
       ? "All Sections"
       : sectionOptions.find((o) => o.value === sectionId)?.label ||
-        sectionGroups[0]?.section ||
+        allSectionGroups[0]?.section ||
         "";
 
   const dayKey = (d: number) => monthStart.clone().date(d).format("YYYY-MM-DD");
@@ -691,6 +717,23 @@ export default function SectionMonthlyReport() {
                   </p>
                 )}
               </div>
+
+              <div className="w-full sm:w-64">
+                <Label htmlFor="employee-search">Search</Label>
+                <input
+                  id="employee-search"
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Name, ERP ID, designation, grade"
+                  className="h-11 w-full appearance-none rounded-lg border border-gray-300 bg-transparent px-4 py-2.5 text-sm text-gray-800 shadow-theme-xs placeholder:text-gray-400 focus:border-brand-300 focus:outline-hidden focus:ring-3 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90 dark:placeholder:text-white/30"
+                />
+                {searchTerm && totalEmployees > 0 && (
+                  <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    Showing {employees.length} of {totalEmployees} employee(s)
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="flex gap-2">
@@ -721,6 +764,10 @@ export default function SectionMonthlyReport() {
           {loading ? (
             <div className="flex h-40 items-center justify-center text-sm text-gray-400 dark:text-gray-500">
               Loading monthly report...
+            </div>
+          ) : employees.length === 0 && totalEmployees > 0 ? (
+            <div className="flex h-40 items-center justify-center text-sm text-gray-400 dark:text-gray-500">
+              No employee matches "{search.trim()}".
             </div>
           ) : employees.length === 0 ? (
             <div className="flex h-40 items-center justify-center text-sm text-gray-400 dark:text-gray-500">

@@ -14,6 +14,7 @@ import Button from "../../components/ui/button/Button";
 import Label from "../../components/form/Label";
 import Select from "../../components/form/Select";
 import TextArea from "../../components/form/input/TextArea";
+import Input from "../../components/form/input/InputField";
 import Badge from "../../components/ui/badge/Badge";
 import { LeaveIcon, InfoIcon } from "../../icons";
 import { approverChoices, findApprovingAuthority } from "../../utils/sectionHead";
@@ -30,6 +31,11 @@ const ATTACHMENT_EXTENSIONS = [
 ];
 const ATTACHMENT_MAX_MB = 5;
 
+// A short leave is part of one day, so it takes a date plus the hours away
+// instead of a date range. Kept in step with SHORT_LEAVE in leaves/views.py,
+// which enforces the same rule.
+const SHORT_LEAVE = "short leave";
+
 type AttendanceRow = {
   id?: number;
   employee_id: any;
@@ -41,6 +47,11 @@ type AttendanceRow = {
   leave_type: string;
   start_date: string;
   end_date: string;
+  // "HH:mm", short leave only.
+  start_time?: string | null;
+  end_time?: string | null;
+  // "H:MM" between start_time and end_time, from the backend.
+  short_leave_hours?: string | null;
   head?: any;
   head_erpid?: any;
   reason: string;
@@ -131,6 +142,8 @@ export default function IndividualAttendance() {
     head: "",
     start_date: moment().format("YYYY-MM-DD").toString(),
     end_date: moment().format("YYYY-MM-DD").toString(),
+    start_time: "",
+    end_time: "",
   });
 
   const buildBlankFieldErrors = (): AttendanceRow => ({
@@ -143,6 +156,8 @@ export default function IndividualAttendance() {
     approved_by: "",
     start_date: "",
     end_date: "",
+    start_time: "",
+    end_time: "",
   });
 
   const [data, setData] = useState<AttendanceRow>(buildBlankForm);
@@ -167,6 +182,21 @@ export default function IndividualAttendance() {
   const attachmentAllowed = MEDICAL_LEAVE_TYPES.includes(
     (data.leave_type || "").trim().toLowerCase()
   );
+
+  const isShortLeave =
+    (data.leave_type || "").trim().toLowerCase() === SHORT_LEAVE;
+
+  // "H:MM" between the picked start and end time, or "" until both are set
+  // and in order. Same sum as short_leave_hours in leaves/views.py.
+  const shortLeaveHours = (() => {
+    const toMinutes = (hhmm?: string | null) => {
+      const [h, m] = (hhmm || "").split(":").map(Number);
+      return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : NaN;
+    };
+    const minutes = toMinutes(data.end_time) - toMinutes(data.start_time);
+    if (!isShortLeave || !(minutes > 0)) return "";
+    return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
+  })();
 
   const pickAttachment = (file: File | null) => {
     if (!file) {
@@ -393,6 +423,8 @@ export default function IndividualAttendance() {
             "start_date",
             "head_erpid",
             "end_date",
+            "start_time",
+            "end_time",
             "reason",
             "status",
             "created_at",
@@ -437,6 +469,20 @@ export default function IndividualAttendance() {
     {
       header: "End Date",
       accessorKey: "end_date",
+    },
+    {
+      header: "Time",
+      id: "time",
+      cell: ({ row }) =>
+        row.original.start_time && row.original.end_time ? (
+          `${row.original.start_time} - ${row.original.end_time}${
+            row.original.short_leave_hours
+              ? ` (${row.original.short_leave_hours} hrs)`
+              : ""
+          }`
+        ) : (
+          <span className="text-gray-400 dark:text-gray-500">—</span>
+        ),
     },
     {
       header: "Leave Count",
@@ -531,6 +577,24 @@ export default function IndividualAttendance() {
 
   const applyLeave = async (data: AttendanceRow) => {
     try {
+      // A short leave is one day: the end date follows the date picked, and
+      // the hours are required. Other leave types send no times.
+      if (isShortLeave) {
+        data = { ...data, end_date: data.start_date };
+      } else {
+        data = { ...data, start_time: null, end_time: null };
+      }
+
+      const startTimeError =
+        isShortLeave && !data.start_time ? "Start Time is required" : "";
+      const endTimeError = !isShortLeave
+        ? ""
+        : !data.end_time
+          ? "End Time is required"
+          : data.start_time && data.end_time <= data.start_time
+            ? "End Time must be after Start Time"
+            : "";
+
       if (
         !data.employee_id ||
         !data.leave_type ||
@@ -538,7 +602,9 @@ export default function IndividualAttendance() {
         !data.approved_by ||
         !data.end_date ||
         !data.reason ||
-        !data.head
+        !data.head ||
+        startTimeError ||
+        endTimeError
       ) {
         setFieldError({
           erp_id: !data.erp_id ? "ERP ID is required" : "",
@@ -549,6 +615,8 @@ export default function IndividualAttendance() {
           head: !data.head ? "Section Head is required" : "",
           start_date: !data.start_date ? "Start Date is required" : "",
           end_date: !data.end_date ? "End Date is required" : "",
+          start_time: startTimeError,
+          end_time: endTimeError,
         });
         return;
       }
@@ -741,7 +809,7 @@ export default function IndividualAttendance() {
               <DatePicker
                 id="from-date-picker"
                 defaultDate={data.start_date.toString()}
-                label="from date"
+                label={isShortLeave ? "date" : "from date"}
                 placeholder="Select a date"
                 onChange={(dates, currentDateString) => {
                   console.log(dates);
@@ -750,19 +818,58 @@ export default function IndividualAttendance() {
                 }}
               />
             </div>
-            <div className="w-full">
-              <DatePicker
-                id="to-date-picker"
-                defaultDate={data.end_date.toString()}
-                label="to date"
-                placeholder="Select a date"
-                onChange={(dates, currentDateString) => {
-                  console.log(dates);
-                  // Handle your logic
-                  setData({ ...data, end_date: currentDateString });
-                }}
-              />
-            </div>
+            {isShortLeave ? (
+              // Short leave: one day, so the hours away replace the To date.
+              <div className="w-full grid grid-cols-2 gap-3">
+                <div>
+                  <Label htmlFor="short-leave-start">Start Time</Label>
+                  <Input
+                    id="short-leave-start"
+                    type="time"
+                    value={data.start_time || ""}
+                    onChange={(e) => {
+                      setData({ ...data, start_time: e.target.value });
+                      setFieldError((prev) => ({ ...prev, start_time: "" }));
+                    }}
+                    error={!!fielderror.start_time}
+                    hint={fielderror.start_time || ""}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="short-leave-end">End Time</Label>
+                  <Input
+                    id="short-leave-end"
+                    type="time"
+                    value={data.end_time || ""}
+                    onChange={(e) => {
+                      setData({ ...data, end_time: e.target.value });
+                      setFieldError((prev) => ({ ...prev, end_time: "" }));
+                    }}
+                    error={!!fielderror.end_time}
+                    hint={fielderror.end_time || ""}
+                  />
+                </div>
+                {shortLeaveHours && (
+                  <p className="col-span-2 text-sm text-gray-500 dark:text-gray-400">
+                    Short leave: {shortLeaveHours} hrs
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="w-full">
+                <DatePicker
+                  id="to-date-picker"
+                  defaultDate={data.end_date.toString()}
+                  label="to date"
+                  placeholder="Select a date"
+                  onChange={(dates, currentDateString) => {
+                    console.log(dates);
+                    // Handle your logic
+                    setData({ ...data, end_date: currentDateString });
+                  }}
+                />
+              </div>
+            )}
             {/* Shown for every grade — grade 9 and above used to have this
                 field hidden and were auto-approved. */}
             <div className="w-full my-3">

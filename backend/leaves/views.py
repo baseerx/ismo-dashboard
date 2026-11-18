@@ -11,7 +11,7 @@ import os
 import uuid
 from sqlalchemy import text, bindparam
 from db import SessionLocal
-from datetime import datetime,date,timedelta
+from datetime import datetime,date,time,timedelta
 from holidays.models import Holiday
 from officialwork.models import OfficialWorkModel
 from notifications.service import (
@@ -37,6 +37,53 @@ GENDER_RESTRICTED_LEAVE_TYPES = {
 MIN_SERVICE_YEARS_LEAVE_TYPES = {
     "hajj leave": 3,
 }
+
+# A short leave is part of one day: a single date plus the start and end time.
+# Kept in step with SHORT_LEAVE in ApplyLeave.tsx.
+SHORT_LEAVE = "short leave"
+
+
+def parse_short_leave_times(data):
+    """(start_time, end_time, error) from the "HH:MM" fields of a short leave."""
+    try:
+        start_time = datetime.strptime(str(data.get("start_time") or ""), "%H:%M").time()
+        end_time = datetime.strptime(str(data.get("end_time") or ""), "%H:%M").time()
+    except ValueError:
+        return None, None, "Short leave needs a start time and an end time, like 10:00"
+    if end_time <= start_time:
+        return None, None, "Short leave end time must be after the start time"
+    return start_time, end_time, None
+
+
+def as_time(value):
+    """A TIME column as a datetime.time. The ODBC driver may hand it back as a
+    time, a datetime or an "HH:MM[:SS[.fff]]" string; None stays None."""
+    if value is None or isinstance(value, time):
+        return value
+    if isinstance(value, datetime):
+        return value.time()
+    try:
+        return datetime.strptime(str(value).split(".")[0], "%H:%M:%S").time()
+    except ValueError:
+        try:
+            return datetime.strptime(str(value), "%H:%M").time()
+        except ValueError:
+            return None
+
+
+def short_leave_minutes(start_time, end_time):
+    """Minutes between a short leave's start and end time, 0 when either is
+    missing or they are out of order."""
+    start_time, end_time = as_time(start_time), as_time(end_time)
+    if start_time is None or end_time is None or end_time <= start_time:
+        return 0
+    return (end_time.hour * 60 + end_time.minute) - (start_time.hour * 60 + start_time.minute)
+
+
+def short_leave_hours(start_time, end_time):
+    """A short leave's length as "H:MM" (e.g. "2:30"), or None without times."""
+    minutes = short_leave_minutes(start_time, end_time)
+    return f"{minutes // 60}:{minutes % 60:02d}" if minutes else None
 
 
 def current_financial_year(today=None):
@@ -93,9 +140,11 @@ def get_leave_requests(request,erpid):
             l.end_date,
             l.reason,
             l.status,
-            l.created_at
+            l.created_at,
+            l.start_time,
+            l.end_time
         FROM leaves l
-        LEFT JOIN employees e 
+        LEFT JOIN employees e
             ON l.erp_id = e.erp_id
         LEFT JOIN employees h
             ON l.head_erpid = h.erp_id
@@ -143,6 +192,10 @@ def get_leave_requests(request,erpid):
             "reason": row[9],
             "status": row[10],
             "created_at": row[11].strftime('%Y-%m-%d %H:%M:%S'),
+            # Short leave only; None for every other leave type.
+            "start_time": as_time(row[12]).strftime('%H:%M') if as_time(row[12]) else None,
+            "end_time": as_time(row[13]).strftime('%H:%M') if as_time(row[13]) else None,
+            "short_leave_hours": short_leave_hours(row[12], row[13]),
             "head_erpid": '-' if row[5]==0 else row[5],
             "head_name": row[6],
             **attachments.get(row[0], no_attachment),
@@ -1527,6 +1580,20 @@ def create_leave_request(request):
             )
 
         # --------------------------------------------------
+        # SHORT LEAVE: ONE DATE PLUS START AND END TIME
+        # --------------------------------------------------
+        start_time = end_time = None
+        if leave_type.strip().lower() == SHORT_LEAVE:
+            if start_date != end_date:
+                return JsonResponse(
+                    {"error": "Short leave is for a single date"},
+                    status=400
+                )
+            start_time, end_time, time_error = parse_short_leave_times(data)
+            if time_error:
+                return JsonResponse({"error": time_error}, status=400)
+
+        # --------------------------------------------------
         # GENDER RESTRICTION CHECK
         # --------------------------------------------------
         required_gender = GENDER_RESTRICTED_LEAVE_TYPES.get(leave_type.lower())
@@ -1748,6 +1815,8 @@ def create_leave_request(request):
             approved_by=data.get("approved_by", ""),
             start_date=start_date,
             end_date=end_date,
+            start_time=start_time,
+            end_time=end_time,
         )
 
         if upload is not None:

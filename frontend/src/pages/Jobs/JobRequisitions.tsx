@@ -8,6 +8,7 @@ import Input from "../../components/form/input/InputField";
 import TextArea from "../../components/form/input/TextArea";
 import Checkbox from "../../components/form/input/Checkbox";
 import Select from "../../components/form/Select";
+import MultiSelect from "../../components/form/MultiSelect";
 import DateField from "../../components/form/DateField";
 import Button from "../../components/ui/button/Button";
 import Badge from "../../components/ui/badge/Badge";
@@ -33,6 +34,8 @@ type Requisition = {
   reference_no: string | null;
   grade: string | null;
   department: string | null;
+  /** The departments whose employees may apply; empty means anyone. */
+  departments: string[];
   location: string | null;
   description: string | null;
   advertisement_date: string | null;
@@ -60,7 +63,8 @@ type FormState = {
   title: string;
   reference_no: string;
   grade: string;
-  department: string;
+  /** One department, or several when the post is open to more than one. */
+  departments: string[];
   location: string;
   advertisement_date: string;
   closing_date: string;
@@ -73,7 +77,7 @@ const blankForm = (): FormState => ({
   title: "",
   reference_no: "",
   grade: "",
-  department: "",
+  departments: [],
   location: "",
   advertisement_date: "",
   closing_date: "",
@@ -148,6 +152,25 @@ export default function JobRequisitions() {
       : []),
   ];
 
+  /**
+   * A job description's pay scale as it appears in the Grade list: "MG-4",
+   * "MG 4" or "mg-04" all become "MG-04". Empty when it is not in the list.
+   */
+  const gradeFromDescription = (value: string) => {
+    const match = /^\s*MG\s*-?\s*0*(\d{1,2})\s*$/i.exec(value || "");
+    if (!match) return "";
+    const label = `MG-${match[1].padStart(2, "0")}`;
+    return grades.includes(label) ? label : "";
+  };
+
+  /** Picking a job description also selects the grade its pay scale names. */
+  const chooseDescription = (value: string) => {
+    set("job_description_id", value);
+    const picked = jobDescriptions.find((item) => String(item.id) === value);
+    const grade = picked ? gradeFromDescription(picked.grade) : "";
+    if (grade) set("grade", grade);
+  };
+
   /** The active descriptions a vacancy can be advertised against. */
   const loadDescriptions = async () => {
     try {
@@ -205,7 +228,7 @@ export default function JobRequisitions() {
     ) {
       problems.closing_date = "The closing date is before the advertisement date";
     }
-    if (form.department.length > MAX_DEPARTMENT) {
+    if (form.departments.join(", ").length > MAX_DEPARTMENT) {
       problems.department = `Keep the department within ${MAX_DEPARTMENT} characters`;
     }
     if (form.location.length > MAX_LOCATION) {
@@ -315,7 +338,7 @@ export default function JobRequisitions() {
       title: form.title.trim(),
       reference_no: form.reference_no.trim(),
       grade: form.grade.trim(),
-      department: form.department.trim(),
+      department: form.departments,
       location: form.location.trim(),
       description: form.description.trim(),
       advertisement_date: form.advertisement_date || null,
@@ -370,7 +393,7 @@ export default function JobRequisitions() {
       title: requisition.title,
       reference_no: requisition.reference_no ?? "",
       grade: requisition.grade ?? "",
-      department: requisition.department ?? "",
+      departments: requisition.departments ?? [],
       location: requisition.location ?? "",
       advertisement_date: requisition.advertisement_date ?? "",
       closing_date: requisition.closing_date ?? "",
@@ -529,21 +552,37 @@ export default function JobRequisitions() {
             </div>
 
             <div>
-              <Label htmlFor="department">Department / Function</Label>
               <div id="department">
-                <Select
+                {/* Several departments when the post is open to more than one;
+                    only their employees can apply. */}
+                <MultiSelect
                   key={`department-${editingId ?? "new"}-${departments.length}`}
+                  label="Eligible Department(s)"
                   options={[
-                    { label: "Not specified", value: "" },
-                    ...choices(departments, form.department),
-                  ]}
-                  placeholder="Select department"
-                  value={form.department}
-                  onChange={(value) => set("department", value)}
-                  error={!!errors.department}
-                  hint={errors.department}
+                    ...departments,
+                    ...form.departments.filter((name) => !departments.includes(name)),
+                  ].map((name) => ({ value: name, text: name }))}
+                  defaultSelected={form.departments}
+                  placeholder="Any department"
+                  onChange={(selected) => {
+                    setForm((previous) => ({ ...previous, departments: selected }));
+                    setErrors((previous) => {
+                      if (!previous.department) return previous;
+                      const next = { ...previous };
+                      delete next.department;
+                      return next;
+                    });
+                  }}
                 />
               </div>
+              {errors.department ? (
+                <p className="mt-1 text-xs text-error-500">{errors.department}</p>
+              ) : (
+                <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                  Only employees of these departments see and can apply for the post.
+                  Leave empty to open it to everyone.
+                </p>
+              )}
               {optionsError && (
                 <p className="mt-1 text-xs text-warning-600">
                   The grade, department and location lists could not be loaded.{" "}
@@ -615,7 +654,7 @@ export default function JobRequisitions() {
                   }))}
                   placeholder="Select this position's job description"
                   value={form.job_description_id}
-                  onChange={(value) => set("job_description_id", value)}
+                  onChange={chooseDescription}
                   error={!!errors.job_description_id}
                   hint={errors.job_description_id}
                 />

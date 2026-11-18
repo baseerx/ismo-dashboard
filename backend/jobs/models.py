@@ -38,6 +38,36 @@ def _as_list(value) -> list:
     return parsed if isinstance(parsed, list) else []
 
 
+class JobGrade(models.Model):
+    """A grade a post is advertised at - the MG scale ("MG-01" .. "MG-10").
+
+    Internal Hiring's own list, kept apart from the employees' `grades` table on
+    purpose: Attendance, Leaves and the section-head rules rank people by that
+    table, and advertised grades must not leak into them. `rank` orders the
+    dropdown, junior first.
+    """
+
+    name = models.CharField(max_length=40, unique=True)
+    rank = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = 'job_grades'
+        ordering = ['rank', 'name']
+
+    def __str__(self):
+        return self.name
+
+
+# An opening open to several departments stores them in `department` joined by
+# this; no section name contains it.
+DEPARTMENT_SEPARATOR = ", "
+
+
+def split_departments(value) -> list:
+    """The department names in a `department` value, in order."""
+    return [part.strip() for part in str(value or "").split(DEPARTMENT_SEPARATOR) if part.strip()]
+
+
 class JobDescription(models.Model):
     """A job description, written once and attached to the vacancies for it.
 
@@ -95,7 +125,9 @@ class JobRequisition(models.Model):
     grade = models.CharField(max_length=40, null=True, blank=True)
     # "Department / Function" - free text rather than a foreign key to
     # `sections`, because a post is often advertised for a business unit that is
-    # not one section exactly.
+    # not one section exactly. A post open to several departments lists them
+    # all, joined by DEPARTMENT_SEPARATOR; only employees of those departments
+    # may apply (see `departments`).
     department = models.CharField(max_length=200, null=True, blank=True)
     advertisement_date = models.DateField(null=True, blank=True)
     closing_date = models.DateField(null=True, blank=True)
@@ -145,6 +177,18 @@ class JobRequisition(models.Model):
 
     def __str__(self):
         return self.title
+
+    @property
+    def departments(self) -> list:
+        """The departments whose employees may apply. Empty means anyone."""
+        return split_departments(self.department)
+
+    def open_to_department(self, section_name) -> bool:
+        """Whether an employee of `section_name` may apply for this post."""
+        eligible = self.departments
+        if not eligible:
+            return True
+        return str(section_name or "").strip().lower() in {d.lower() for d in eligible}
 
     @property
     def is_live(self) -> bool:

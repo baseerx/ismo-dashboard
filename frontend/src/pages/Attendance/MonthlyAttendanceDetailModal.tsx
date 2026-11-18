@@ -42,6 +42,9 @@ type LeaveRow = {
   start_date: string;
   end_date: string;
   total_days: number;
+  // Short leave only: "10:00-12:00" and its "H:MM".
+  short_leave?: string | null;
+  short_leave_hours?: string | null;
   days_in_month: number;
   counted_days: number;
   reason: string;
@@ -323,6 +326,12 @@ export default function MonthlyAttendanceDetailModal({
                 <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   {moment(leave.start_date).format("DD MMM YYYY")} —{" "}
                   {moment(leave.end_date).format("DD MMM YYYY")}
+                  {leave.short_leave &&
+                    ` · ${leave.short_leave}${
+                      leave.short_leave_hours
+                        ? ` (${leave.short_leave_hours} hrs)`
+                        : ""
+                    }`}
                 </div>
               </div>
 

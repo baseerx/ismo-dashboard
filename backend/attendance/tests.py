@@ -150,10 +150,11 @@ class ManualEntryTests(TestCase):
         self.assertEqual(history[0]["reason"], "Forgot to punch, confirmed by head")
 
 
-def day(date_text, checkin="-", checkout="-", on_leave=False):
+def day(date_text, checkin="-", checkout="-", on_leave=False, short_leave=(None, None)):
     stamp = lambda hms: f"{date_text} {hms}" if hms != "-" else "-"
     return {"erp_id": 7, "name": "A", "designation": "D", "grade": "MG-5", "section": "S",
-            "checkin_time": stamp(checkin), "checkout_time": stamp(checkout), "on_leave": on_leave}
+            "checkin_time": stamp(checkin), "checkout_time": stamp(checkout), "on_leave": on_leave,
+            "short_leave_start": short_leave[0], "short_leave_end": short_leave[1]}
 
 
 class AverageTimeTests(TestCase):
@@ -177,7 +178,7 @@ class AverageTimeTests(TestCase):
     def test_leave_absent_and_half_punched_days_left_out(self):
         row = self.summary([
             day("2026-10-06", "08:00:00", "16:00:00"),
-            day("2026-10-07", "11:00:00", "16:00:00", on_leave=True),  # short leave
+            day("2026-10-07", "11:00:00", "16:00:00", on_leave=True),  # day of leave
             day("2026-10-08"),                                          # absent
             day("2026-10-09", "09:00:00"),                              # no check-out
             day("2026-10-10", checkout="13:00:00"),                     # no check-in
@@ -198,3 +199,72 @@ class AverageTimeTests(TestCase):
         row = self.summary([day("2026-10-06", "08:00:00", "16:00:00"),
                             day("2026-10-07", "08:00:01", "16:00:03")])
         self.assertEqual((row["avg_checkin"], row["avg_checkout"]), ("08:00:01", "16:00:02"))
+
+
+class ShortLeaveExemptionTests(TestCase):
+    """An approved short leave's hours are exempt from the late / early marks."""
+
+    IN, OUT = (8, 30), (16, 0)
+
+    def deadlines(self, start, end):
+        from datetime import time
+        from .views import short_leave_deadlines
+        return short_leave_deadlines(time(*self.IN), time(*self.OUT), start, end)
+
+    def test_no_short_leave_keeps_the_deadlines(self):
+        from datetime import time
+        self.assertEqual(self.deadlines(None, None), (time(8, 30), time(16, 0)))
+
+    def test_morning_leave_moves_the_check_in_deadline(self):
+        from datetime import time
+        self.assertEqual(self.deadlines(time(8, 0), time(10, 0)), (time(10, 0), time(16, 0)))
+
+    def test_afternoon_leave_moves_the_check_out_deadline(self):
+        from datetime import time
+        self.assertEqual(self.deadlines("14:00:00", "16:00:00"), (time(8, 30), time(14, 0)))
+
+    def test_mid_day_leave_changes_nothing(self):
+        from datetime import time
+        self.assertEqual(self.deadlines(time(11, 0), time(12, 0)), (time(8, 30), time(16, 0)))
+
+    def test_hours(self):
+        from datetime import time
+        from leaves.views import short_leave_hours
+        self.assertEqual(short_leave_hours(time(10, 0), time(12, 30)), "2:30")
+        self.assertEqual(short_leave_hours("09:15:00.0000000", "10:00:00.0000000"), "0:45")
+        self.assertIsNone(short_leave_hours(None, time(12, 0)))
+
+
+class ShortLeaveAverageTests(TestCase):
+    """An approved short leave keeps its day in the averages and exempts only its hours."""
+
+    def summary(self, records):
+        from .views import summarize_by_employee
+        return summarize_by_employee(records, len(records))[0]
+
+    def test_morning_leave_moves_the_check_in_back_by_its_hours(self):
+        row = self.summary([day("2026-10-07", "10:05:00", "16:00:00", short_leave=("08:00", "10:00"))])
+        self.assertEqual((row["avg_checkin"], row["avg_checkout"]), ("08:05:00", "16:00:00"))
+        self.assertEqual((row["avg_worked"], row["avg_days"]), ("07:55:00", 1))
+
+    def test_afternoon_leave_moves_the_check_out_on_by_its_hours(self):
+        row = self.summary([day("2026-10-07", "08:30:00", "14:00:00", short_leave=("14:00", "16:00"))])
+        self.assertEqual((row["avg_checkin"], row["avg_checkout"]), ("08:30:00", "16:00:00"))
+
+    def test_leave_partly_inside_the_day_counts_only_the_part_outside(self):
+        # Away 14:00-16:00 but left at 15:00: only 15:00-16:00 is added.
+        row = self.summary([day("2026-10-07", "08:30:00", "15:00:00", short_leave=("14:00", "16:00"))])
+        self.assertEqual(row["avg_checkout"], "16:00:00")
+        row = self.summary([day("2026-10-07", "08:30:00", "13:30:00", short_leave=("14:00", "16:00"))])
+        self.assertEqual(row["avg_checkout"], "15:30:00")
+
+    def test_mid_day_leave_changes_nothing(self):
+        row = self.summary([day("2026-10-07", "08:20:00", "16:10:00", short_leave=("11:00", "12:00"))])
+        self.assertEqual((row["avg_checkin"], row["avg_checkout"]), ("08:20:00", "16:10:00"))
+
+    def test_short_leave_day_averages_with_the_rest(self):
+        row = self.summary([
+            day("2026-10-06", "08:00:00", "16:00:00"),
+            day("2026-10-07", "10:00:00", "16:00:00", short_leave=("08:00", "10:00")),
+        ])
+        self.assertEqual((row["avg_checkin"], row["avg_worked"], row["avg_days"]), ("08:00:00", "08:00:00", 2))

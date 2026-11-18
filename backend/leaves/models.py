@@ -9,6 +9,10 @@ class LeaveModel(models.Model):
     leave_type = models.CharField(max_length=50, null=True, blank=True)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
+    # The hours away on a short leave, which is a single date. Null for every
+    # other leave type.
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
     total_days = models.IntegerField(default=0)
     reason = models.TextField(null=True, blank=True)
     approved_by = models.TextField(null=True, blank=True)

@@ -123,6 +123,8 @@ def _requisition_payload(requisition: JobRequisition) -> dict:
         "reference_no": requisition.reference_no or "",
         "grade": requisition.grade or "",
         "department": requisition.department or "",
+        # The departments whose employees may apply; empty means anyone.
+        "departments": requisition.departments,
         "location": requisition.location or "",
         "advertisement_date": requisition.advertisement_date.isoformat()
         if requisition.advertisement_date else None,
@@ -165,12 +167,21 @@ def requisitions(request):
     Open, and either without a closing date or not yet past it - a post whose
     closing date has gone by should not appear on the form even if nobody has
     got round to closing it.
+
+    A signed-in employee sees only the posts open to their own department, as
+    the advertisement requires; create_application enforces the same rule.
     """
     rows = (
         JobRequisition.objects.select_related("job_description")
         .filter(is_open=True)
         .filter(Q(closing_date__isnull=True) | Q(closing_date__gte=date.today()))
     )
+
+    erp_id, refusal = _session_erp_id(request)
+    if not refusal:
+        record = employee_record(erp_id)
+        if record:
+            rows = [row for row in rows if row.open_to_department(record["department_function"])]
 
     return JsonResponse([_requisition_payload(row) for row in rows], safe=False, status=200)
 
@@ -309,6 +320,12 @@ def create_application(request):
                 unusable.append(f"{requisition.title} has closed")
             elif requisition.closing_date and requisition.closing_date < today:
                 unusable.append(f"{requisition.title} is past its closing date")
+            elif not requisition.open_to_department(record["department_function"]):
+                # The advertisement limits each post to the departments named.
+                unusable.append(
+                    f"{requisition.title} is open only to "
+                    f"{' / '.join(requisition.departments)}"
+                )
             else:
                 requisitions_to_use.append(requisition)
 
