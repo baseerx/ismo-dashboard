@@ -17,6 +17,7 @@ import Badge from "../../components/ui/badge/Badge";
 import { Modal } from "../../components/ui/modal";
 import axios from "../../api/axios";
 import moment from "moment";
+import { totalExperience } from "./experienceTotal";
 
 /**
  * ISMO internal recruitment - online application form.
@@ -2153,6 +2154,20 @@ export default function InternalJobApplication() {
               {experience.length} of {MAX_EXPERIENCE_ROWS}
             </span>
           </div>
+          {(() => {
+            const total = totalExperience(experience);
+            return total ? (
+              <div className="mt-4 rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 text-sm dark:border-brand-800 dark:bg-brand-500/10">
+                <span className="font-medium text-gray-700 dark:text-gray-200">
+                  Total Professional Experience:
+                </span>{" "}
+                <span className="font-semibold text-brand-600 dark:text-brand-400">{total}</span>
+                <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+                  (overlapping periods counted once)
+                </span>
+              </div>
+            ) : null;
+          })()}
           <ErrorText message={errors.experience} />
         </ComponentCard>
 

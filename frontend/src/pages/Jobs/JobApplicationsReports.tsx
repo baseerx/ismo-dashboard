@@ -11,6 +11,7 @@ import Button from "../../components/ui/button/Button";
 import Badge from "../../components/ui/badge/Badge";
 import axios from "../../api/axios";
 import moment from "moment";
+import { totalExperience } from "./experienceTotal";
 
 // ----------------------------
 // Types
@@ -970,6 +971,19 @@ export default function JobApplicationsReport() {
                           )}
                         </div>
                       ))}
+                      {(() => {
+                        const total = totalExperience(selected.experience, selected.created_at);
+                        return total ? (
+                          <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-white/[0.03]">
+                            <span className="font-medium text-gray-700 dark:text-gray-200">
+                              Total Professional Experience:
+                            </span>{" "}
+                            <span className="font-semibold text-gray-800 dark:text-white/90">
+                              {total}
+                            </span>
+                          </div>
+                        ) : null;
+                      })()}
                     </div>
                   )}
                 </DetailSection>

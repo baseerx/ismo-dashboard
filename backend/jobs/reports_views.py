@@ -6,13 +6,14 @@ record for one applicant into a popup, download a single application as a
 PDF, or export a filtered batch as a ZIP of PDFs.
 """
 
+import calendar
 import io
 import json
 import logging
 import re
 import zipfile
 from xml.sax.saxutils import escape
-from datetime import datetime
+from datetime import date, datetime
 
 from django.core.paginator import Paginator
 from django.db import DatabaseError
@@ -468,6 +469,53 @@ def _date(value, fmt: str = "%d %b %Y") -> str:
     return value.strftime(fmt) if value else "—"
 
 
+def _add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year, month = value.year + month_index // 12, month_index % 12 + 1
+    return date(year, month, min(value.day, calendar.monthrange(year, month)[1]))
+
+
+def _total_experience(rows, as_of: date) -> str:
+    """Total experience across positions, e.g. "7 years 3 months".
+
+    Mirrors totalExperience() in frontend/src/pages/Jobs/experienceTotal.ts:
+    overlapping periods count once, a current role runs to `as_of`, and rows
+    without usable dates are skipped. Returns "" when nothing can be counted.
+    """
+    periods = []
+    for row in rows:
+        start = row.from_date
+        finish = as_of if row.is_current else row.to_date
+        if start and finish and finish >= start:
+            periods.append((start, finish))
+    if not periods:
+        return ""
+
+    merged = []
+    for start, finish in sorted(periods):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], finish)
+        else:
+            merged.append([start, finish])
+
+    months = days = 0
+    for start, finish in merged:
+        whole = (finish.year - start.year) * 12 + finish.month - start.month
+        if _add_months(start, whole) > finish:
+            whole -= 1
+        months += whole
+        days += (finish - _add_months(start, whole)).days
+    months += days // 30
+
+    years, remainder = divmod(months, 12)
+    parts = []
+    if years:
+        parts.append(f"{years} year{'' if years == 1 else 's'}")
+    if remainder:
+        parts.append(f"{remainder} month{'' if remainder == 1 else 's'}")
+    return " ".join(parts) or "less than a month"
+
+
 def _block(number: int, title: str, *content) -> KeepTogether:
     """A section bar and what follows it, kept on one page where it fits.
 
@@ -594,6 +642,13 @@ def render_application_pdf(application: InternalJobApplication) -> bytes:
             if row.key_achievements:
                 story.append(Paragraph("<b>Key Achievements &amp; Projects</b>", _STYLE_BODY))
                 story.append(Paragraph(_markup(row.key_achievements), _STYLE_BODY))
+        as_of = application.created_at.date() if application.created_at else date.today()
+        total = _total_experience(experience, as_of)
+        if total:
+            story.append(Spacer(1, 6))
+            story.append(Paragraph(
+                f"<b>Total Professional Experience:</b> {escape(total)}", _STYLE_BODY,
+            ))
     else:
         story.append(Paragraph("No employment history listed.", _STYLE_BODY))
 
