@@ -601,7 +601,7 @@ export default function InternalJobApplication() {
   const [softSkillOptions, setSoftSkillOptions] = useState<string[]>([]);
   const [contactMethods, setContactMethods] = useState<string[]>(["Teams", "Email", "SMS"]);
   const [ackManagerText, setAckManagerText] = useState(
-    "I certify that my current manager is aware of this transfer request"
+    "I certify that my current manager is aware of this Application"
   );
   const [ackAccuracyText, setAckAccuracyText] = useState(
     "I confirm all provided data details match official corporate record"

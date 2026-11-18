@@ -53,7 +53,7 @@ SOFT_SKILLS = (
 
 # Spec section 6: the two acknowledgements, word for word.
 ACK_MANAGER_NOTIFIED = (
-    "I certify that my current manager is aware of this transfer request"
+    "I certify that my current manager is aware of this Application"
 )
 ACK_DATA_ACCURACY = (
     "I confirm all provided data details match official corporate record"
