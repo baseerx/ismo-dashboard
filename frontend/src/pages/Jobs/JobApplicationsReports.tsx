@@ -12,6 +12,10 @@ import Badge from "../../components/ui/badge/Badge";
 import axios from "../../api/axios";
 import moment from "moment";
 import { totalExperience } from "./experienceTotal";
+import TablePagination from "./TablePagination";
+
+// Applications per page in the report table.
+const PAGE_SIZE = 10;
 
 // ----------------------------
 // Types
@@ -323,6 +327,7 @@ export default function JobApplicationsReport() {
         headers: authHeader(),
         params: {
           page: targetPage,
+          page_size: PAGE_SIZE,
           search: search || undefined,
           skill: skill || undefined,
           status: status || undefined,
@@ -776,29 +781,13 @@ export default function JobApplicationsReport() {
                 </table>
               </div>
 
-              {numPages > 1 && (
-                <div className="mt-4 flex items-center justify-center gap-3">
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => loadApplications(page - 1)}
-                    disabled={page <= 1}
-                  >
-                    Previous
-                  </Button>
-                  <span className="text-xs text-gray-500 dark:text-gray-400">
-                    Page {page} of {numPages}
-                  </span>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => loadApplications(page + 1)}
-                    disabled={page >= numPages}
-                  >
-                    Next
-                  </Button>
-                </div>
-              )}
+              <TablePagination
+                page={page}
+                numPages={numPages}
+                total={count}
+                pageSize={PAGE_SIZE}
+                onChange={loadApplications}
+              />
             </>
           )}
         </ComponentCard>

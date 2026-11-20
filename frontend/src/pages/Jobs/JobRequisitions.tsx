@@ -14,6 +14,10 @@ import Button from "../../components/ui/button/Button";
 import Badge from "../../components/ui/badge/Badge";
 import axios from "../../api/axios";
 import moment from "moment";
+import TablePagination from "./TablePagination";
+
+// Vacancies per page in the table.
+const PAGE_SIZE = 10;
 
 /** Kept in step with jobs/requisition_views.py, which enforces the same rules. */
 const MAX_TITLE = 200;
@@ -99,6 +103,10 @@ type DescriptionOption = {
 
 export default function JobRequisitions() {
   const [requisitions, setRequisitions] = useState<Requisition[]>([]);
+  const [page, setPage] = useState(1);
+  // Kept in range when the list shrinks (a vacancy deleted on the last page).
+  const numPages = Math.max(1, Math.ceil(requisitions.length / PAGE_SIZE));
+  const currentPage = Math.min(page, numPages);
   const [jobDescriptions, setJobDescriptions] = useState<DescriptionOption[]>([]);
   const [form, setForm] = useState<FormState>(blankForm);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -814,7 +822,9 @@ export default function JobRequisitions() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                  {requisitions.map((requisition) => {
+                  {requisitions
+                    .slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+                    .map((requisition) => {
                     const status = statusOf(requisition);
                     return (
                       <tr key={requisition.id} className="text-gray-700 dark:text-gray-300">
@@ -917,6 +927,13 @@ export default function JobRequisitions() {
                   })}
                 </tbody>
               </table>
+              <TablePagination
+                page={currentPage}
+                numPages={numPages}
+                total={requisitions.length}
+                pageSize={PAGE_SIZE}
+                onChange={setPage}
+              />
             </div>
           )}
         </ComponentCard>

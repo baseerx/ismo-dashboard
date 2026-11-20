@@ -17,9 +17,6 @@ DECLARATION_PARAGRAPHS = (
     "I understand that submission of this application does not confer any right to appointment "
     "and that selection shall be made in accordance with the applicable recruitment process and "
     "criteria approved by ISMO.",
-    "If selected, I undertake to accept the offer of appointment/promotion to the position for "
-    "which I have applied and to comply with the terms and conditions of the offer as prescribed "
-    "by ISMO.",
 )
 
 # The note printed under the submission record.

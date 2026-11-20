@@ -34,6 +34,7 @@ import AssignRights from "./pages/UserManagement/AssignRights";
 import MainMenu from "./pages/Menus/MainMenu";
 import SubMenu from "./pages/Menus/SubMenu";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
+import RightsRoute from "./components/auth/RightsRoute";
 import Home from "./pages/Dashboard/Home";
 import AttendanceOverview from "./pages/Attendance/AttendanceOverview";
 import PresentAbsent from "./pages/Attendance/PresentAbsent";
@@ -68,6 +69,8 @@ export default function App() {
           {/* Dashboard Layout */}
           <Route element={<ProtectedRoute />}>
             <Route element={<AppLayout />}>
+             {/* Only pages granted in Assign Rights open, even by direct URL. */}
+             <Route element={<RightsRoute />}>
               <Route path="/dashboard" index element={<Home />} />
 
               {/* Others Page */}
@@ -201,6 +204,7 @@ export default function App() {
               {/* Charts */}
               <Route path="/line-chart" element={<LineChart />} />
               <Route path="/bar-chart" element={<BarChart />} />
+             </Route>
             </Route>
           </Route>
           {/* Auth Layout */}
