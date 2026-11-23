@@ -27,7 +27,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from notifications.service import employee_label, notify
 
-from .applicant import employee_record
+from .applicant import INTERNEE_REFUSAL, employee_record, is_internee
 from .form_text import (
     ACK_DATA_ACCURACY,
     ACK_MANAGER_NOTIFIED,
@@ -203,6 +203,8 @@ def application_profile(request):
     record = employee_record(erp_id)
     if not record:
         return JsonResponse({"error": "Employee not found"}, status=404)
+    if is_internee(record):
+        return JsonResponse({"error": INTERNEE_REFUSAL, "internee": True}, status=403)
 
     return JsonResponse(
         {
@@ -300,6 +302,8 @@ def create_application(request):
         return JsonResponse(
             {"error": "No active employee record was found for your account."}, status=404
         )
+    if is_internee(record):
+        return JsonResponse({"error": INTERNEE_REFUSAL, "internee": True}, status=403)
 
     cleaned, errors = validate_application(data)
 

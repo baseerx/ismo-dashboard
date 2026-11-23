@@ -14,6 +14,35 @@ from db import SessionLocal
 
 GENDER_NAMES = {"M": "Male", "F": "Female", "male": "Male", "female": "Female"}
 
+# Internees may not apply for internal vacancies. The form refuses them
+# whatever Assign Rights says, and the sidebar and route guard hide the page.
+INTERNEE_GRADE = "Internee"
+APPLICATION_URI = "/internal-job-application"
+INTERNEE_REFUSAL = "Internees are not eligible to apply through the internal job application."
+
+
+def is_internee(record) -> bool:
+    """True when an employee_record() belongs to an internee."""
+    return bool(record) and str(record.get("current_grade") or "").strip().lower() == \
+        INTERNEE_GRADE.lower()
+
+
+def internee_auth_user(session, auth_user_id) -> bool:
+    """True when this sign-in account belongs to an active internee."""
+    row = session.execute(
+        text(
+            """
+            SELECT TOP 1 1 AS hit
+            FROM profiles p
+            INNER JOIN employees e ON e.erp_id = p.erpid AND e.flag = 1
+            INNER JOIN grades g ON g.id = e.grade_id
+            WHERE p.authid = :id AND g.name = :grade
+            """
+        ),
+        {"id": auth_user_id, "grade": INTERNEE_GRADE},
+    ).first()
+    return row is not None
+
 
 def _g_rank(grade_name) -> int:
     """"G-11" -> 11. Anything that is not a G grade (Internee, none) is 0, so it

@@ -751,6 +751,11 @@ export default function InternalJobApplication() {
         setProfileNote(
           error?.response?.data?.error || "Sign in again - your session has expired."
         );
+      } else if (status === 403) {
+        // Internees: the server refuses the form (and any submission).
+        setProfileNote(
+          error?.response?.data?.error || "You are not eligible to apply through this form."
+        );
       } else if (status === 404) {
         setProfileNote(
           "No active employee record was found for your account, so nothing could be filled in for you."

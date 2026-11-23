@@ -1,7 +1,9 @@
 """The menu the sidebar shows a signed-in user: exactly what Assign Rights has
-granted them, page for page. No page is added for everyone and none is held
-back - including Internal Recruitment Portal > Job Application, which is shown
-to whoever it is assigned to.
+granted them, page for page. No page is added for everyone.
+
+One exception holds pages back: internees never get Internal Recruitment
+Portal > Job Application, even if a right was assigned to them. The job
+application endpoints refuse internees as well (see jobs/applicant.py).
 """
 
 from django.http import JsonResponse
@@ -9,7 +11,13 @@ from django.views.decorators.http import require_GET
 from sqlalchemy import text
 
 from db import SessionLocal
+from jobs.applicant import APPLICATION_URI, internee_auth_user
 from jobs.permissions import identity_from_request
+
+
+def _withheld(session, user_id) -> set:
+    """Page addresses this user is never shown, whatever is assigned."""
+    return {APPLICATION_URI} if internee_auth_user(session, user_id) else set()
 
 
 @require_GET
@@ -36,7 +44,11 @@ def my_pages(request):
             """),
             {"id": user_id},
         ).fetchall()
-        return JsonResponse({"uris": [row.uri for row in rows if row.uri]}, status=200)
+        withheld = _withheld(session, user_id)
+        return JsonResponse(
+            {"uris": [row.uri for row in rows if row.uri and row.uri not in withheld]},
+            status=200,
+        )
     except Exception as error:
         return JsonResponse({"error": str(error)}, status=500)
     finally:
@@ -57,11 +69,13 @@ def sidebar_menu(request, id):
             """),
             {"id": id},
         ).fetchall()
+        withheld = _withheld(session, id)
 
         return JsonResponse(
             [
                 {"id": row.id, "mainmenu": row.mainmenu, "submenu": row.submenu, "uri": row.uri}
                 for row in granted
+                if row.uri not in withheld
             ],
             safe=False,
             status=200,
