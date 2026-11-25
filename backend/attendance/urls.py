@@ -1,5 +1,5 @@
 from django.urls import path
-from . import manual_entry
+from . import manual_entry, my_report
 from .views import AttendanceView
 
 urlpatterns = [
@@ -18,6 +18,8 @@ urlpatterns = [
     path('total-absent/', AttendanceView.attendance_total_absent),
     path('detailed-absent-report/', AttendanceView.attendance_detailed_absent_report),
     path('individual-user/', AttendanceView.attendance_individual_user),
+    # My Detailed Attendance Report: the signed-in employee only (from the token).
+    path('my-detailed/', my_report.my_detailed_report),
     path('section-monthly/', AttendanceView.attendance_section_monthly),
     path('monthly-summary/', AttendanceView.attendance_monthly_summary),
     path('monthly-employee-days/', AttendanceView.attendance_monthly_employee_days),

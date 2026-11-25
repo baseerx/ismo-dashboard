@@ -50,6 +50,8 @@ type AttendanceRow = {
   avg_checkin: string;
   avg_checkout: string;
   avg_worked: string;
+  // Days that went into the three averages (worked out on the server).
+  avg_days: number;
 };
 
 const today = () => moment().format("YYYY-MM-DD");
@@ -66,11 +68,13 @@ const columns: ColumnDef<AttendanceRow>[] = [
   { accessorKey: "avg_checkin", header: "Avg Check-in (hh:mm:ss)" },
   { accessorKey: "avg_checkout", header: "Avg Check-out (hh:mm:ss)" },
   { accessorKey: "avg_worked", header: "Avg Worked (hh:mm:ss)" },
+  { accessorKey: "avg_days", header: "No. of Days Counted for Average Working Hours" },
 ];
 
 const EXPORT_HEADERS = [
   "ERP ID", "Name", "Designation", "Grade", "Section", "Days", "Check-ins", "Check-outs",
   "Avg Check-in (hh:mm:ss)", "Avg Check-out (hh:mm:ss)", "Avg Worked (hh:mm:ss)",
+  "No. of Days Counted for Average Working Hours",
 ];
 
 export default function GroupAttendanceReport({ kind }: { kind: GroupKind }) {
@@ -155,6 +159,7 @@ export default function GroupAttendanceReport({ kind }: { kind: GroupKind }) {
           avg_checkin: item.avg_checkin,
           avg_checkout: item.avg_checkout,
           avg_worked: item.avg_worked ?? "-",
+          avg_days: item.avg_days ?? 0,
         }))
       );
       setProblem(null);
@@ -183,7 +188,7 @@ export default function GroupAttendanceReport({ kind }: { kind: GroupKind }) {
       <div className="space-y-6">
         <ComponentCard
           title={`Attendance ${groupName ? `of ${groupName} ` : ""}- ${range}`}
-          desc="One row per employee. Days counts the days in the range; check-ins and check-outs count the days each was recorded; averages use the first check-in and last check-out of each day; total worked adds up each day's check-in to check-out."
+          desc="One row per employee. Days counts the days in the range; check-ins and check-outs count the days each was recorded; averages use the first check-in and last check-out of each day, counting only days with both (full leave days are left out, and a short leave exempts just its hours: first-half leave moves the check-in earlier, second-half leave moves the check-out later). The last column shows how many days went into the averages."
         >
           <ToastContainer position="bottom-right" />
 
@@ -247,7 +252,7 @@ export default function GroupAttendanceReport({ kind }: { kind: GroupKind }) {
                 data.map((row) => [
                   row.erp_id, row.name, row.designation, row.grade, row.section, row.days,
                   row.checkin_count, row.checkout_count, row.avg_checkin, row.avg_checkout,
-                  row.avg_worked,
+                  row.avg_worked, row.avg_days,
                 ])
               }
             />

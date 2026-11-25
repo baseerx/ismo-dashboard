@@ -41,6 +41,7 @@ import PresentAbsent from "./pages/Attendance/PresentAbsent";
 import OfficialWork from "./pages/Leaves/OfficialWork";
 import ChangePassword from "./pages/UserManagement/ChangePassword";
 import DetailedReport from "./pages/Attendance/DetailedReport";
+import MyDetailedReport from "./pages/Attendance/MyDetailedReport";
 import TeamLevel from "./pages/Attendance/TeamLevel";
 import IndividualUser from "./pages/Attendance/IndividualUser";
 import ShiftAttendance from "./pages/Attendance/ShiftAttendance";
@@ -96,6 +97,10 @@ export default function App() {
               <Route
                 path="/attendance/detailed-report"
                 element={<DetailedReport />}
+              />
+              <Route
+                path="/attendance/individual-detailed-report"
+                element={<MyDetailedReport />}
               />
               <Route
                 path="/attendance/total-absent"
